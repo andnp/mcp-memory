@@ -231,6 +231,13 @@ class CurationRepository(Protocol):
 
     def put_candidate_state(self, state: CurationCandidateState) -> CurationCandidateState: ...
 
+    def compare_and_set_candidate_state(
+        self,
+        memory_id: UUID,
+        expected_token: str | None,
+        state: CurationCandidateState,
+    ) -> CurationCandidateState | None: ...
+
     def list_runs(self, *, limit: int = 100) -> Sequence[CurationRun]: ...
 
     def list_receipts(self, run_id: UUID, *, limit: int = 100) -> Sequence[CurationActionReceipt]: ...
@@ -505,6 +512,61 @@ class SQLiteCurationStore:
                 _candidate_values(state),
             )
         return state
+
+    def compare_and_set_candidate_state(
+        self,
+        memory_id: UUID,
+        expected_token: str | None,
+        state: CurationCandidateState,
+    ) -> CurationCandidateState | None:
+        if state.memory_id != memory_id:
+            raise ValueError("candidate state memory_id does not match CAS key")
+        conn = self._db.get_connection()
+        with conn:
+            if expected_token is None:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO curation_candidate_state (
+                        memory_id, last_observed_revision_token, disposition,
+                        consecutive_no_op_count, cooldown_until, last_disposition_reason,
+                        last_frontier_key, last_run_id, escalation_count, last_escalated_strategy,
+                        last_considered_at, last_considered_strategy, last_mutation_family,
+                        last_mutated_at, coverage_evidence_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(memory_id) DO UPDATE SET
+                        last_observed_revision_token = excluded.last_observed_revision_token,
+                        disposition = excluded.disposition,
+                        consecutive_no_op_count = excluded.consecutive_no_op_count,
+                        cooldown_until = excluded.cooldown_until,
+                        last_disposition_reason = excluded.last_disposition_reason,
+                        last_frontier_key = excluded.last_frontier_key,
+                        last_run_id = excluded.last_run_id,
+                        escalation_count = excluded.escalation_count,
+                        last_escalated_strategy = excluded.last_escalated_strategy,
+                        last_considered_at = excluded.last_considered_at,
+                        last_considered_strategy = excluded.last_considered_strategy,
+                        last_mutation_family = excluded.last_mutation_family,
+                        last_mutated_at = excluded.last_mutated_at,
+                        coverage_evidence_json = excluded.coverage_evidence_json
+                    WHERE curation_candidate_state.last_observed_revision_token IS NULL
+                    """,
+                    _candidate_values(state),
+                )
+                return state if cursor.rowcount == 1 else None
+            cursor = conn.execute(
+                """
+                UPDATE curation_candidate_state
+                SET last_observed_revision_token = ?, disposition = ?,
+                    consecutive_no_op_count = ?, cooldown_until = ?, last_disposition_reason = ?,
+                    last_frontier_key = ?, last_run_id = ?, escalation_count = ?,
+                    last_escalated_strategy = ?, last_considered_at = ?,
+                    last_considered_strategy = ?, last_mutation_family = ?,
+                    last_mutated_at = ?, coverage_evidence_json = ?
+                WHERE memory_id = ? AND last_observed_revision_token = ?
+                """,
+                (*_candidate_values(state)[1:], str(memory_id), expected_token),
+            )
+        return state if cursor.rowcount == 1 else None
 
     def is_candidate_in_cooldown(self, memory_id: UUID, *, now: datetime | None = None) -> bool:
         state = self.get_candidate_state(memory_id)

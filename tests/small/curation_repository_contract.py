@@ -62,6 +62,10 @@ class CurationRepositoryLike(Protocol):
 
     def put_candidate_state(self, state: CurationCandidateState) -> CurationCandidateState: ...
 
+    def compare_and_set_candidate_state(
+        self, memory_id: UUID, expected_token: str | None, state: CurationCandidateState
+    ) -> CurationCandidateState | None: ...
+
     def is_candidate_in_cooldown(self, memory_id: UUID, *, now: datetime | None = None) -> bool: ...
 
     def list_runs(self, *, limit: int = 100) -> Sequence[CurationRun]: ...
@@ -224,6 +228,32 @@ def assert_curation_repository_contract(make_repository: RepositoryFactory) -> N
     )
     assert repository.put_candidate_state(stabilized) == stabilized
     assert repository.get_candidate_state(memory_id) == stabilized
+
+    # Candidate state CAS matches absent or NULL revisions, then requires the
+    # stored revision token to match for non-NULL updates.
+    cas_memory_id = uuid4()
+    cas_insert = CurationCandidateState(memory_id=cas_memory_id, last_observed_revision_token="revision-1")
+    assert repository.compare_and_set_candidate_state(cas_memory_id, None, cas_insert) == cas_insert
+    cas_null_update = cas_insert.model_copy(update={"last_observed_revision_token": None})
+    assert repository.compare_and_set_candidate_state(cas_memory_id, None, cas_null_update) is None
+    null_memory_id = uuid4()
+    assert repository.compare_and_set_candidate_state(
+        null_memory_id,
+        None,
+        CurationCandidateState(memory_id=null_memory_id),
+    ) is not None
+    assert repository.compare_and_set_candidate_state(
+        null_memory_id,
+        None,
+        CurationCandidateState(memory_id=null_memory_id, disposition=CandidateDisposition.ACTIONED),
+    ) is not None
+    cas_update = cas_insert.model_copy(update={"last_observed_revision_token": "revision-2"})
+    assert repository.compare_and_set_candidate_state(cas_memory_id, "revision-1", cas_update) == cas_update
+    assert repository.compare_and_set_candidate_state(
+        cas_memory_id,
+        "revision-1",
+        cas_update.model_copy(update={"last_observed_revision_token": "revision-3"}),
+    ) is None
     assert not repository.is_candidate_in_cooldown(memory_id, now=cooldown_until)
 
     # Both collection reads reject non-positive limits and cap oversized

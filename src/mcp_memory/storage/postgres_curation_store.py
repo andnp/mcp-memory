@@ -289,6 +289,62 @@ class PostgresCurationStore:
                 )
         return state
 
+    def compare_and_set_candidate_state(
+        self,
+        memory_id: UUID,
+        expected_token: str | None,
+        state: CurationCandidateState,
+    ) -> CurationCandidateState | None:
+        if state.memory_id != memory_id:
+            raise ValueError("candidate state memory_id does not match CAS key")
+        with self._transaction() as connection:
+            with connection.cursor() as cursor:
+                if expected_token is None:
+                    cursor.execute(
+                        """
+                        INSERT INTO curation_candidate_state (
+                            memory_id, last_observed_revision_token, disposition,
+                            consecutive_no_op_count, cooldown_until, last_disposition_reason,
+                            last_frontier_key, last_run_id, escalation_count, last_escalated_strategy,
+                            last_considered_at, last_considered_strategy, last_mutation_family,
+                            last_mutated_at, coverage_evidence_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        ON CONFLICT (memory_id) DO UPDATE SET
+                            last_observed_revision_token = EXCLUDED.last_observed_revision_token,
+                            disposition = EXCLUDED.disposition,
+                            consecutive_no_op_count = EXCLUDED.consecutive_no_op_count,
+                            cooldown_until = EXCLUDED.cooldown_until,
+                            last_disposition_reason = EXCLUDED.last_disposition_reason,
+                            last_frontier_key = EXCLUDED.last_frontier_key,
+                            last_run_id = EXCLUDED.last_run_id,
+                            escalation_count = EXCLUDED.escalation_count,
+                            last_escalated_strategy = EXCLUDED.last_escalated_strategy,
+                            last_considered_at = EXCLUDED.last_considered_at,
+                            last_considered_strategy = EXCLUDED.last_considered_strategy,
+                            last_mutation_family = EXCLUDED.last_mutation_family,
+                            last_mutated_at = EXCLUDED.last_mutated_at,
+                            coverage_evidence_json = EXCLUDED.coverage_evidence_json
+                        WHERE curation_candidate_state.last_observed_revision_token IS NULL
+                        """,
+                        _candidate_values(state),
+                    )
+                    return state if int(getattr(cursor, "rowcount", 0) or 0) == 1 else None
+                cursor.execute(
+                    """
+                    UPDATE curation_candidate_state
+                    SET last_observed_revision_token = %s, disposition = %s,
+                        consecutive_no_op_count = %s, cooldown_until = %s,
+                        last_disposition_reason = %s, last_frontier_key = %s,
+                        last_run_id = %s, escalation_count = %s,
+                        last_escalated_strategy = %s, last_considered_at = %s,
+                        last_considered_strategy = %s, last_mutation_family = %s,
+                        last_mutated_at = %s, coverage_evidence_json = %s::jsonb
+                    WHERE memory_id = %s AND last_observed_revision_token = %s
+                    """,
+                    (*_candidate_values(state)[1:], str(memory_id), expected_token),
+                )
+                return state if int(getattr(cursor, "rowcount", 0) or 0) == 1 else None
+
     def is_candidate_in_cooldown(self, memory_id: UUID, *, now: datetime | None = None) -> bool:
         state = self.get_candidate_state(memory_id)
         return state is not None and state.cooldown_until is not None and state.cooldown_until > (now or _now())
