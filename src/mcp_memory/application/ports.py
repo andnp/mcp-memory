@@ -4,6 +4,16 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 
+class MemorySearchPort(Protocol):
+    def read_memory(self, memory_id: str) -> Any: ...
+
+    def peek_memory(self, memory_id: str) -> Any: ...
+
+    def search_memories_for_maintenance(self, query: str, **kwargs: Any) -> Any: ...
+
+    def resolve_memory_id(self, memory_id: str) -> str | None: ...
+
+
 class ReadCachePort(Protocol):
     def __getattr__(self, name: str) -> Any: ...
 
@@ -20,7 +30,7 @@ class MemoryReadDependencies:
     workspace_id: str | None = None
     repository: Any = None
     surface_tracker: MemorySurfaceTrackerPort | None = None
-    relational_search: Any = None
+    relational_search: MemorySearchPort | None = None
     memory_retrieval: Any = None
     read_cache: ReadCachePort | None = None
     vector_store: Any = None
@@ -33,7 +43,7 @@ class MemoryReadContext(Protocol):
     workspace_id: str | None
     db_manager: Any
     repository: Any
-    relational_search: Any
+    relational_search: MemorySearchPort | None
     read_cache: ReadCachePort | None
     storage_backend: str | None
     runtime_logs: Any

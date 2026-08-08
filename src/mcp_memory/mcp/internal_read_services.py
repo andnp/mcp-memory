@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
-from mcp_memory.application.ports import MemoryReadContext
+from mcp_memory.application.ports import MemoryReadContext, MemorySearchPort
 from mcp_memory.mcp.services import (
     _record_read_invocation,
     _record_search_invocation,
@@ -37,7 +37,7 @@ def _record_payload(record: Any, *, include_metadata: bool) -> dict:
     return agent_memory_record_payload(record)
 
 
-def _maintenance_context(ctx: MemoryReadContext):
+def _maintenance_context(ctx: MemoryReadContext) -> MemorySearchPort | None:
     if ctx.relational_search is None:
         return None
     return ctx.relational_search

@@ -4,8 +4,29 @@ from pathlib import Path
 
 import pytest
 
+from mcp_memory.application.ports import MemorySearchPort
 
 pytestmark = pytest.mark.small
+
+
+class _MemorySearchAdapter:
+    def read_memory(self, memory_id: str) -> object:
+        return memory_id
+
+    def peek_memory(self, memory_id: str) -> object:
+        return memory_id
+
+    def search_memories_for_maintenance(self, query: str, **kwargs: object) -> object:
+        return query, kwargs
+
+    def resolve_memory_id(self, memory_id: str) -> str:
+        return memory_id
+
+
+def test_application_memory_search_port_accepts_native_adapter_shape() -> None:
+    adapter: MemorySearchPort = _MemorySearchAdapter()
+
+    assert adapter.resolve_memory_id("mem-1") == "mem-1"
 
 
 FORBIDDEN_CORE_IMPORT_ROOTS = (
