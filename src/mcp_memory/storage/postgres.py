@@ -27,6 +27,7 @@ from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
 from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
+from mcp_memory.storage.postgres_direct_mutation_evidence_store import PostgresDirectMutationEvidenceStore
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
@@ -222,4 +223,5 @@ def build_postgres_runtime_components(
         mutation_history=mutation_history,
         curation=curation,
         curation_action_store=curation_action_store,
+        direct_mutation_evidence=PostgresDirectMutationEvidenceStore(connection_manager),
     )

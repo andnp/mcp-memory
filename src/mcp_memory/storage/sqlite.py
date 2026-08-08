@@ -19,6 +19,7 @@ from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
+from mcp_memory.storage.direct_mutation_evidence_store import SQLiteDirectMutationEvidenceStore
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager
@@ -89,4 +90,5 @@ def build_sqlite_runtime_components(
         mutation_history=SQLiteMutationHistoryStore(db_manager),
         curation=SQLiteCurationStore(db_manager),
         curation_action_store=SQLiteCurationActionStore(db_manager),
+        direct_mutation_evidence=SQLiteDirectMutationEvidenceStore(db_manager),
     )

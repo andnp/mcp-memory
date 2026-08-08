@@ -230,6 +230,7 @@ def create_runtime_composition(
         task_queue=storage.task_queue,
         curation=storage.curation,
         curation_action_store=storage.curation_action_store,
+        direct_mutation_evidence=storage.direct_mutation_evidence,
         mutation_history=storage.mutation_history,
         ai_json_provider=ai_json_provider,
         ai_agent_provider=ai_agent_provider,

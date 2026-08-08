@@ -31,6 +31,7 @@ class StorageBackendResources:
     mutation_history: Any = None
     curation: Any = None
     curation_action_store: Any = None
+    direct_mutation_evidence: Any = None
     embedding_maintenance: Any = None
 
 

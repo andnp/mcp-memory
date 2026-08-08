@@ -403,6 +403,7 @@ class ApplicationContext:
     embedder: Any = None
     vector_store: Any = None
     curation_action_store: Any = None
+    direct_mutation_evidence: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
     _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)
