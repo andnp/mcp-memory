@@ -83,6 +83,20 @@ def test_internal_tool_call_tracker_does_not_count_failed_mutation() -> None:
     assert "secret" not in str(snapshot.tool_call_ledger)
 
 
+def test_internal_tool_call_tracker_preserves_runtime_errors() -> None:
+    """Record persistence failures separately from provider tool-call results."""
+    tracker = InternalToolCallTracker()
+    tracker.reset_task("task-1", session_id="session-1")
+
+    tracker.record_runtime_error(
+        "direct_mutation_evidence_persistence_failed", session_id="session-1"
+    )
+    snapshot = tracker.finalize_task("task-1")
+
+    assert snapshot is not None
+    assert snapshot.runtime_errors == ["direct_mutation_evidence_persistence_failed"]
+
+
 def test_internal_tool_call_tracker_adds_execution_metadata_to_scoped_calls() -> None:
     tracker = InternalToolCallTracker()
     tracker.reset_task("task-1", session_id="session-1", execution_epoch=7)

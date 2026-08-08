@@ -106,6 +106,10 @@ async def run_curator_direct_mcp(
         if session is not None:
             await session.close()
 
+    runtime_errors = list(getattr(tool_snapshot, "runtime_errors", []))
+    if runtime_errors:
+        raise RuntimeError(runtime_errors[0])
+
     tool_calls = int(getattr(tool_snapshot, "total_calls", 0))
     actual_mutations = int(getattr(tool_snapshot, "mutating_calls", 0))
     tool_call_ledger = list(getattr(tool_snapshot, "tool_call_ledger", []))

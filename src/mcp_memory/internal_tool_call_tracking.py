@@ -42,6 +42,7 @@ class InternalToolCallSnapshot:
     mutating_calls: int = 0
     by_name: dict[str, int] = field(default_factory=dict)
     tool_call_ledger: list[dict[str, Any]] = field(default_factory=list)
+    runtime_errors: list[str] = field(default_factory=list)
 
     @property
     def tool_names_used(self) -> list[str]:
@@ -54,6 +55,7 @@ class _MutableTaskToolCallState:
     mutating_calls: int = 0
     by_name: dict[str, int] = field(default_factory=dict)
     tool_call_ledger: list[dict[str, Any]] = field(default_factory=list)
+    runtime_errors: list[str] = field(default_factory=list)
 
 
 class InternalToolCallTracker:
@@ -140,6 +142,21 @@ class InternalToolCallTracker:
         with self._lock:
             return self._snapshot_task_locked(normalized_task_id)
 
+    def record_runtime_error(self, error_code: str, *, task_id: str | None = None, session_id: str | None = None) -> None:
+        normalized_error = _normalized_string(error_code)
+        if normalized_error is None:
+            return
+        with self._lock:
+            resolved_task_id = self._resolve_task_id_locked(
+                task_id=_normalized_string(task_id),
+                session_id=_normalized_string(session_id),
+            )
+            if resolved_task_id is None:
+                return
+            state = self._task_state.setdefault(resolved_task_id, _MutableTaskToolCallState())
+            if normalized_error not in state.runtime_errors:
+                state.runtime_errors.append(normalized_error)
+
     def finalize_task(self, task_id: str) -> InternalToolCallSnapshot | None:
         normalized_task_id = _normalized_string(task_id)
         if normalized_task_id is None:
@@ -180,6 +197,7 @@ class InternalToolCallTracker:
             mutating_calls=state.mutating_calls,
             by_name=dict(state.by_name),
             tool_call_ledger=[dict(call) for call in state.tool_call_ledger],
+            runtime_errors=list(state.runtime_errors),
         )
 
 

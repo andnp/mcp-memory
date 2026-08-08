@@ -237,3 +237,31 @@ async def test_internal_mutation_dispatch_persists_independent_evidence() -> Non
     assert store.items[0].outcome == "applied_verified"
     snapshot = tracker.snapshot_task("task-1")
     assert snapshot is not None and snapshot.mutating_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_internal_mutation_dispatch_records_evidence_persistence_failure() -> None:
+    class FailingEvidenceStore:
+        def save(self, evidence) -> None:
+            raise RuntimeError("database write failed")
+
+    tracker = InternalToolCallTracker()
+    tracker.reset_task("task-1", session_id="session-123")
+    ctx = ApplicationContext(
+        session_id="session-123", internal_tool_call_tracker=tracker,
+        direct_mutation_evidence=FailingEvidenceStore(), repository=object(),
+    )
+
+    def _service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        return {"status": "ok", "record": {"id": "memory-1", "updated_at": "after"}}
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await transport._dispatch_tool(
+            ctx, "internal_update_memory_record", {"task_id": "task-1", "memory_id": "memory-1"},
+            service_resolver=lambda: {"internal_update_memory_record": _service},
+            on_success=transport._record_internal_tool_call,
+        )
+
+    snapshot = tracker.snapshot_task("task-1")
+    assert snapshot is not None
+    assert snapshot.runtime_errors == ["direct_mutation_evidence_persistence_failed"]

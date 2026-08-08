@@ -168,7 +168,18 @@ async def _dispatch_tool(
         return response
     finally:
         if direct_evidence is not None:
-            _finalize_direct_mutation_evidence(ctx, direct_evidence, arguments, locals().get("response"))
+            try:
+                _finalize_direct_mutation_evidence(ctx, direct_evidence, arguments, locals().get("response"))
+            except Exception:
+                tracker = getattr(ctx, "internal_tool_call_tracker", None)
+                recorder = getattr(tracker, "record_runtime_error", None)
+                if callable(recorder):
+                    recorder(
+                        "direct_mutation_evidence_persistence_failed",
+                        task_id=direct_evidence.task_id,
+                        session_id=getattr(ctx, "session_id", None),
+                    )
+                raise
         if execution_token is not None:
             finish_tool_call(execution_token)
 
