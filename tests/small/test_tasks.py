@@ -1184,6 +1184,42 @@ async def test_runtime_task_worker_accepts_structural_task_runtime_context(db_ma
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_start_is_idempotent_without_duplicate_execution(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    seen: list[str] = []
+
+    def handle_task(ctx, task) -> None:
+        del ctx
+        seen.append(task.id)
+
+    task = queue.enqueue("idempotent-task", available_at=0.0, task_id="idempotent-task")
+    worker = RuntimeTaskWorker(
+        ApplicationContext(db_manager=db_manager, task_queue=queue),
+        handlers={"idempotent-task": handle_task},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker.start()
+    runner = worker._runner  # noqa: SLF001
+    reconciliation_runner = worker._reconciliation_runner  # noqa: SLF001
+    await worker.start()
+    await worker.start()
+
+    assert worker._runner is runner  # noqa: SLF001
+    assert worker._reconciliation_runner is reconciliation_runner  # noqa: SLF001
+    try:
+        for _ in range(100):
+            if queue.get_task(task.id).status == "completed":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop(0.05)
+
+    assert seen == [task.id]
+    assert len(queue.list_task_runs(task_name="idempotent-task")) == 1
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_keeps_long_running_handler_fresh_without_subprocess(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
