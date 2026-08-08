@@ -1082,6 +1082,42 @@ def test_postgres_vector_store_can_bound_search_to_candidate_ids() -> None:
     assert ranked == [("memory-b", pytest.approx(0.24253562503633294))]
 
 
+def test_postgres_vector_store_fallback_filters_candidates_and_workspace() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager, fallback_row_cap=2)
+
+    for source_id, workspace_id, embedding in (
+        ("memory-target", "workspace-a", [1.0, 0.0]),
+        ("memory-other-workspace", "workspace-b", [1.0, 0.0]),
+        ("memory-not-candidate", "workspace-a", [1.0, 0.0]),
+    ):
+        store.upsert(
+            source_kind="memory",
+            source_id=source_id,
+            workspace_id=workspace_id,
+            model_name="mini-embed",
+            embedding=embedding,
+        )
+
+    diagnostics: dict[str, object] = {}
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        candidate_ids=["memory-target", "memory-other-workspace"],
+        diagnostics=diagnostics,
+        workspace_id="workspace-a",
+        limit=5,
+    )
+
+    assert ranked == [("memory-target", pytest.approx(1.0))]
+    assert diagnostics["candidate_filter_count"] == 2
+    assert diagnostics["row_count"] == 1
+    assert diagnostics["fallback_row_cap"] == 2
+    assert diagnostics["fallback_row_cap_applied"] is False
+    assert set(diagnostics) >= {"fetch_ms", "decode_ms", "score_ms", "sort_ms"}
+
+
 def test_postgres_vector_store_reports_search_diagnostics() -> None:
     session_manager = FakePrimitiveSessionManager()
     store = PostgresVectorStore(session_manager)
