@@ -320,7 +320,7 @@ class RankingEngine:
             signals = ranking_signals.get(record.id, RankingSignals()) if ranking_signals is not None else RankingSignals()
             score *= self._signal_adjustment_multiplier(signals, keyword_candidates_present=keyword_candidates_present)
             ranked.append((record, min(max(score, 0.0), 1.0)))
-        ranked.sort(key=lambda item: item[1], reverse=True)
+        ranked.sort(key=lambda item: (-item[1], item[0].id))
         return ranked
 
     def explain_candidate(

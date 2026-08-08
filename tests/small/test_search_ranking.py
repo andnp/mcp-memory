@@ -102,6 +102,18 @@ def test_pure_ranking_uses_explicit_candidate_authority_without_storage() -> Non
     assert ranked[0][1] > ranked[1][1]
 
 
+def test_equal_scores_have_input_order_independent_id_tiebreaking() -> None:
+    engine = RankingEngine(Config())
+    records = [_record("record-b", []), _record("record-a", [])]
+    rrf_scores = {record.id: 0.04 for record in records}
+
+    ranked = engine.rank_records(records, rrf_scores)
+    reversed_ranked = engine.rank_records(list(reversed(records)), rrf_scores)
+
+    assert [record.id for record, _ in ranked] == ["record-a", "record-b"]
+    assert [record.id for record, _ in reversed_ranked] == ["record-a", "record-b"]
+
+
 @pytest.mark.parametrize(
     ("query", "title", "summary"),
     [
