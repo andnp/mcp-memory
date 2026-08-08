@@ -204,3 +204,36 @@ async def test_internal_dispatch_records_service_error_without_counting_mutation
     assert snapshot.total_calls == 1
     assert snapshot.mutating_calls == 0
     assert snapshot.tool_call_ledger[0]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_internal_mutation_dispatch_persists_independent_evidence() -> None:
+    class EvidenceStore:
+        def __init__(self) -> None:
+            self.items = []
+
+        def save(self, evidence) -> None:
+            self.items.append(evidence)
+
+    store = EvidenceStore()
+    tracker = InternalToolCallTracker()
+    tracker.reset_task("task-1", session_id="session-123", execution_epoch=3)
+    ctx = ApplicationContext(
+        session_id="session-123", internal_tool_call_tracker=tracker,
+        direct_mutation_evidence=store, repository=object(),
+    )
+
+    def _service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        return {"status": "ok", "record": {"id": "memory-1", "updated_at": "after"}}
+
+    payload = _payload(await transport._dispatch_tool(
+        ctx, "internal_update_memory_record", {"task_id": "task-1", "memory_id": "memory-1"},
+        service_resolver=lambda: {"internal_update_memory_record": _service},
+        on_success=transport._record_internal_tool_call,
+    ))
+
+    assert payload["record"]["id"] == "memory-1"
+    assert len(store.items) == 1
+    assert store.items[0].outcome == "applied_verified"
+    snapshot = tracker.snapshot_task("task-1")
+    assert snapshot is not None and snapshot.mutating_calls == 1

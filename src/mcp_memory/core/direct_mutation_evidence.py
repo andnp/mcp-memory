@@ -160,7 +160,8 @@ def entity_deltas_for_payload(
         if not isinstance(entity_id, str) or entity_id in seen:
             continue
         seen.add(entity_id)
-        before = repository.get_memory(entity_id) if repository is not None else None
+        get_memory = getattr(repository, "get_memory", None)
+        before = get_memory(entity_id) if callable(get_memory) else None
         before_revision = getattr(before, "updated_at", None)
         after_revision = record.get("updated_at") if isinstance(record.get("updated_at"), str) else None
         transition = "created" if before is None else "updated"
