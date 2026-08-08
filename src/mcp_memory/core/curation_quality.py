@@ -31,6 +31,11 @@ from mcp_memory.core.curation_quality_provenance import (
 )
 from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
 from mcp_memory.core.curation_quality_structural import evaluate_structural_mutation
+from mcp_memory.core.curation_quality_policy import (
+    QualityOutcome,
+    classify_quality_outcome,
+    should_escalate_quality,
+)
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -196,7 +201,12 @@ class CurationQualitySampler:
             return ()
         normalized = tuple(_coerce_mutation(mutation) for mutation in mutations)
         raw = [self._evaluate_action(run, mutation, campaign_hypothesis) for mutation in mutations]
-        evaluated = [item for item in raw if item.status == "evaluated" and item.query_id]
+        evaluated = [
+            item
+            for item in raw
+            if item.status in {"evaluated", "productive", "verified_only", "regressed"}
+            and item.query_id
+        ]
         explicit = campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
         complete_receipts = all(
             mutation.applied and mutation.verified for mutation in normalized
@@ -269,7 +279,12 @@ class CurationQualitySampler:
                     "productive_mutation_count": productive,
                     "acceptance_met": (
                         wave_acceptance
-                        if explicit is not None and item.status == "evaluated"
+                        if explicit is not None and item.status in {
+                            "evaluated",
+                            "productive",
+                            "verified_only",
+                            "regressed",
+                        }
                         else item.acceptance_met
                     ),
                 }
@@ -285,6 +300,10 @@ class CurationQualitySampler:
     ) -> None:
         candidate_repository = self._candidate_repository
         if candidate_repository is None:
+            return
+        if mutation.evidence_id is not None and not should_escalate_quality(
+            QualityOutcome(str(evidence.status)), mutation_verified=mutation.verified
+        ):
             return
         if evidence.status == "evaluated" and (
             (evidence.retrieval_regression_count or 0) > 0
@@ -361,12 +380,24 @@ class CurationQualitySampler:
             "created_at": self._clock(),
         }
         content = self._content_quality(mutation)
+        if mutation.evidence_id is not None and not mutation.verified:
+            return CurationQualityEvidence(
+                status=QualityOutcome.UNVERIFIED.value,
+                useful_work=None,
+                neutral_reason="mutation_evidence_unverified",
+                engagement_evidence={"mutation_evidence_id": mutation.evidence_id},
+                **common,
+            )
         structural = evaluate_structural_mutation(
             mutation.operation, mutation.structural_deltas
         )
         if structural.relevant:
             return CurationQualityEvidence(
-                status="structural_only" if structural.verified else "unverified",
+                status=(
+                    QualityOutcome.STRUCTURAL_ONLY.value
+                    if structural.verified
+                    else QualityOutcome.UNVERIFIED.value
+                ),
                 useful_work=True if structural.verified and mutation.structural_deltas else None,
                 neutral_reason=structural.reason,
                 engagement_evidence={
@@ -385,7 +416,11 @@ class CurationQualitySampler:
         if query is None:
             return CurationQualityEvidence(
                 status=(
-                    "content_evaluated"
+                    QualityOutcome.VERIFIED_ONLY.value
+                    if mutation.evidence_id is not None and content.improved is True
+                    else QualityOutcome.NEUTRAL.value
+                    if mutation.evidence_id is not None
+                    else "content_evaluated"
                     if content.improved is True
                     else "no_query"
                 ),
@@ -548,9 +583,19 @@ class CurationQualitySampler:
             if explicit_hypothesis is None
             else _acceptance_met(case, explicit_hypothesis)
         )
+        outcome = classify_quality_outcome(
+            mutation_verified=mutation.verified,
+            query_trusted=query.trusted,
+            consistency_verified=True,
+            structural_only=False,
+            utility_delta=case.retrieval_utility_delta,
+            quality_observed=case.neutral_reason is None,
+        )
         return CurationQualityEvidence(
             status=(
-                "evaluated"
+                outcome.value
+                if mutation.evidence_id is not None
+                else "evaluated"
                 if case.neutral_reason is None
                 else f"neutral_{case.neutral_reason}"
             ),
