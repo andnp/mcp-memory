@@ -47,7 +47,7 @@ The active runtime now uses a staged ranking pipeline:
 ### 3.2 Workspace Semantics Guardrail
 - search remains global-first even when workspace context is present
 - workspace context is used for ranking bias only, not silent result filtering
-- explicit workspace filtering belongs to dashboards and analytics, not normal memory retrieval
+- explicit workspace filtering is available when callers require isolation
 
 ### 3.1 Current Search Notes
 - keyword retrieval uses weighted BM25 over `title`, `summary`, `content`, and `tags`

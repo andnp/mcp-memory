@@ -345,6 +345,84 @@ def test_service_search_diagnostics_describe_scope(db_manager) -> None:
     }
 
 
+def test_service_search_is_global_by_default_with_deterministic_workspace_boost(
+    db_manager,
+) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+    timestamp = "2026-01-01T00:00:00+00:00"
+    local = repository.create_memory(
+        title="Shared workspace ranking topic",
+        content="Shared workspace ranking topic.",
+        summary="Shared workspace ranking topic.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    cross_workspace = repository.create_memory(
+        title="Shared workspace ranking topic",
+        content="Shared workspace ranking topic.",
+        summary="Shared workspace ranking topic.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    assert local is not None and cross_workspace is not None
+
+    first = service.search_memories(
+        "shared workspace ranking topic",
+        ranking_workspace_id="workspace-alpha",
+        limit=2,
+        side_effect_free=True,
+    )
+    second = service.search_memories(
+        "shared workspace ranking topic",
+        ranking_workspace_id="workspace-alpha",
+        limit=2,
+        side_effect_free=True,
+    )
+    beta_context = service.search_memories(
+        "shared workspace ranking topic",
+        ranking_workspace_id="workspace-beta",
+        limit=2,
+        side_effect_free=True,
+    )
+
+    assert [result.memory_id for result in first] == [local.id, cross_workspace.id]
+    assert [result.memory_id for result in second] == [local.id, cross_workspace.id]
+    assert [result.memory_id for result in beta_context] == [cross_workspace.id, local.id]
+
+
+def test_service_search_explicit_workspace_filter_isolates_results(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+    alpha = repository.create_memory(
+        title="Filtered workspace topic",
+        content="Filtered workspace topic.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    beta = repository.create_memory(
+        title="Filtered workspace topic",
+        content="Filtered workspace topic.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+    )
+    assert alpha is not None and beta is not None
+
+    results = service.search_memories(
+        "filtered workspace topic",
+        workspace_id="workspace-alpha",
+        ranking_workspace_id="workspace-beta",
+        limit=5,
+        side_effect_free=True,
+    )
+
+    assert [result.memory_id for result in results] == [alpha.id]
+
+
 def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     repository.create_memory(
