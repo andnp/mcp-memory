@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 28
+POSTGRES_SCHEMA_VERSION = 29
 
 
 @dataclass(frozen=True)
@@ -876,6 +876,48 @@ POSTGRES_MIGRATIONS = (
         name="reconcile_legacy_memory_links",
         statements=(
             "DELETE FROM links WHERE NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.source_id) OR (links.target_id NOT LIKE 'ext:%' AND NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.target_id))",
+        ),
+    ),
+    PostgresMigration(
+        version=29,
+        name="add_direct_mutation_evidence",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS direct_mutation_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                task_id TEXT,
+                execution_epoch INTEGER,
+                session_id TEXT,
+                call_id TEXT,
+                sequence INTEGER,
+                tool_name TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                ledger_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                outcome TEXT,
+                error_code TEXT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                finalized_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS direct_mutation_entity_deltas (
+                evidence_id TEXT NOT NULL REFERENCES direct_mutation_evidence(evidence_id) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL,
+                entity_kind TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                before_revision TEXT,
+                after_revision TEXT,
+                before_exists INTEGER NOT NULL,
+                after_exists INTEGER NOT NULL,
+                transition TEXT NOT NULL,
+                snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                PRIMARY KEY (evidence_id, ordinal)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_direct_mutation_evidence_execution ON direct_mutation_evidence(task_id, execution_epoch, sequence)",
         ),
     ),
 )
