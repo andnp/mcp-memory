@@ -25,8 +25,79 @@ class MemorySearchPort(Protocol):
     def resolve_memory_id(self, memory_id: str) -> str | None: ...
 
 
+CACHE_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class SharedReadCacheSearchRequest:
+    query: str
+    workspace_id: str | None
+    limit: int
+    adaptive_limit: bool
+    memory_type: str | None
+    status: str | None
+    include_superseded: bool
+    ranking_workspace_id: str | None = None
+
+    def normalized_params(self) -> dict[str, Any]:
+        params = {
+            "cache_schema_version": CACHE_SCHEMA_VERSION,
+            "query": self.query,
+            "workspace_id": self.workspace_id,
+            "limit": self.limit,
+            "adaptive_limit": self.adaptive_limit,
+            "memory_type": self.memory_type,
+            "status": self.status,
+            "include_superseded": self.include_superseded,
+        }
+        if self.ranking_workspace_id is not None:
+            params["ranking_workspace_id"] = self.ranking_workspace_id
+        return params
+
+
+@dataclass(frozen=True)
+class SharedReadCacheReadEntry:
+    payload: dict[str, Any]
+    validation_token: str | None
+
+
+@dataclass(frozen=True)
+class SharedReadCacheProjectionUpsert:
+    memory_id: str
+    payload: dict[str, Any]
+    validation_token: str | None = None
+
+
+@dataclass(frozen=True)
+class SharedReadCacheProjectionEntry:
+    memory_id: str
+    payload: dict[str, Any]
+    validation_token: str | None
+    cached_at: float
+
+
+@dataclass(frozen=True)
+class SharedReadCacheInFlightSearch:
+    cache_key: str
+    is_leader: bool
+    _state: Any
+
+
 class ReadCachePort(Protocol):
-    def __getattr__(self, name: str) -> Any: ...
+    def load_search_response(self, request: SharedReadCacheSearchRequest) -> dict[str, Any] | None: ...
+    def load_fresh_search_response(self, request: SharedReadCacheSearchRequest, *, ttl_seconds: float) -> dict[str, Any] | None: ...
+    def store_search_response(self, request: SharedReadCacheSearchRequest, payload: dict[str, Any]) -> None: ...
+    def begin_inflight_search(self, request: SharedReadCacheSearchRequest) -> SharedReadCacheInFlightSearch: ...
+    def wait_for_inflight_search(self, entry: SharedReadCacheInFlightSearch) -> dict[str, Any]: ...
+    def finish_inflight_search(self, entry: SharedReadCacheInFlightSearch, *, payload: dict[str, Any] | None = None, error: Exception | None = None) -> None: ...
+    def load_read_response(self, memory_id: str) -> dict[str, Any] | None: ...
+    def load_read_entry(self, memory_id: str) -> SharedReadCacheReadEntry | None: ...
+    def store_read_response(self, memory_id: str, payload: dict[str, Any], *, validation_token: str | None = None) -> None: ...
+    def search_projection_entries(self, request: SharedReadCacheSearchRequest, *, limit: int | None = None) -> list[SharedReadCacheProjectionEntry]: ...
+    def load_projection_entries(self, memory_ids: list[str]) -> list[SharedReadCacheProjectionEntry]: ...
+    def store_projection_entries(self, entries: list[SharedReadCacheProjectionUpsert]) -> None: ...
+    def delete_projection_entries(self, memory_ids: list[str]) -> None: ...
+    def increment_metric(self, metric_name: str, *, amount: int = 1) -> None: ...
 
 
 class MemorySurfaceTrackerPort(Protocol):

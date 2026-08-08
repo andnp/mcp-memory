@@ -4,7 +4,21 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.application.ports import MemorySearchPort
+from mcp_memory.application.ports import (
+    MemorySearchPort,
+    SharedReadCacheInFlightSearch,
+    SharedReadCacheProjectionEntry,
+    SharedReadCacheProjectionUpsert,
+    SharedReadCacheReadEntry,
+    SharedReadCacheSearchRequest,
+)
+from mcp_memory.storage.shared_read_cache import (
+    SharedReadCacheInFlightSearch as StorageSharedReadCacheInFlightSearch,
+    SharedReadCacheProjectionEntry as StorageSharedReadCacheProjectionEntry,
+    SharedReadCacheProjectionUpsert as StorageSharedReadCacheProjectionUpsert,
+    SharedReadCacheReadEntry as StorageSharedReadCacheReadEntry,
+    SharedReadCacheSearchRequest as StorageSharedReadCacheSearchRequest,
+)
 
 pytestmark = pytest.mark.small
 
@@ -39,6 +53,14 @@ def test_application_memory_search_port_accepts_native_adapter_shape() -> None:
     adapter: MemorySearchPort = _MemorySearchAdapter()
 
     assert adapter.resolve_memory_id("mem-1") == "mem-1"
+
+
+def test_shared_read_cache_dtos_are_application_owned_with_storage_aliases() -> None:
+    assert StorageSharedReadCacheInFlightSearch is SharedReadCacheInFlightSearch
+    assert StorageSharedReadCacheProjectionEntry is SharedReadCacheProjectionEntry
+    assert StorageSharedReadCacheProjectionUpsert is SharedReadCacheProjectionUpsert
+    assert StorageSharedReadCacheReadEntry is SharedReadCacheReadEntry
+    assert StorageSharedReadCacheSearchRequest is SharedReadCacheSearchRequest
 
 
 FORBIDDEN_CORE_IMPORT_ROOTS = (

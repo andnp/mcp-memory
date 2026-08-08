@@ -13,6 +13,14 @@ from time import time
 from collections.abc import Sequence
 from typing import Any, Iterator
 
+from mcp_memory.application.ports import (
+    CACHE_SCHEMA_VERSION,
+    SharedReadCacheInFlightSearch,
+    SharedReadCacheProjectionEntry,
+    SharedReadCacheProjectionUpsert,
+    SharedReadCacheReadEntry,
+    SharedReadCacheSearchRequest,
+)
 from mcp_memory.utils.db import (
     SQLITE_BUSY_TIMEOUT_MILLISECONDS,
     SQLITE_BUSY_TIMEOUT_SECONDS,
@@ -20,7 +28,7 @@ from mcp_memory.utils.db import (
 
 
 logger = logging.getLogger(__name__)
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = CACHE_SCHEMA_VERSION
 _RECENT_CACHE_METRICS_WINDOW_MINUTES = 15
 _INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS = 1.0
 _METRIC_COLUMNS = (
@@ -57,54 +65,6 @@ class SharedReadCacheRecentMetricsSnapshot:
 
 
 @dataclass(frozen=True)
-class SharedReadCacheSearchRequest:
-    query: str
-    workspace_id: str | None
-    limit: int
-    adaptive_limit: bool
-    memory_type: str | None
-    status: str | None
-    include_superseded: bool
-    ranking_workspace_id: str | None = None
-
-    def normalized_params(self) -> dict[str, Any]:
-        params = {
-            "cache_schema_version": _CACHE_SCHEMA_VERSION,
-            "query": self.query,
-            "workspace_id": self.workspace_id,
-            "limit": self.limit,
-            "adaptive_limit": self.adaptive_limit,
-            "memory_type": self.memory_type,
-            "status": self.status,
-            "include_superseded": self.include_superseded,
-        }
-        if self.ranking_workspace_id is not None:
-            params["ranking_workspace_id"] = self.ranking_workspace_id
-        return params
-
-
-@dataclass(frozen=True)
-class SharedReadCacheReadEntry:
-    payload: dict[str, Any]
-    validation_token: str | None
-
-
-@dataclass(frozen=True)
-class SharedReadCacheProjectionUpsert:
-    memory_id: str
-    payload: dict[str, Any]
-    validation_token: str | None = None
-
-
-@dataclass(frozen=True)
-class SharedReadCacheProjectionEntry:
-    memory_id: str
-    payload: dict[str, Any]
-    validation_token: str | None
-    cached_at: float
-
-
-@dataclass(frozen=True)
 class SharedReadCacheRecordThoughtOutboxEntry:
     outbox_id: int
     content: str
@@ -119,13 +79,6 @@ class _SharedReadCacheInFlightSearchState:
     completed: Event = field(default_factory=Event)
     payload: dict[str, Any] | None = None
     error: Exception | None = None
-
-
-@dataclass(frozen=True)
-class SharedReadCacheInFlightSearch:
-    cache_key: str
-    is_leader: bool
-    _state: _SharedReadCacheInFlightSearchState
 
 
 @dataclass(frozen=True)
