@@ -376,9 +376,23 @@ def _confirm_daemon_health(
 
 def inspect_daemon(
 ) -> tuple[DaemonMetadata | None, bool]:
-    resolve_global_daemon_bootstrap_spec()
+    spec = resolve_global_daemon_bootstrap_spec()
     metadata = read_daemon_metadata(resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY))
-    healthy = metadata is not None and _is_daemon_healthy(metadata)
+    healthy = False
+    if metadata is not None and _is_process_running(metadata.pid):
+        timeout_seconds = max(
+            min(
+                spec.config.daemon.auto_start_timeout_seconds / _UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
+                DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS,
+            ),
+            spec.config.daemon.healthcheck_interval_seconds,
+        )
+        healthy = _confirm_daemon_health(
+            metadata,
+            confirmation_attempts=_UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
+            retry_delay_seconds=spec.config.daemon.healthcheck_interval_seconds,
+            timeout_seconds=timeout_seconds,
+        ).healthy
     return metadata, healthy
 
 

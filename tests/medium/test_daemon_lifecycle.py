@@ -16,7 +16,7 @@ from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 
 from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
-from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
+from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, inspect_daemon, read_daemon_metadata, stop_daemon
 from mcp_memory.daemon_process import DaemonHealthAssessment, DaemonSpawnDetails, assess_daemon_health, is_daemon_healthy, remove_metadata, spawn_daemon_process
 
 
@@ -1111,6 +1111,44 @@ def test_ensure_daemon_started_does_not_kill_daemon_after_single_retryable_probe
     current = ensure_daemon_started()
 
     assert current.pid == metadata.pid
+
+
+def test_inspect_daemon_retries_transient_probe_failure(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.daemon.healthcheck_interval_seconds = 0.01
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-inspect",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8125,
+        pid=5678,
+        started_at=1.0,
+        status="ready",
+        transport="zmq",
+        socket_path=str(tmp_path / "daemon.sock"),
+    )
+    assessments = iter(
+        [
+            DaemonHealthAssessment(False, "health_probe_timeout", True, 3.0),
+            DaemonHealthAssessment(True, "healthy", False, 3.0),
+        ]
+    )
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda: spec)
+    monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: metadata)
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: True)
+    monkeypatch.setattr("mcp_memory.daemon._assess_daemon_health", lambda *args, **kwargs: next(assessments))
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
+
+    inspected_metadata, healthy = inspect_daemon()
+
+    assert inspected_metadata == metadata
+    assert healthy is True
 
 
 def test_ensure_daemon_started_skips_health_probe_for_stale_metadata_pid(monkeypatch, tmp_path: Path) -> None:
