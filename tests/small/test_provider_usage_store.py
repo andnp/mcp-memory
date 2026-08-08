@@ -122,3 +122,55 @@ def test_provider_usage_repository_summarizes_token_usage(db_manager) -> None:
     assert summary.reasoning_tokens_last_day == 5
     assert summary.total_tokens_last_day == 130
     assert summary.token_usage_source == "test"
+
+
+def test_provider_usage_repository_derives_attempt_identity_from_lifecycle(db_manager) -> None:
+    db_manager.get_connection().execute(
+        "INSERT INTO task_execution_attempts (task_id, execution_epoch, workspace_id, task_name, request_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("curator-task", 7, "workspace-a", "memory-curator", "request-7", "running", 1.0),
+    )
+    db_manager.get_connection().commit()
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+
+    repository.record_call(
+        task_name="memory-curator",
+        task_id="curator-task",
+        request_id="request-7",
+        attempt=2,
+        subprocess_pid=None,
+        provider_key="provider",
+        provider_name="Provider",
+        model_name="model",
+        status="success",
+        duration_seconds=1.0,
+        created_at=2.0,
+        error_text=None,
+    )
+
+    row = db_manager.get_connection().execute(
+        "SELECT execution_epoch, attempt_identity FROM provider_usage WHERE request_id = ?",
+        ("request-7",),
+    ).fetchone()
+    assert tuple(row) == (7, "curator-task:7:request-7:2")
+
+
+def test_provider_usage_repository_keeps_missing_identity_unattributed(db_manager) -> None:
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    repository.record_call(
+        task_name="memory-curator",
+        task_id=None,
+        request_id=None,
+        subprocess_pid=None,
+        provider_key="provider",
+        provider_name="Provider",
+        model_name="model",
+        status="skipped",
+        duration_seconds=0.0,
+        created_at=2.0,
+        error_text=None,
+    )
+
+    row = db_manager.get_connection().execute(
+        "SELECT task_id, execution_epoch, request_id, attempt_identity FROM provider_usage ORDER BY id DESC LIMIT 1",
+    ).fetchone()
+    assert tuple(row) == (None, None, None, None)

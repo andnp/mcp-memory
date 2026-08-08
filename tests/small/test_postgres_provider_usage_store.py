@@ -67,25 +67,28 @@ class FakeCursor:
                     "workspace_id": arguments[0],
                     "task_name": arguments[1],
                     "task_id": arguments[2],
-                    "request_id": arguments[3],
-                    "subprocess_pid": arguments[4],
-                    "provider_key": arguments[5],
-                    "provider_name": arguments[6],
-                    "model_name": arguments[7],
-                    "status": arguments[8],
-                    "duration_seconds": arguments[9],
-                    "created_at": arguments[10],
-                    "error_text": arguments[11],
-                    "reason_category": arguments[12],
-                    "reason_code": arguments[13],
-                    "retry_delay_seconds": arguments[14],
-                    "input_tokens": arguments[15],
-                    "output_tokens": arguments[16],
-                    "cached_input_tokens": arguments[17],
-                    "cache_write_tokens": arguments[18],
-                    "reasoning_tokens": arguments[19],
-                    "total_tokens": arguments[20],
-                    "token_usage_source": arguments[21],
+                    "execution_epoch": arguments[3],
+                    "request_id": arguments[4],
+                    "attempt": arguments[5],
+                    "attempt_identity": arguments[6],
+                    "subprocess_pid": arguments[7],
+                    "provider_key": arguments[8],
+                    "provider_name": arguments[9],
+                    "model_name": arguments[10],
+                    "status": arguments[11],
+                    "duration_seconds": arguments[12],
+                    "created_at": arguments[13],
+                    "error_text": arguments[14],
+                    "reason_category": arguments[15],
+                    "reason_code": arguments[16],
+                    "retry_delay_seconds": arguments[17],
+                    "input_tokens": arguments[18],
+                    "output_tokens": arguments[19],
+                    "cached_input_tokens": arguments[20],
+                    "cache_write_tokens": arguments[21],
+                    "reasoning_tokens": arguments[22],
+                    "total_tokens": arguments[23],
+                    "token_usage_source": arguments[24],
                 }
             )
             return
@@ -196,7 +199,7 @@ class FakeCursor:
                 count += 1
             self.rowcount = count
             return
-        if normalized.startswith("SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code"):
+        if normalized.startswith("SELECT task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code"):
             rows = list(self._state.provider_usage)
             if " WHERE workspace_id = %s" in normalized:
                 workspace_id = arguments[0]
@@ -204,6 +207,11 @@ class FakeCursor:
             self._result = [
                 (
                     row["task_name"],
+                    row["task_id"],
+                    row.get("execution_epoch"),
+                    row.get("request_id"),
+                    row.get("attempt"),
+                    row.get("attempt_identity"),
                     row["provider_key"],
                     row["provider_name"],
                     row["model_name"],
