@@ -6,7 +6,7 @@ import json
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, cast
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
@@ -249,6 +249,8 @@ def _direct_quality_run(task: TaskRecord) -> CurationRun:
     run_id = uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality-run:{task.id}:{task.execution_epoch}")
     return CurationRun(
         run_id=run_id,
+        task_id=_optional_task_uuid(task.id),
+        execution_epoch=task.execution_epoch,
         frontier_key=f"direct:{task.id}",
         context_fingerprint=f"direct:{task.id}:{task.execution_epoch}",
         policy_version=str(task.data.get("policy_version", "direct-quality-v1")),
@@ -256,6 +258,13 @@ def _direct_quality_run(task: TaskRecord) -> CurationRun:
         state=CurationRunState.TERMINAL,
         outcome=CurationRunOutcome.APPLIED,
     )
+
+
+def _optional_task_uuid(task_id: str) -> UUID | None:
+    try:
+        return UUID(task_id)
+    except ValueError:
+        return None
 
 
 class _DirectQualitySearch:

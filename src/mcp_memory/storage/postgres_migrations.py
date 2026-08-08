@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 31
+POSTGRES_SCHEMA_VERSION = 32
 
 
 @dataclass(frozen=True)
@@ -595,6 +595,7 @@ POSTGRES_MIGRATIONS = (
             CREATE TABLE IF NOT EXISTS curation_runs (
                 run_id TEXT PRIMARY KEY,
                 task_id TEXT,
+                execution_epoch INTEGER,
                 work_item_id TEXT,
                 frontier_key TEXT NOT NULL,
                 selector_strategy TEXT,
@@ -936,6 +937,14 @@ POSTGRES_MIGRATIONS = (
         statements=(
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS evidence_id TEXT",
             "CREATE INDEX IF NOT EXISTS idx_curation_quality_evidence_identity ON curation_quality_evidence(evidence_id)",
+        ),
+    ),
+    PostgresMigration(
+        version=32,
+        name="add_curation_run_execution_identity",
+        statements=(
+            "ALTER TABLE curation_runs ADD COLUMN IF NOT EXISTS execution_epoch INTEGER",
+            "CREATE INDEX IF NOT EXISTS idx_curation_runs_execution_identity ON curation_runs(task_id, execution_epoch, created_at DESC, run_id DESC)",
         ),
     ),
 )

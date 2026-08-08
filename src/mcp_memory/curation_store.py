@@ -52,6 +52,7 @@ class CandidateDisposition(StrEnum):
 class CurationRun(CurationStoreModel):
     run_id: UUID
     task_id: UUID | None = None
+    execution_epoch: int | None = None
     work_item_id: UUID | None = None
     frontier_key: str
     selector_strategy: str | None = None
@@ -271,12 +272,12 @@ class SQLiteCurationStore:
             conn.execute(
                 """
                 INSERT INTO curation_runs (
-                    run_id, task_id, work_item_id, frontier_key, selector_strategy,
+                    run_id, task_id, execution_epoch, work_item_id, frontier_key, selector_strategy,
                     context_fingerprint, planner_id, provider_id, model_id,
                     policy_version, schema_version, state, outcome, plan_id,
                     rejection_codes_json, retry_reason, budget_usage_json,
                     disclosure_audit_json, created_at, terminalized_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _run_values(normalized),
             )
@@ -319,7 +320,7 @@ class SQLiteCurationStore:
             cursor = conn.execute(
                 """
                 UPDATE curation_runs
-                SET task_id = ?, work_item_id = ?, frontier_key = ?, selector_strategy = ?,
+                SET task_id = ?, execution_epoch = ?, work_item_id = ?, frontier_key = ?, selector_strategy = ?,
                     context_fingerprint = ?, planner_id = ?, provider_id = ?, model_id = ?,
                     policy_version = ?, schema_version = ?, state = ?, outcome = ?, plan_id = ?,
                     rejection_codes_json = ?, retry_reason = ?, budget_usage_json = ?,
@@ -610,6 +611,7 @@ def _run_values(run: CurationRun) -> tuple[object, ...]:
     return (
         str(run.run_id),
         _uuid_text(run.task_id),
+        run.execution_epoch,
         _uuid_text(run.work_item_id),
         run.frontier_key,
         run.selector_strategy,
@@ -635,6 +637,7 @@ def _run_from_row(row: sqlite3.Row) -> CurationRun:
     return CurationRun(
         run_id=UUID(str(row["run_id"])),
         task_id=None if row["task_id"] is None else UUID(str(row["task_id"])),
+        execution_epoch=None if row["execution_epoch"] is None else int(row["execution_epoch"]),
         work_item_id=None if row["work_item_id"] is None else UUID(str(row["work_item_id"])),
         frontier_key=str(row["frontier_key"]),
         selector_strategy=row["selector_strategy"],

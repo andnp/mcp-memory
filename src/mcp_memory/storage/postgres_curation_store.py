@@ -43,12 +43,12 @@ class PostgresCurationStore:
                 cursor.execute(
                     """
                     INSERT INTO curation_runs (
-                        run_id, task_id, work_item_id, frontier_key, selector_strategy,
+                        run_id, task_id, execution_epoch, work_item_id, frontier_key, selector_strategy,
                         context_fingerprint, planner_id, provider_id, model_id,
                         policy_version, schema_version, state, outcome, plan_id,
                         rejection_codes_json, retry_reason, budget_usage_json,
                         disclosure_audit_json, created_at, terminalized_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s)
                     """,
                     _run_values(normalized),
                 )
@@ -88,7 +88,7 @@ class PostgresCurationStore:
                 cursor.execute(
                     """
                     UPDATE curation_runs
-                    SET task_id = %s, work_item_id = %s, frontier_key = %s, selector_strategy = %s,
+                    SET task_id = %s, execution_epoch = %s, work_item_id = %s, frontier_key = %s, selector_strategy = %s,
                         context_fingerprint = %s, planner_id = %s, provider_id = %s, model_id = %s,
                         policy_version = %s, schema_version = %s, state = %s, outcome = %s, plan_id = %s,
                         rejection_codes_json = %s::jsonb, retry_reason = %s, budget_usage_json = %s::jsonb,
@@ -373,7 +373,7 @@ class PostgresCurationStore:
 
 
 _RUN_SELECT = """
-SELECT run_id, task_id, work_item_id, frontier_key, selector_strategy,
+SELECT run_id, task_id, execution_epoch, work_item_id, frontier_key, selector_strategy,
        context_fingerprint, planner_id, provider_id, model_id, policy_version,
        schema_version, state, outcome, plan_id, rejection_codes_json,
        retry_reason, budget_usage_json, disclosure_audit_json, created_at, terminalized_at
@@ -440,6 +440,7 @@ def _run_values(run: CurationRun) -> tuple[object, ...]:
     return (
         str(run.run_id),
         _uuid_text(run.task_id),
+        run.execution_epoch,
         _uuid_text(run.work_item_id),
         run.frontier_key,
         run.selector_strategy,
@@ -505,24 +506,25 @@ def _run_from_row(row: tuple[object, ...]) -> CurationRun:
     return CurationRun(
         run_id=UUID(str(row[0])),
         task_id=None if row[1] is None else UUID(str(row[1])),
-        work_item_id=None if row[2] is None else UUID(str(row[2])),
-        frontier_key=str(row[3]),
-        selector_strategy=None if row[4] is None else str(row[4]),
-        context_fingerprint=str(row[5]),
-        planner_id=None if row[6] is None else str(row[6]),
-        provider_id=None if row[7] is None else str(row[7]),
-        model_id=None if row[8] is None else str(row[8]),
-        policy_version=str(row[9]),
-        schema_version=int(str(row[10])),
-        state=CurationRunState(str(row[11])),
-        outcome=None if row[12] is None else CurationRunOutcome(str(row[12])),
-        plan_id=None if row[13] is None else UUID(str(row[13])),
-        rejection_codes=[str(value) for value in _json_list(row[14])],
-        retry_reason=None if row[15] is None else str(row[15]),
-        budget_usage=CurationBudgetUsage.model_validate(_json_value(row[16], default={})),
-        disclosure_audit=cast(dict[str, Any], _json_value(row[17], default={})),
-        created_at=_datetime_value(row[18]),
-        terminalized_at=_datetime_value(row[19]),
+        execution_epoch=None if row[2] is None else int(str(row[2])),
+        work_item_id=None if row[3] is None else UUID(str(row[3])),
+        frontier_key=str(row[4]),
+        selector_strategy=None if row[5] is None else str(row[5]),
+        context_fingerprint=str(row[6]),
+        planner_id=None if row[7] is None else str(row[7]),
+        provider_id=None if row[8] is None else str(row[8]),
+        model_id=None if row[9] is None else str(row[9]),
+        policy_version=str(row[10]),
+        schema_version=int(str(row[11])),
+        state=CurationRunState(str(row[12])),
+        outcome=None if row[13] is None else CurationRunOutcome(str(row[13])),
+        plan_id=None if row[14] is None else UUID(str(row[14])),
+        rejection_codes=[str(value) for value in _json_list(row[15])],
+        retry_reason=None if row[16] is None else str(row[16]),
+        budget_usage=CurationBudgetUsage.model_validate(_json_value(row[17], default={})),
+        disclosure_audit=cast(dict[str, Any], _json_value(row[18], default={})),
+        created_at=_datetime_value(row[19]),
+        terminalized_at=_datetime_value(row[20]),
     )
 
 

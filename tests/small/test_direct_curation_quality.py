@@ -180,6 +180,17 @@ def test_direct_quality_run_recovers_from_concurrent_insert() -> None:
     assert persisted == run
 
 
+def test_direct_quality_run_preserves_uuid_task_execution_identity() -> None:
+    """Carry UUID task identity and execution epoch into the durable quality run."""
+    task = _task()
+    task.id = str(uuid4())
+
+    run = _direct_quality_run(task)
+
+    assert str(run.task_id) == task.id
+    assert run.execution_epoch == task.execution_epoch
+
+
 def test_direct_evidence_bridges_to_stable_action_identity() -> None:
     """Derive one stable action ID from the persisted direct evidence ID."""
     mutation = mutations_from_direct_evidence(_direct_evidence())

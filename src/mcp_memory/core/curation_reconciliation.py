@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -40,6 +40,106 @@ class CurationReconciliationDisposition(StrEnum):
     CONTINUE = "continue"
     DEFER = "defer"
     BLOCK = "block"
+
+
+class CurationProviderAttribution(StrEnum):
+    EXACT = "exact"
+    MISSING = "missing"
+    MISMATCHED = "mismatched"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptIdentity:
+    """Run-level identity carried by one persisted provider attempt."""
+
+    task_id: str | None
+    execution_epoch: int | None
+    attempt_identity: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CurationProviderAttributionResult:
+    disposition: CurationProviderAttribution
+    reason_code: str
+    attempt_identities: tuple[str, ...] = ()
+
+
+def reconcile_provider_attempts(
+    run: CurationRun,
+    attempts: Iterable[ProviderAttemptIdentity | object],
+) -> CurationProviderAttributionResult:
+    """Attribute provider attempts to a run without using action-level IDs."""
+    if run.task_id is None or run.execution_epoch is None:
+        return CurationProviderAttributionResult(
+            CurationProviderAttribution.MISSING,
+            "run_execution_identity_missing",
+        )
+
+    expected = (str(run.task_id), run.execution_epoch)
+    observations: dict[str, tuple[str, int]] = {}
+    missing_count = 0
+    mismatched_count = 0
+    exact_count = 0
+    ambiguous = False
+    for attempt in attempts:
+        task_id = _attempt_text(attempt, "task_id")
+        execution_epoch = _attempt_epoch(attempt)
+        attempt_identity = _attempt_text(attempt, "attempt_identity")
+        if task_id is None or execution_epoch is None or attempt_identity is None:
+            missing_count += 1
+            continue
+        observation = (task_id, execution_epoch)
+        previous = observations.get(attempt_identity)
+        if previous is not None and previous != observation:
+            ambiguous = True
+        observations[attempt_identity] = observation
+        if observation == expected:
+            exact_count += 1
+        else:
+            mismatched_count += 1
+
+    identities = tuple(sorted(observations))
+    if ambiguous or (exact_count and (mismatched_count or missing_count)):
+        return CurationProviderAttributionResult(
+            CurationProviderAttribution.AMBIGUOUS,
+            "provider_attempt_attribution_ambiguous",
+            identities,
+        )
+    if mismatched_count:
+        return CurationProviderAttributionResult(
+            CurationProviderAttribution.MISMATCHED,
+            "provider_attempt_attribution_mismatched",
+            identities,
+        )
+    if missing_count or not observations:
+        return CurationProviderAttributionResult(
+            CurationProviderAttribution.MISSING,
+            "provider_attempt_attribution_missing",
+            identities,
+        )
+    return CurationProviderAttributionResult(
+        CurationProviderAttribution.EXACT,
+        "provider_attempt_attribution_exact",
+        identities,
+    )
+
+
+def _attempt_text(attempt: ProviderAttemptIdentity | object, name: str) -> str | None:
+    value = getattr(attempt, name, None)
+    if value is None or not str(value):
+        return None
+    return str(value)
+
+
+def _attempt_epoch(attempt: ProviderAttemptIdentity | object) -> int | None:
+    value = getattr(attempt, "execution_epoch", None)
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -365,10 +465,14 @@ def _continue_after_terminal(
 
 __all__ = [
     "ActionResolver",
+    "CurationProviderAttribution",
+    "CurationProviderAttributionResult",
     "CurationReconciliationDisposition",
     "CurationReconciliationOutcome",
     "CurationReconciler",
     "CURATION_RECONCILIATION_LOCK_RETRY_ATTEMPTS",
     "CURATION_RECONCILIATION_LOCK_RETRY_DELAY_SECONDS",
     "CURATION_RECONCILIATION_STALE_AFTER_SECONDS",
+    "ProviderAttemptIdentity",
+    "reconcile_provider_attempts",
 ]

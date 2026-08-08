@@ -7,6 +7,12 @@ from mcp_memory.core.curation_quality import (
     CurationQualityEvidence,
     quality_productive_mutation_count,
 )
+from mcp_memory.core.curation_reconciliation import (
+    CurationProviderAttribution,
+    ProviderAttemptIdentity,
+    reconcile_provider_attempts,
+)
+from mcp_memory.curation_store import CurationRun
 from mcp_memory.core.curation_feedback import (
     _feedback_termination_reason,
     _quality_feedback_payload,
@@ -208,3 +214,44 @@ def test_direct_curator_prompt_does_not_direct_blanket_date_deletion() -> None:
     assert "delete all dated memories" not in prompt
     assert "delete every dated memory" not in prompt
     assert "archive all dated memories" not in prompt
+
+
+def test_provider_attempt_reconciliation_requires_exact_run_identity() -> None:
+    """Accept provider attempts only when task and execution epoch agree."""
+    task_id = uuid4()
+    run = CurationRun(
+        run_id=uuid4(),
+        task_id=task_id,
+        execution_epoch=4,
+        frontier_key="direct",
+        context_fingerprint="context",
+    )
+
+    result = reconcile_provider_attempts(
+        run,
+        [ProviderAttemptIdentity(str(task_id), 4, "task:4:req:1")],
+    )
+
+    assert result.disposition is CurationProviderAttribution.EXACT
+    assert result.attempt_identities == ("task:4:req:1",)
+
+
+def test_provider_attempt_reconciliation_fails_closed_for_missing_and_mismatched_rows() -> None:
+    """Keep missing and conflicting provider attribution visible at run level."""
+    task_id = uuid4()
+    run = CurationRun(
+        run_id=uuid4(),
+        task_id=task_id,
+        execution_epoch=4,
+        frontier_key="direct",
+        context_fingerprint="context",
+    )
+
+    missing = reconcile_provider_attempts(run, [SimpleNamespace(task_id=str(task_id), execution_epoch=4)])
+    mismatched = reconcile_provider_attempts(
+        run,
+        [ProviderAttemptIdentity(str(uuid4()), 4, "other:4:req:1")],
+    )
+
+    assert missing.disposition is CurationProviderAttribution.MISSING
+    assert mismatched.disposition is CurationProviderAttribution.MISMATCHED

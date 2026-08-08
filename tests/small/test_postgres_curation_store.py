@@ -47,7 +47,7 @@ class FakeConnection:
             """
             CREATE TABLE memory_mutation_events (id TEXT PRIMARY KEY);
             CREATE TABLE curation_runs (
-                run_id TEXT PRIMARY KEY, task_id TEXT, work_item_id TEXT,
+                run_id TEXT PRIMARY KEY, task_id TEXT, execution_epoch INTEGER, work_item_id TEXT,
                 frontier_key TEXT NOT NULL, selector_strategy TEXT,
                 context_fingerprint TEXT NOT NULL, planner_id TEXT, provider_id TEXT,
                 model_id TEXT, policy_version TEXT NOT NULL, schema_version INTEGER NOT NULL,
@@ -109,7 +109,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 31
+    assert POSTGRES_SCHEMA_VERSION == 32
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"

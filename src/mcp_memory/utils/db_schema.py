@@ -609,6 +609,7 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS curation_runs (
             run_id TEXT PRIMARY KEY,
             task_id TEXT,
+            execution_epoch INTEGER,
             work_item_id TEXT,
             frontier_key TEXT NOT NULL,
             selector_strategy TEXT,
@@ -738,6 +739,7 @@ def create_direct_mutation_evidence_schema(conn: sqlite3.Connection) -> None:
             ON direct_mutation_evidence(task_id, execution_epoch, sequence);
         """
     )
+    ensure_column(conn, "curation_runs", "execution_epoch", "INTEGER")
     ensure_column(conn, "curation_runs", "disclosure_audit_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "curation_quality_evidence", "retrieval_utility_delta", "REAL")
     ensure_column(conn, "curation_quality_evidence", "acceptance_met", "INTEGER")
