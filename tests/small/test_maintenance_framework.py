@@ -1,9 +1,58 @@
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
+from typing import cast
 
 from mcp_memory.core.sampling import SamplingBatch
+from mcp_memory.core.task_handlers.maintenance_housekeeping import (
+    BackendConnection,
+    _execute_write,
+    _fetchall_rows,
+)
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
+from tests.small.test_postgres_curation_store import FakeConnection
+
+
+def test_maintenance_connection_helpers_use_sqlite_direct_execution() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE items (value TEXT, quantity INTEGER)")
+
+    inserted = _execute_write(
+        cast(BackendConnection, connection),
+        True,
+        "INSERT INTO items (value, quantity) VALUES ({}, {})",
+        ("sqlite-value", 2),
+    )
+    rows = _fetchall_rows(
+        cast(BackendConnection, connection),
+        True,
+        "SELECT value, quantity FROM items WHERE value = {} AND quantity = {}",
+        ("sqlite-value", 2),
+    )
+
+    assert inserted == 1
+    assert rows == [("sqlite-value", 2)]
+
+
+def test_maintenance_connection_helpers_use_postgres_cursor_shape() -> None:
+    connection = FakeConnection()
+
+    inserted = _execute_write(
+        cast(BackendConnection, connection),
+        False,
+        "INSERT INTO memory_mutation_events (id) VALUES ({})",
+        ("postgres-value",),
+    )
+    rows = _fetchall_rows(
+        cast(BackendConnection, connection),
+        False,
+        "SELECT id FROM memory_mutation_events WHERE id = {}",
+        ("postgres-value",),
+    )
+
+    assert inserted == 1
+    assert rows == [("postgres-value",)]
 
 
 def test_sampling_payload_merges_strategy_metadata_and_result_metrics() -> None:
