@@ -156,7 +156,10 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             workspace_id TEXT,
             task_name TEXT,
             task_id TEXT,
+            execution_epoch INTEGER,
             request_id TEXT,
+            attempt INTEGER,
+            attempt_identity TEXT,
             subprocess_pid INTEGER,
             provider_key TEXT NOT NULL,
             provider_name TEXT NOT NULL,
@@ -414,7 +417,10 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "provider_usage", "workspace_id", "TEXT")
     ensure_column(conn, "provider_usage", "task_name", "TEXT")
     ensure_column(conn, "provider_usage", "task_id", "TEXT")
+    ensure_column(conn, "provider_usage", "execution_epoch", "INTEGER")
     ensure_column(conn, "provider_usage", "request_id", "TEXT")
+    ensure_column(conn, "provider_usage", "attempt", "INTEGER")
+    ensure_column(conn, "provider_usage", "attempt_identity", "TEXT")
     ensure_column(conn, "provider_usage", "subprocess_pid", "INTEGER")
     ensure_column(conn, "provider_usage", "provider_key", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "provider_usage", "provider_name", "TEXT NOT NULL DEFAULT ''")

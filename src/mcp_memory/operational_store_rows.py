@@ -393,6 +393,11 @@ class EmbeddingIntegrityEventSummary:
 @dataclass(frozen=True)
 class ProviderUsageSample:
     task_name: str | None
+    task_id: str | None
+    execution_epoch: int | None
+    request_id: str | None
+    attempt: int | None
+    attempt_identity: str | None
     provider_key: str
     provider_name: str
     model_name: str
@@ -412,6 +417,11 @@ class ProviderUsageSample:
     def from_sqlite_row(cls, row: Mapping[str, object]) -> Self:
         return cls(
             task_name=_optional_str(row["task_name"]),
+            task_id=_optional_str(row["task_id"]),
+            execution_epoch=_optional_int(row["execution_epoch"]),
+            request_id=_optional_str(row["request_id"]),
+            attempt=_optional_int(row["attempt"]),
+            attempt_identity=_optional_str(row["attempt_identity"]),
             provider_key=_require_str(row["provider_key"], "provider_key"),
             provider_name=_require_str(row["provider_name"], "provider_name"),
             model_name=_require_str(row["model_name"], "model_name"),
@@ -432,20 +442,25 @@ class ProviderUsageSample:
     def from_postgres_row(cls, row: Sequence[object]) -> Self:
         return cls(
             task_name=_optional_str(row[0]),
-            provider_key=_require_str(row[1], "provider_key"),
-            provider_name=_require_str(row[2], "provider_name"),
-            model_name=_require_str(row[3], "model_name"),
-            status=_require_str(row[4], "status"),
-            duration_seconds=_optional_float(row[5]) or 0.0,
-            created_at=_optional_float(row[6]) or 0.0,
-            reason_code=_optional_str(row[7]),
-            input_tokens=_optional_int(row[8]) if len(row) > 8 else None,
-            output_tokens=_optional_int(row[9]) if len(row) > 9 else None,
-            cached_input_tokens=_optional_int(row[10]) if len(row) > 10 else None,
-            cache_write_tokens=_optional_int(row[11]) if len(row) > 11 else None,
-            reasoning_tokens=_optional_int(row[12]) if len(row) > 12 else None,
-            total_tokens=_optional_int(row[13]) if len(row) > 13 else None,
-            token_usage_source=_optional_str(row[14]) if len(row) > 14 else None,
+            task_id=_optional_str(row[1]),
+            execution_epoch=_optional_int(row[2]),
+            request_id=_optional_str(row[3]),
+            attempt=_optional_int(row[4]),
+            attempt_identity=_optional_str(row[5]),
+            provider_key=_require_str(row[6], "provider_key"),
+            provider_name=_require_str(row[7], "provider_name"),
+            model_name=_require_str(row[8], "model_name"),
+            status=_require_str(row[9], "status"),
+            duration_seconds=_optional_float(row[10]) or 0.0,
+            created_at=_optional_float(row[11]) or 0.0,
+            reason_code=_optional_str(row[12]),
+            input_tokens=_optional_int(row[13]) if len(row) > 13 else None,
+            output_tokens=_optional_int(row[14]) if len(row) > 14 else None,
+            cached_input_tokens=_optional_int(row[15]) if len(row) > 15 else None,
+            cache_write_tokens=_optional_int(row[16]) if len(row) > 16 else None,
+            reasoning_tokens=_optional_int(row[17]) if len(row) > 17 else None,
+            total_tokens=_optional_int(row[18]) if len(row) > 18 else None,
+            token_usage_source=_optional_str(row[19]) if len(row) > 19 else None,
         )
 
     @property

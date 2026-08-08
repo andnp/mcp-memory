@@ -605,6 +605,10 @@ class ProviderUsageRow:
     created_at: float
     task_name: str | None = None
     task_id: str | None = None
+    execution_epoch: int | None = None
+    request_id: str | None = None
+    attempt: int | None = None
+    attempt_identity: str | None = None
     reason_category: str | None = None
     reason_code: str | None = None
     retry_delay_seconds: float | None = None
@@ -796,6 +800,10 @@ def adapt_provider_usage_row(row: Mapping[str, object]) -> ProviderUsageRow:
         status=_require_str(row, "status"),
         duration_seconds=_require_float(row, "duration_seconds"),
         created_at=_require_float(row, "created_at"),
+        execution_epoch=_optional_int(row, "execution_epoch"),
+        request_id=_optional_str(row, "request_id"),
+        attempt=_optional_int(row, "attempt"),
+        attempt_identity=_optional_str(row, "attempt_identity"),
         reason_category=_optional_str(row, "reason_category"),
         reason_code=_optional_str(row, "reason_code"),
         retry_delay_seconds=_optional_float(row, "retry_delay_seconds"),
@@ -1199,7 +1207,7 @@ def list_provider_usage_rows_since(
     if db_manager is None:
         return []
     query = (
-        "SELECT task_name, task_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_category, reason_code, retry_delay_seconds "
+        "SELECT task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_category, reason_code, retry_delay_seconds "
         "FROM provider_usage WHERE created_at >= ?"
     )
     params: list[object] = [cutoff]

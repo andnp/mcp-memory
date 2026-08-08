@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 29
+POSTGRES_SCHEMA_VERSION = 30
 
 
 @dataclass(frozen=True)
@@ -918,6 +918,16 @@ POSTGRES_MIGRATIONS = (
             )
             """,
             "CREATE INDEX IF NOT EXISTS idx_direct_mutation_evidence_execution ON direct_mutation_evidence(task_id, execution_epoch, sequence)",
+        ),
+    ),
+    PostgresMigration(
+        version=30,
+        name="add_provider_attempt_identity",
+        statements=(
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS execution_epoch INTEGER",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS attempt INTEGER",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS attempt_identity TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_provider_usage_attempt_identity ON provider_usage(attempt_identity)",
         ),
     ),
 )

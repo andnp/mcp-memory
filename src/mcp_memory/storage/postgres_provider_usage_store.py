@@ -31,7 +31,10 @@ class PostgresProviderUsageRepository:
         *,
         task_name: str | None,
         task_id: str | None,
+        execution_epoch: int | None = None,
         request_id: str | None,
+        attempt: int | None = None,
+        attempt_identity: str | None = None,
         subprocess_pid: int | None,
         provider_key: str,
         provider_name: str,
@@ -52,18 +55,21 @@ class PostgresProviderUsageRepository:
                 cursor.execute(
                     """
                     INSERT INTO provider_usage (
-                        workspace_id, task_name, task_id, request_id, subprocess_pid,
+                        workspace_id, task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, subprocess_pid,
                         provider_key, provider_name, model_name, status, duration_seconds,
                         created_at, error_text, reason_category, reason_code, retry_delay_seconds,
                         input_tokens, output_tokens, cached_input_tokens, cache_write_tokens,
                         reasoning_tokens, total_tokens, token_usage_source
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         self._workspace_id,
                         task_name,
                         task_id,
+                        execution_epoch,
                         request_id,
+                        attempt,
+                        attempt_identity,
                         subprocess_pid,
                         provider_key,
                         provider_name,
@@ -93,6 +99,8 @@ class PostgresProviderUsageRepository:
         attempt: int,
         task_name: str | None,
         task_id: str | None,
+        execution_epoch: int | None = None,
+        attempt_identity: str | None = None,
         provider_key: str,
         provider_name: str,
         model_name: str,
@@ -408,7 +416,7 @@ class PostgresProviderUsageRepository:
         current_time = time.time() if now is None else now
         active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id
         query = (
-            "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code, "
+            "SELECT task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code, "
             "input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source "
             "FROM provider_usage"
         )
