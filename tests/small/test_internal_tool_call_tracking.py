@@ -4,6 +4,7 @@ from mcp_memory.internal_tool_call_tracking import (
     InternalToolCallSnapshot,
     InternalToolCallTracker,
 )
+from mcp_memory.core.curator_evidence import begin_tool_call, finish_tool_call
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     validate_agentic_tool_tracking_snapshot,
 )
@@ -80,6 +81,30 @@ def test_internal_tool_call_tracker_does_not_count_failed_mutation() -> None:
         }
     ]
     assert "secret" not in str(snapshot.tool_call_ledger)
+
+
+def test_internal_tool_call_tracker_adds_execution_metadata_to_scoped_calls() -> None:
+    tracker = InternalToolCallTracker()
+    tracker.reset_task("task-1", session_id="session-1", execution_epoch=7)
+    token = begin_tool_call()
+    tracker.record_call("internal_peek_record", session_id="session-1")
+    finish_tool_call(token)
+
+    snapshot = tracker.finalize_task("task-1")
+
+    assert snapshot is not None
+    assert snapshot.tool_call_ledger[0] == {
+        "sequence": 1,
+        "tool_name": "internal_peek_record",
+        "kind": "read",
+        "status": "success",
+        "argument_keys": [],
+        "memory_ids": [],
+        "call_id": snapshot.tool_call_ledger[0]["call_id"],
+        "task_id": "task-1",
+        "execution_epoch": 7,
+        "session_id": "session-1",
+    }
 
 
 def test_internal_tool_call_tracker_falls_back_to_single_active_task() -> None:

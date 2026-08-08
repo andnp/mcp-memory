@@ -207,7 +207,18 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
             expected_ledger[0]["tool_name"] = "internal_unexpected_tool"
             expected_ledger[0]["argument_keys"] = []
             expected_ledger[0]["memory_ids"] = []
-        assert result["tool_call_ledger"] == expected_ledger
+        if invalid_ledger:
+            assert result["tool_call_ledger"] == expected_ledger
+        else:
+            actual_entry = result["tool_call_ledger"][0]
+            assert {
+                key: actual_entry[key]
+                for key in expected_ledger[0]
+            } == expected_ledger[0]
+            assert actual_entry["call_id"]
+            assert actual_entry["task_id"] == "direct-curator-task"
+            assert actual_entry["execution_epoch"] == 0
+            assert actual_entry["session_id"] is None
         assert "A direct MCP curator conclusion." not in str(result["tool_call_ledger"])
         refreshed = runtime.repository.get_memory(record.id)
         assert refreshed is not None and refreshed.summary == "A direct MCP curator conclusion."
