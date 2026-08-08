@@ -25,6 +25,10 @@ from mcp_memory.core.curation_quality_inputs import (
     CurationQualityMutation,
     mutation_from_receipt,
 )
+from mcp_memory.core.curation_quality_provenance import (
+    QualityQuery,
+    QueryProvenance,
+)
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -362,6 +366,8 @@ class CurationQualitySampler:
             campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
         )
         query = self._find_historical_query(mutation, explicit_hypothesis)
+        if query is None and explicit_hypothesis is None:
+            query = _synthetic_query(mutation)
         if query is None:
             return CurationQualityEvidence(
                 status=(
@@ -382,7 +388,10 @@ class CurationQualitySampler:
                 **common,
             )
 
-        query_id, historical_query_text, before_ids, replay_complete = query
+        query_id = query.query_id
+        historical_query_text = query.query_text
+        before_ids = query.before_memory_ids
+        replay_complete = query.replay_complete
         query_text = (
             explicit_hypothesis.query
             if (
@@ -407,6 +416,10 @@ class CurationQualitySampler:
                 zero_result_change=0,
                 useful_work=None,
                 neutral_reason=neutral_reason,
+                engagement_evidence={
+                    "query_provenance": query.provenance.value,
+                    "query_trusted": query.trusted,
+                },
                 **common,
             )
         intended_ids = (
@@ -461,7 +474,11 @@ class CurationQualitySampler:
                         if explicit_hypothesis is None
                         else explicit_hypothesis.query
                     ),
+                    trusted_query=query.trusted,
                     replay_complete=replay_complete,
+                    before_query_context=query.query_context,
+                    after_query_context=query.query_context,
+                    before_search_epochs=query.before_search_epochs,
                 )
             ]
         )
@@ -507,11 +524,15 @@ class CurationQualitySampler:
             ),
             retrieval_utility_delta=case.retrieval_utility_delta,
             engagement_utility_delta=engagement_delta,
-            engagement_evidence=(
-                {}
-                if not engagement
-                else dict(cast(Mapping[str, object], engagement["evidence"]))
-            ),
+            engagement_evidence={
+                **(
+                    {}
+                    if not engagement
+                    else dict(cast(Mapping[str, object], engagement["evidence"]))
+                ),
+                "query_provenance": query.provenance.value,
+                "query_trusted": query.trusted,
+            },
             content_quality_score_before=content.before,
             content_quality_score_after=content.after,
             content_quality_delta=content.delta,
@@ -741,12 +762,14 @@ class CurationQualitySampler:
         self,
         mutation: CurationQualityMutation,
         explicit_hypothesis: CampaignHypothesis | None = None,
-    ) -> tuple[str, str, list[str], bool] | None:
+    ) -> QualityQuery | None:
         if explicit_hypothesis is not None and explicit_hypothesis.query:
             return self._find_explicit_query(mutation, explicit_hypothesis.query)
         if explicit_hypothesis is not None and explicit_hypothesis.target_mode is CampaignTargetMode.ZERO_RESULTS:
             return None
         target_ids = [str(value) for value in mutation.affected_memory_ids]
+        if not target_ids:
+            return None
         placeholders = ", ".join("?" for _ in target_ids)
         rows = _fetch_rows(
             self._db_manager,
@@ -776,13 +799,15 @@ class CurationQualitySampler:
         if not grouped:
             return None
         invocation_id = next(iter(grouped))
-        return self._hydrate_historical_query(invocation_id)
+        return self._hydrate_historical_query(
+            invocation_id, provenance=QueryProvenance.REAL_USER_SEARCH
+        )
 
     def _find_explicit_query(
         self,
         mutation: CurationQualityMutation,
         query_text: str | None,
-    ) -> tuple[str, str, list[str], bool] | None:
+    ) -> QualityQuery | None:
         if not query_text or not query_text.strip():
             return None
         cutoff = mutation.applied_at or self._clock()
@@ -802,13 +827,17 @@ class CurationQualitySampler:
         for row in rows:
             event_time = _timestamp(row[1])
             if event_time is not None and event_time < cutoff:
-                return self._hydrate_historical_query(str(row[0]))
+                return self._hydrate_historical_query(
+                    str(row[0]), provenance=QueryProvenance.CAMPAIGN_HYPOTHESIS
+                )
         return None
 
     def _hydrate_historical_query(
         self,
         invocation_id: str,
-    ) -> tuple[str, str, list[str], bool] | None:
+        *,
+        provenance: QueryProvenance = QueryProvenance.REAL_USER_SEARCH,
+    ) -> QualityQuery | None:
         rows = _fetch_rows(
             self._db_manager,
             """
@@ -824,15 +853,16 @@ class CurationQualitySampler:
         )
         if not rows:
             return None
-        return (
-            invocation_id,
-            str(rows[0][1] or ""),
-            [str(row[2]) for row in rows if row[2] is not None],
-            max(
+        return QualityQuery(
+            query_id=invocation_id,
+            query_text=str(rows[0][1] or ""),
+            before_memory_ids=tuple(str(row[2]) for row in rows if row[2] is not None),
+            replay_complete=max(
                 (int(str(row[4])) for row in rows if row[4] is not None),
                 default=len(rows),
             )
             <= len(rows),
+            provenance=provenance,
         )
 
 
@@ -846,6 +876,24 @@ def _is_explicit(hypothesis: CampaignHypothesis | None) -> bool:
         or hypothesis.minimum_improvement > 0
         or hypothesis.target_mode.value != "heuristic"
     )
+
+
+def _synthetic_query(mutation: CurationQualityMutation) -> QualityQuery | None:
+    for snapshot in mutation.after_entities.values():
+        terms = [
+            str(snapshot.get(field, "")).strip()
+            for field in ("title", "summary", "content")
+            if str(snapshot.get(field, "")).strip()
+        ]
+        if terms:
+            return QualityQuery(
+                query_id=f"synthetic:{mutation.mutation_id}",
+                query_text=" ".join(terms)[:240],
+                before_memory_ids=(),
+                replay_complete=False,
+                provenance=QueryProvenance.SYNTHETIC_PROBE,
+            )
+    return None
 
 
 def _acceptance_met(case: ReplayCaseReport, hypothesis: CampaignHypothesis) -> bool | None:
