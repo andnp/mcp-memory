@@ -10,6 +10,7 @@ from typing import TypeAlias, cast
 from pydantic import BaseModel, Field, JsonValue
 
 from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
+from mcp_memory.core.curator_telemetry import CuratorTelemetry, project_curator_telemetry
 from mcp_memory.core.task_results import TaskRunResult, build_task_run_result_summary, decode_task_run_result_payload
 from mcp_memory.management.models import (
     IngestAuditPayload,
@@ -56,6 +57,7 @@ class TaskResultView(BaseModel):
     tool_calls_executed: int | None = None
     lines_compressed: int | None = None
     stale: int | None = None
+    curator_telemetry: CuratorTelemetry | None = None
 
     @property
     def mutation_outcome(self) -> MutationOutcomePayload:
@@ -201,6 +203,11 @@ def build_task_result_view(raw_result: object) -> TaskResultView:
         raw_result.lines_compressed if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("lines_compressed"))
     )
     stale = raw_result.stale if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("stale"))
+    curator_telemetry = (
+        project_curator_telemetry(raw_payload)
+        if "curation_campaign_result" in raw_payload or "verified_mutation_count" in raw_payload
+        else None
+    )
     return TaskResultView(
         raw_payload=raw_payload,
         summary=summary,
@@ -211,6 +218,7 @@ def build_task_result_view(raw_result: object) -> TaskResultView:
         tool_calls_executed=tool_calls_executed,
         lines_compressed=lines_compressed,
         stale=stale,
+        curator_telemetry=curator_telemetry,
     )
 
 

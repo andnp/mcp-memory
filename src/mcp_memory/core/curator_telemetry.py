@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Iterable
+from collections.abc import Mapping
 
 from mcp_memory.operational_store_rows import ProviderUsageSample
 
@@ -123,3 +124,61 @@ def _add_tokens(total: CuratorTokenTotals, sample: ProviderUsageSample) -> Curat
         reasoning_tokens=total.reasoning_tokens + (sample.reasoning_tokens or 0),
         total_tokens=total.total_tokens + (sample.total_tokens or 0),
     )
+
+
+def project_curator_telemetry(
+    payload: Mapping[str, object],
+    *,
+    provider: CuratorProviderAggregation | None = None,
+) -> CuratorTelemetry:
+    """Project a task result from persisted curator evidence.
+
+    Provider-reported investigation counts are retained only as discrepancy
+    inputs; mutation and tool totals come from the persisted evidence payload.
+    """
+
+    campaign = payload.get("curation_campaign_result")
+    campaign_payload = campaign if isinstance(campaign, Mapping) else {}
+    quality = campaign_payload.get("quality_evidence", payload.get("quality_evidence"))
+    quality_count = len(quality) if isinstance(quality, list) else 0
+    internal_tool_calls = _non_negative_int(
+        campaign_payload.get("tool_calls_executed", payload.get("tool_calls_executed"))
+    )
+    verified_mutations = _non_negative_int(
+        campaign_payload.get("verified_mutation_count", payload.get("verified_mutation_count"))
+    )
+    productive_mutations = _non_negative_int(
+        campaign_payload.get("productive_mutation_count", payload.get("mutations"))
+    )
+    reported_tool_calls = _non_negative_int(campaign_payload.get("provider_reported_tool_calls"))
+    reported_mutations = _non_negative_int(campaign_payload.get("provider_reported_mutations"))
+    authoritative_provider = provider or CuratorProviderAggregation(
+        provider_attempts=_non_negative_int(payload.get("provider_calls_used")),
+        failures=_non_negative_int(payload.get("provider_failure_count")),
+        retries=_non_negative_int(payload.get("retry_count")),
+        unattributed_calls=_non_negative_int(payload.get("unattributed_provider_calls")),
+    )
+    return CuratorTelemetry(
+        internal_tool_calls=internal_tool_calls,
+        provider_attempts=authoritative_provider.provider_attempts,
+        verified_mutations=verified_mutations,
+        productive_mutations=productive_mutations,
+        quality_evidence=quality_count,
+        failures=authoritative_provider.failures,
+        retries=authoritative_provider.retries,
+        token_totals=authoritative_provider.token_totals,
+        unattributed_calls=authoritative_provider.unattributed_calls,
+        discrepancies=CuratorTelemetryDiscrepancies(
+            reported_tool_calls_delta=reported_tool_calls - internal_tool_calls,
+            reported_mutations_delta=reported_mutations - productive_mutations,
+            verified_mutations_delta=verified_mutations - productive_mutations,
+        ),
+    )
+
+
+def _non_negative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    return 0
