@@ -306,6 +306,13 @@ def _direct_curator_prompt(
         "as needed, then invoke a mutation tool immediately when a focused improvement is "
         "justified. Omit records that need no change. Never invent memory IDs. Include the "
         f"task_id {task.id!r} in every mutation call. Stay within the mutation budget. "
+        "Retention/durability rubric: distinguish durable content (reusable facts, decisions, "
+        "deadlines, releases, incidents, or historical context), transient content, and mixed "
+        "content. Treat dates as semantic only when they carry deadline, release, incident, "
+        "historical, or decision meaning; preserve meaningful dates and qualifiers. Flag work "
+        "logs, status updates, task-complete summaries, and execution residue as advisory cleanup "
+        "candidates. Never archive or delete solely due to age, date, or access. When rewriting "
+        "or splitting, preserve every durable claim and its meaningful qualifiers. "
         "Use archive instead of delete. Return a short JSON summary after tool work with "
         "summary and mutations_attempted fields.\n"
         + json.dumps(context, sort_keys=True, default=str)
