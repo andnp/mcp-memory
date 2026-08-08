@@ -629,9 +629,10 @@ class SQLiteTaskQueue:
             if is_stale:
                 recovered.append(
                     self._retry_recovery_transition(
-                        lambda: self.fail_permanently(
+                        lambda: self.fail(
                             task.id,
                             "Task was abandoned without an active provider subprocess",
+                            retry_delay_seconds=5.0,
                             failed_at=current_time,
                         )
                     )

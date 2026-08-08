@@ -515,6 +515,22 @@ def test_sqlite_task_queue_fails_dead_stale_subprocess_task(db_manager, monkeypa
     assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
 
 
+def test_sqlite_task_queue_retries_stale_task_without_provider_process(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("pidless-task", task_id="pidless-task", available_at=0.0)
+
+    assert queue.claim_next(now=10.0) is not None
+
+    recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=300.0)
+
+    assert [item.id for item in recovered] == [task.id]
+    retried = queue.get_task(task.id)
+    assert retried.status == "pending"
+    assert retried.retries_count == 1
+    assert retried.last_error == "Task was abandoned without an active provider subprocess"
+    assert retried.available_at == pytest.approx(1005.0)
+
+
 def test_sqlite_task_queue_recent_progress_prevents_dead_subprocess_recovery(
     db_manager,
     monkeypatch,
