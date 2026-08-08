@@ -67,6 +67,12 @@ def test_dispatch_management_request_uses_typed_management_capability() -> None:
         def enqueue_background_task(self, task_name: str, *, force: bool = False) -> dict[str, object]:
             return {"task_name": task_name, "force": force}
 
+        def enqueue_all_background_tasks(self, *, force: bool = False) -> list[dict[str, object]]:
+            return [{"force": force}]
+
+        def cancel_task(self, task_id: str, *, cancelled_by: str = "cli", reason: str = "cancelled_by_user") -> dict[str, object]:
+            return {"task_id": task_id, "cancelled_by": cancelled_by, "reason": reason}
+
     maintenance = _MaintenanceSpy()
     routes = SimpleNamespace(
         management=ManagementCapabilities.from_service(maintenance),
@@ -84,6 +90,16 @@ def test_dispatch_management_request_uses_typed_management_capability() -> None:
         "/api/admin/agents/run",
         {"task_name": "memory-curator", "force": True},
     ) == {"task_name": "memory-curator", "force": True}
+
+    assert dispatch_management_request(routes, metadata, "/api/admin/agents/run-all", {"force": True}) == {
+        "results": [{"force": True}]
+    }
+    assert dispatch_management_request(
+        routes,
+        metadata,
+        "/api/admin/tasks/task-1/cancel",
+        {"cancelled_by": "operator", "reason": "stop"},
+    ) == {"task_id": "task-1", "cancelled_by": "operator", "reason": "stop"}
 
 
 def test_resolve_daemon_request_timeout_seconds_uses_extended_budget_for_memory_and_tool_paths() -> None:

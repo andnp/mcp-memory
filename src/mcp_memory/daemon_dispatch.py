@@ -155,13 +155,13 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             mode=required_str(payload, "mode"),
         ).model_dump()
     if path == "/api/admin/agents/run":
-        return service.enqueue_background_task(
+        return _maintenance_service(routes).enqueue_background_task(
             required_str(payload, "task_name"),
             force=bool_value(payload, "force", default=False),
         )
     if path == "/api/admin/agents/run-all":
         return {
-            "results": service.enqueue_all_background_tasks(
+            "results": _maintenance_service(routes).enqueue_all_background_tasks(
                 force=bool_value(payload, "force", default=False)
             )
         }
@@ -223,7 +223,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
     cancel_match = _TASK_CANCEL_PATH_RE.fullmatch(path)
     if cancel_match is not None:
         return serialize_payload(
-            service.cancel_task(
+            _maintenance_service(routes).cancel_task(
                 cancel_match.group("task_id"),
                 cancelled_by=optional_str(payload, "cancelled_by") or "cli",
                 reason=optional_str(payload, "reason") or "cancelled_by_user",
@@ -252,6 +252,14 @@ def _management_service(routes) -> Any:
         return management
     service = getattr(routes, "service", None)
     return getattr(service, "capabilities", service)
+
+
+def _maintenance_service(routes) -> Any:
+    management = getattr(routes, "management", None)
+    maintenance = getattr(management, "maintenance", None)
+    if maintenance is not None:
+        return maintenance
+    return _management_service(routes)
 
 
 def _federation_source(routes) -> MemoryFederationSource:
