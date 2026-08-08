@@ -36,6 +36,44 @@ def test_reconciliation_requires_ledger_delta_and_postcondition() -> None:
     assert reconcile_direct_mutation_evidence(evidence, semantic_postcondition=None).outcome == DirectMutationOutcome.APPLIED_UNVERIFIED
 
 
+def test_missing_call_id_is_repeatable_for_same_inputs() -> None:
+    """Retries with the same mutation inputs reuse one public idempotency key."""
+    values = {
+        "task_id": "task-1", "execution_epoch": 2, "session_id": "session-1",
+        "call_id": None, "sequence": 1, "tool_name": "internal_update_memory_record",
+        "arguments": {"memory_id": "m-1", "title": "Title"},
+    }
+
+    first = DirectMutationEvidence.start(**values)
+    second = DirectMutationEvidence.start(**values)
+
+    assert first.idempotency_key == second.idempotency_key
+
+
+def test_missing_call_id_changes_when_arguments_change() -> None:
+    """Different mutation arguments receive different idempotency keys."""
+    common = {
+        "task_id": "task-1", "execution_epoch": 2, "session_id": "session-1",
+        "call_id": None, "sequence": 1, "tool_name": "internal_update_memory_record",
+    }
+
+    first = DirectMutationEvidence.start(**common, arguments={"memory_id": "m-1"})
+    second = DirectMutationEvidence.start(**common, arguments={"memory_id": "m-2"})
+
+    assert first.idempotency_key != second.idempotency_key
+
+
+def test_explicit_call_id_remains_authoritative() -> None:
+    """An explicit call ID remains the evidence idempotency key."""
+    evidence = DirectMutationEvidence.start(
+        task_id="task-1", execution_epoch=2, session_id="session-1",
+        call_id="call-1", sequence=1,
+        tool_name="internal_update_memory_record", arguments={"memory_id": "m-1"},
+    )
+
+    assert evidence.idempotency_key == "call-1"
+
+
 def test_sqlite_evidence_save_is_idempotent(tmp_path) -> None:
     db = DatabaseManager(tmp_path / "memory.db")
     store = SQLiteDirectMutationEvidenceStore(db)
