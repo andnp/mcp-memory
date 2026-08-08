@@ -688,6 +688,10 @@ export interface CurationMetricsPayload {
   };
   retrieval_quality: {
     sampled_action_count: number;
+    verified_receipt_count: number;
+    productive_quality_count: number;
+    outcome_counts: Record<string, number>;
+    unobserved_reason_counts: Record<string, number>;
     evaluated_action_count: number;
     quality_observed_action_count: number;
     no_query_action_count: number;

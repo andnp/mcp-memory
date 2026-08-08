@@ -101,6 +101,10 @@ def test_curation_metrics_use_persisted_receipts_and_history_not_provider_claims
     assert metrics.verified_receipt_count == 1
     assert metrics.retrieval_quality.verified_receipt_count == 1
     assert metrics.retrieval_quality.productive_quality_count == 0
+    assert metrics.retrieval_quality.outcome_counts["unobserved"] == 1
+    assert metrics.retrieval_quality.unobserved_reason_counts == {
+        "missing_quality_evidence": 1,
+    }
 
 
 def test_curation_metrics_pass_explicit_query_adapter_to_runner() -> None:
@@ -182,13 +186,13 @@ def test_curation_quality_metrics_separate_neutral_results_and_denominators(db_m
     quality = build_curation_metrics(db_manager, window_hours=24, now=now.timestamp()).retrieval_quality
 
     assert quality.evaluated_action_count == 2
-    assert quality.quality_observed_action_count == 3
+    assert quality.quality_observed_action_count == 2
     assert quality.useful_work_count == 1
-    assert quality.useful_work_observed_action_count == 3
-    assert quality.useful_work_rate == pytest.approx(1 / 3, abs=0.0001)
-    assert quality.content_evaluated_action_count == 3
+    assert quality.useful_work_observed_action_count == 2
+    assert quality.useful_work_rate == pytest.approx(1 / 2, abs=0.0001)
+    assert quality.content_evaluated_action_count == 2
     assert quality.content_quality_improved_count == 1
-    assert quality.content_quality_neutral_count == 1
+    assert quality.content_quality_neutral_count == 0
     assert quality.content_quality_regression_count == 1
     assert quality.content_quality_delta == pytest.approx(0.1)
 
@@ -205,10 +209,11 @@ def test_curation_quality_metrics_report_outcomes_and_unobserved_reasons(db_mana
     for status, reason, delta in (
         ("productive", None, 0.2),
         ("structural_only", "structural_delta_observed", None),
-        ("neutral", "no_trusted_query", None),
+        ("neutral", "content_quality_flat", None),
         ("regressed", None, -0.2),
         ("unverified", "mutation_evidence_unverified", None),
         ("no_query", "no_trusted_query", None),
+        ("neutral_no_trusted_query", "no_trusted_query", None),
     ):
         quality_store.put_quality_evidence(
             CurationQualityEvidence(
@@ -231,13 +236,13 @@ def test_curation_quality_metrics_report_outcomes_and_unobserved_reasons(db_mana
         "productive": 1,
         "regressed": 1,
         "structural_only": 1,
-        "unobserved": 1,
+        "unobserved": 2,
         "unverified": 1,
         "verified_only": 0,
     }
     assert quality.productive_quality_count == 2
     assert quality.unobserved_reason_counts == {
-        "no_trusted_query": 1,
+        "no_trusted_query": 2,
     }
 
 

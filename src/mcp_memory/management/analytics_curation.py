@@ -20,6 +20,7 @@ from mcp_memory.management.query_runner import (
     ManagementQueryRunner,
 )
 from mcp_memory.core.curator_telemetry import classify_quality_utility
+from mcp_memory.core.curation_quality_policy import QualityOutcome
 
 _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
 _VALID_PLAN_OUTCOMES = frozenset(
@@ -222,8 +223,8 @@ def build_curation_metrics(
         row
         for row in quality
         if (
-            row in evaluated_quality
-            or row.get("content_quality_delta") is not None
+            _quality_outcome(row.get("status")) != QualityOutcome.UNOBSERVED.value
+            and (row in evaluated_quality or row.get("content_quality_delta") is not None)
         )
     ]
     outcome_counts = Counter(
@@ -232,7 +233,7 @@ def build_curation_metrics(
         if (outcome := _quality_outcome(row.get("status"))) is not None
     )
     unobserved_reason_counts = Counter(
-        _text(row.get("neutral_reason"), _text(row.get("status"), "unknown"))
+        _unobserved_reason(row)
         for row in quality
         if _quality_outcome(row.get("status")) == "unobserved"
     )
@@ -248,7 +249,10 @@ def build_curation_metrics(
     useful_work_observed = [row for row in quality_observed if row.get("useful_work") is not None]
     useful_work_count = sum(1 for row in useful_work_observed if row.get("useful_work") in (1, True))
     content_quality = [
-        row for row in quality if row.get("content_quality_delta") is not None
+        row
+        for row in quality
+        if row.get("content_quality_delta") is not None
+        and _quality_outcome(row.get("status")) != QualityOutcome.UNOBSERVED.value
     ]
 
     history_event_count = len(events)
@@ -392,17 +396,15 @@ def _mutation_category(operation: str) -> str:
 
 def _quality_outcome(status: object) -> str | None:
     value = _text(status, "")
-    if value == "productive":
-        return "productive"
-    if value == "structural_only":
-        return "structural_only"
-    if value in {"verified_only", "unverified", "regressed"}:
+    if value in {outcome.value for outcome in QualityOutcome}:
         return value
-    if value == "neutral" or value.startswith("neutral_"):
-        return "neutral"
-    if value == "no_query":
-        return "unobserved"
+    if value == "no_query" or value.startswith("neutral_"):
+        return QualityOutcome.UNOBSERVED.value
     return None
+
+
+def _unobserved_reason(row: Mapping[str, object]) -> str:
+    return _text(row.get("neutral_reason"), _text(row.get("status"), "unknown"))
 
 
 def _retry_count(row: Mapping[str, object]) -> int:
