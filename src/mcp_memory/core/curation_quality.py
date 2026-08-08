@@ -320,10 +320,13 @@ class CurationQualitySampler:
         candidate_repository = self._candidate_repository
         if candidate_repository is None:
             return
-        if mutation.evidence_id is not None and not should_escalate_quality(
-            QualityOutcome(str(evidence.status)), mutation_verified=mutation.verified
-        ):
-            return
+        if mutation.evidence_id is not None:
+            try:
+                outcome = QualityOutcome(str(evidence.status))
+            except ValueError:
+                return
+            if not should_escalate_quality(outcome, mutation_verified=mutation.verified):
+                return
         if evidence.status == "evaluated" and (
             (evidence.retrieval_regression_count or 0) > 0
             or (evidence.zero_result_change or 0) > 0

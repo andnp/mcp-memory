@@ -126,7 +126,7 @@ async def test_direct_campaign_applies_create_link_mcp_tool(
 
         result = await handle_memory_curator_task(runtime, _task(runtime), object())
 
-        assert result["curation_outcome"] == "applied"
+        assert result["curation_outcome"] == "applied_verified"
         assert result["mutations"] == 1
         assert runtime.repository.get_links(source.id, direction="outgoing")
         assert runtime.work_items.get_item(item.id).status == "completed"

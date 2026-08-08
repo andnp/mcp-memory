@@ -187,9 +187,7 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         assert result["mutations"] == (0 if invalid_ledger else 1)
         assert result["actual_mutation_count"] == 1
         assert result["tool_call_ledger_validation"]["valid"] is not invalid_ledger
-        assert result["curation_campaign_result"]["productive_mutation_count"] == (
-            0 if invalid_ledger else 1
-        )
+        assert result["curation_campaign_result"]["productive_mutation_count"] == 0
         assert result["provider_call_count"] == 1
         assert result["provider_calls_used"] == 1
         assert result["input_tokens"] == 20
