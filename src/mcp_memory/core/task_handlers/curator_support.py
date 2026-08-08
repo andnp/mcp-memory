@@ -58,6 +58,53 @@ CURATOR_LOW_READ_REVIEW_THRESHOLD = 3
 CURATOR_LOW_CONVERSION_EXPOSURE_THRESHOLD = 3
 CURATOR_LOW_CONVERSION_MAX_RATE = 0.25
 CURATOR_THIN_SPLIT_CHILD_MAX_CHARS = 800
+_CURATOR_DURABLE_DATE_MARKERS = (
+    "deadline",
+    "release",
+    "incident",
+    "historical decision",
+    "decided",
+    "postmortem",
+)
+_CURATOR_WORK_LOG_MARKERS = (
+    "work log",
+    "worklog",
+    "standup",
+    "daily log",
+    "progress update",
+    "today i",
+    "worked on",
+)
+_CURATOR_STATUS_RESIDUE_MARKERS = (
+    "completed",
+    "finished",
+    "in progress",
+    "blocked on",
+    "status update",
+    "todo:",
+    "next step",
+)
+_CURATOR_EXECUTION_DETAIL_MARKERS = (
+    "ran ",
+    "retry",
+    "stack trace",
+    "debugging",
+    "debug output",
+    "command output",
+    "test output",
+    "temporary",
+    "workaround",
+)
+_CURATOR_DURABLE_CONTENT_MARKERS = (
+    "decision",
+    "policy",
+    "lesson",
+    "root cause",
+    "deadline",
+    "release",
+    "incident",
+    "historical",
+)
 CURATOR_ALLOWED_STRATEGIES = (
     SEMANTIC_STRATEGY,
     ANOMALY_STRATEGY,
@@ -494,6 +541,17 @@ def curator_size_band_for_char_count(content_size_chars: int) -> str:
 def retrieval_friction_flags(record) -> list[str]:
     flags: list[str] = []
     normalized_summary = _normalize_curator_text(getattr(record, "summary", None))
+    normalized_content = _normalize_curator_text(
+        " ".join(
+            str(value)
+            for value in (
+                getattr(record, "title", None),
+                getattr(record, "summary", None),
+                getattr(record, "content", None),
+            )
+            if value
+        )
+    )
     if normalized_summary.startswith(("covers ", "added ")):
         flags.append("generic_summary")
     if record.type == "observation" and not record.tags:
@@ -519,6 +577,21 @@ def retrieval_friction_flags(record) -> list[str]:
         flags.append("thin_split_child")
     if is_oversized_curator_memory(record):
         flags.append("oversized_blob")
+    has_durable_date_context = any(marker in normalized_content for marker in _CURATOR_DURABLE_DATE_MARKERS)
+    has_date = bool(re.search(r"\b(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]20\d{2})\b", normalized_content))
+    has_work_log_context = any(marker in normalized_content for marker in _CURATOR_WORK_LOG_MARKERS)
+    if has_date and has_work_log_context and not has_durable_date_context:
+        flags.append("dated_work_log")
+    has_status_residue = any(marker in normalized_content for marker in _CURATOR_STATUS_RESIDUE_MARKERS)
+    has_execution_detail = any(marker in normalized_content for marker in _CURATOR_EXECUTION_DETAIL_MARKERS)
+    if has_status_residue:
+        flags.append("task_completion_residue")
+    if has_execution_detail:
+        flags.append("transient_execution_detail")
+    if has_status_residue and has_execution_detail and any(
+        marker in normalized_content for marker in _CURATOR_DURABLE_CONTENT_MARKERS
+    ):
+        flags.append("mixed_durability_content")
     if (
         isinstance(metadata, dict)
         and metadata.get("created_via_ingest") is True
