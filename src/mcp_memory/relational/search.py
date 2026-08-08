@@ -463,7 +463,10 @@ def _to_relational_search_result(result: RecordSearchResult) -> RelationalSearch
 
 def _is_duplicate_candidate(result: RecordSearchResult) -> bool:
     """Flag one record found by multiple retrieval strategies without merging it."""
-    return len(result.provenance.strategies) > 1
+    strategies = getattr(result.provenance, "strategies", None)
+    if strategies is None:
+        strategies = result.provenance.to_dict().get("strategies", ())
+    return len(strategies) > 1
 
 
 def _smart_truncate(text: str, *, max_chars: int = 200) -> str:
