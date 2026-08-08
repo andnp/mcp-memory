@@ -4,6 +4,12 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
+from mcp_memory.core.curator_evidence import (
+    current_curator_execution,
+    finalize_curator_execution,
+    reset_curator_execution,
+)
+
 
 _READ_ONLY_INTERNAL_TOOL_NAMES = frozenset(
     {
@@ -56,7 +62,13 @@ class InternalToolCallTracker:
         self._task_state: dict[str, _MutableTaskToolCallState] = {}
         self._session_to_task: dict[str, str] = {}
 
-    def reset_task(self, task_id: str, *, session_id: str | None = None) -> None:
+    def reset_task(
+        self,
+        task_id: str,
+        *,
+        session_id: str | None = None,
+        execution_epoch: int = 0,
+    ) -> None:
         normalized_task_id = _normalized_string(task_id)
         if normalized_task_id is None:
             return
@@ -65,6 +77,11 @@ class InternalToolCallTracker:
             self._task_state[normalized_task_id] = _MutableTaskToolCallState()
             if normalized_session_id is not None:
                 self._session_to_task[normalized_session_id] = normalized_task_id
+        reset_curator_execution(
+            normalized_task_id,
+            execution_epoch=execution_epoch,
+            session_id=normalized_session_id,
+        )
 
     def bind_session_to_task(self, session_id: str | None, task_id: str | None) -> None:
         normalized_session_id = _normalized_string(session_id)
@@ -103,14 +120,16 @@ class InternalToolCallTracker:
             if success and is_mutating:
                 state.mutating_calls += 1
             state.tool_call_ledger.append(
-                {
-                    "sequence": state.total_calls,
-                    "tool_name": normalized_tool_name,
-                    "kind": "mutation" if is_mutating else "read",
-                    "status": "success" if success else "error",
-                    "argument_keys": sorted(arguments or {}),
-                    "memory_ids": _extract_memory_ids(arguments),
-                }
+                _ledger_entry(
+                    {
+                        "sequence": state.total_calls,
+                        "tool_name": normalized_tool_name,
+                        "kind": "mutation" if is_mutating else "read",
+                        "status": "success" if success else "error",
+                        "argument_keys": sorted(arguments or {}),
+                        "memory_ids": _extract_memory_ids(arguments),
+                    }
+                )
             )
             return resolved_task_id
 
@@ -135,6 +154,7 @@ class InternalToolCallTracker:
             ]
             for session_id in stale_sessions:
                 self._session_to_task.pop(session_id, None)
+            finalize_curator_execution()
             return snapshot
 
     def _resolve_task_id_locked(self, *, task_id: str | None, session_id: str | None) -> str | None:
@@ -168,6 +188,19 @@ def _normalized_string(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _ledger_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    context = current_curator_execution()
+    if context is None or context.call_id is None:
+        return entry
+    return {
+        **entry,
+        "call_id": context.call_id,
+        "task_id": context.task_id,
+        "execution_epoch": context.execution_epoch,
+        "session_id": context.session_id,
+    }
 
 
 _MEMORY_ID_ARGUMENT_KEYS = frozenset(

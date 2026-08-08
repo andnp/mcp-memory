@@ -13,11 +13,16 @@ from mcp_memory.internal_tool_call_tracking import (
 _MAX_LEDGER_VALIDATION_ISSUES = 8
 
 
-def reset_agentic_tool_tracking(ctx: ApplicationContext, task_id: str) -> None:
+def reset_agentic_tool_tracking(
+    ctx: ApplicationContext,
+    task_id: str,
+    *,
+    execution_epoch: int = 0,
+) -> None:
     tracker = getattr(ctx, "internal_tool_call_tracker", None)
     reset_task = getattr(tracker, "reset_task", None)
     if callable(reset_task):
-        reset_task(task_id, session_id=ctx.session_id)
+        reset_task(task_id, session_id=ctx.session_id, execution_epoch=execution_epoch)
 
 
 def snapshot_agentic_tool_tracking(ctx: ApplicationContext, task_id: str) -> Any:

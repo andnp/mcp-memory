@@ -68,7 +68,7 @@ async def run_curator_direct_mcp(
 
     budget = mutation_budget or CurationMutationBudget()
     session = None
-    reset_agentic_tool_tracking(ctx, task.id)
+    reset_agentic_tool_tracking(ctx, task.id, execution_epoch=task.execution_epoch)
     try:
         session = await cast(Callable[..., Awaitable[Any]], opener)(
             allowed_tool_names=CURATOR_AGENT_TOOLS,
