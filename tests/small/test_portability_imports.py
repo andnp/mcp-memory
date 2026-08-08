@@ -10,14 +10,26 @@ pytestmark = pytest.mark.small
 
 
 class _MemorySearchAdapter:
+    def get_health(self) -> object:
+        return object()
+
     def read_memory(self, memory_id: str) -> object:
         return memory_id
 
     def peek_memory(self, memory_id: str) -> object:
         return memory_id
 
-    def search_memories_for_maintenance(self, query: str, **kwargs: object) -> object:
-        return query, kwargs
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> object:
+        return query, workspace_id, limit, memory_type, status, include_superseded
 
     def resolve_memory_id(self, memory_id: str) -> str:
         return memory_id
