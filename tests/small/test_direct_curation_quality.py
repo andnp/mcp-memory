@@ -11,7 +11,11 @@ from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_quality_clusters import evaluate_cluster_utility
 from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
 from mcp_memory.core.curation_quality_inputs import CurationQualityMutation
-from mcp_memory.core.curation_quality_policy import QualityOutcome, should_escalate_quality
+from mcp_memory.core.curation_quality_policy import (
+    QualityOutcome,
+    classify_quality_outcome,
+    should_escalate_quality,
+)
 from mcp_memory.core.curation_quality_structural import evaluate_structural_mutation
 from mcp_memory.core.curation_shadow import (
     _direct_quality_run,
@@ -250,7 +254,7 @@ def test_missing_trusted_query_is_neutral_without_productive_credit(db_manager) 
 
     evidence = sampler.evaluate(run=cast(Any, _run()), mutations=[mutation])
 
-    assert evidence[0].status == QualityOutcome.NEUTRAL.value
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
     assert evidence[0].neutral_reason in {"incomplete_replay", "no_trusted_query"}
     assert evidence[0].productive_mutation_count == 0
     assert repository.values == list(evidence)
@@ -275,6 +279,61 @@ def test_unverified_direct_evidence_cannot_escalate(db_manager) -> None:
     assert evidence[0].status == QualityOutcome.UNVERIFIED.value
     assert evidence[0].productive_mutation_count == 0
     assert should_escalate_quality(QualityOutcome.UNVERIFIED, mutation_verified=False) is False
+
+
+def test_synthetic_incomplete_replay_is_unobserved_without_retrieval_credit(db_manager) -> None:
+    """Keep synthetic probes from turning incomplete replay into productive quality."""
+    memory_id = uuid4()
+    mutation = CurationQualityMutation(
+        mutation_id=uuid4(),
+        operation="rewrite_memory",
+        affected_memory_ids=(memory_id,),
+        verified=True,
+        evidence_id="direct-evidence",
+        after_entities={
+            str(memory_id): {
+                "title": "Synthetic probe target",
+                "summary": "A replay-free quality target.",
+            }
+        },
+    )
+    repository = _EvidenceRepository()
+    evidence = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search(),
+        repository=cast(Any, repository),
+        sample_rate=1.0,
+    ).evaluate(run=cast(Any, _run()), mutations=[mutation])
+
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
+    assert evidence[0].neutral_reason == "incomplete_replay"
+    assert evidence[0].retrieval_utility_delta is None
+    assert evidence[0].productive_mutation_count == 0
+
+
+@pytest.mark.parametrize(
+    ("content_delta", "expected"),
+    [
+        (0.25, QualityOutcome.VERIFIED_ONLY),
+        (0.0, QualityOutcome.NEUTRAL),
+        (-0.25, QualityOutcome.REGRESSED),
+        (None, QualityOutcome.UNOBSERVED),
+    ],
+)
+def test_content_quality_without_trusted_replay_has_no_productive_retrieval_credit(
+    content_delta: float | None,
+    expected: QualityOutcome,
+) -> None:
+    """Apply the explicit disposition policy when retrieval observation is absent."""
+    assert classify_quality_outcome(
+        mutation_verified=True,
+        query_trusted=False,
+        consistency_verified=True,
+        structural_only=False,
+        utility_delta=None,
+        quality_observed=False,
+        content_quality_delta=content_delta,
+    ) is expected
 
 
 def test_trusted_direct_query_can_be_productive(db_manager) -> None:

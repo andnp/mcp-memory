@@ -22,6 +22,7 @@ from mcp_memory.core.curation_quality import (
     _acceptance_met,
     _total_utility_delta,
 )
+from mcp_memory.core.curation_quality_policy import QualityOutcome
 from mcp_memory.curation_quality_store import (
     PostgresCurationQualityStore,
     SQLiteCurationQualityStore,
@@ -313,7 +314,7 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
 
     evidence = sampler.evaluate(run=run, receipts=[receipt])
 
-    assert evidence[0].status == "no_query"
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
     assert evidence[0].useful_work is None
     assert search.calls in (None, [])
 
@@ -434,7 +435,7 @@ def test_quality_sampler_accepts_content_improvement_without_search_query(db_man
         sample_rate=1.0,
     ).evaluate(run=run, receipts=[receipt])
 
-    assert evidence[0].status == "content_evaluated"
+    assert evidence[0].status == QualityOutcome.VERIFIED_ONLY.value
     assert evidence[0].content_quality_improved is True
     assert (evidence[0].content_quality_delta or 0.0) > 0
     assert evidence[0].useful_work is True
@@ -798,7 +799,7 @@ def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manage
         campaign_hypothesis=CampaignHypothesis(query="important", minimum_improvement=0.5),
     )
 
-    assert evidence[0].status == "no_query"
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
     assert evidence[0].acceptance_met is None
     assert curation_store.get_candidate_state(memory_id) == initial
 
@@ -896,7 +897,7 @@ def test_quality_sampler_ignores_maintenance_searches(db_manager) -> None:
         ],
     )
 
-    assert evidence[0].status == "no_query"
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
 
 
 def test_quality_sampler_marks_link_work_structural_only(db_manager) -> None:
@@ -1156,7 +1157,7 @@ def test_quality_sampler_excludes_unrelated_explicit_zero_result_searches(db_man
         ),
     )
 
-    assert evidence[0].status == "no_query"
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
     assert evidence[0].neutral_reason == "no_trusted_query"
     assert search.calls in (None, [])
 

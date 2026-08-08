@@ -436,22 +436,28 @@ class CurationQualitySampler:
         if query is None and explicit_hypothesis is None:
             query = _synthetic_query(mutation)
         if query is None:
+            outcome = classify_quality_outcome(
+                mutation_verified=mutation.verified,
+                query_trusted=False,
+                consistency_verified=True,
+                structural_only=False,
+                utility_delta=None,
+                quality_observed=False,
+                content_quality_delta=content.delta,
+            )
             return CurationQualityEvidence(
-                status=(
-                    QualityOutcome.VERIFIED_ONLY.value
-                    if mutation.evidence_id is not None and content.improved is True
-                    else QualityOutcome.NEUTRAL.value
-                    if mutation.evidence_id is not None
-                    else "content_evaluated"
-                    if content.improved is True
-                    else "no_query"
-                ),
+                status=outcome.value,
                 neutral_reason=(
                     None
                     if content.improved is not None
                     else "no_trusted_query"
                 ),
-                useful_work=content.improved,
+                useful_work=(
+                    None
+                    if content.improved is None
+                    else content.improved
+                    and outcome is not QualityOutcome.UNOBSERVED
+                ),
                 content_quality_score_before=content.before,
                 content_quality_score_after=content.after,
                 content_quality_delta=content.delta,
@@ -489,13 +495,17 @@ class CurationQualitySampler:
         )
         if neutral_reason is not None:
             return CurationQualityEvidence(
-                status=f"neutral_{neutral_reason}",
+                status=QualityOutcome.UNOBSERVED.value,
                 query_id=query_id,
                 query_text=query_text,
                 before_ranked_memory_ids=[UUID(value) for value in before_ids],
                 retrieval_regression_count=0,
                 zero_result_change=0,
                 useful_work=None,
+                content_quality_score_before=content.before,
+                content_quality_score_after=content.after,
+                content_quality_delta=content.delta,
+                content_quality_improved=content.improved,
                 neutral_reason=neutral_reason,
                 engagement_evidence={
                     "query_provenance": query.provenance.value,
@@ -618,6 +628,7 @@ class CurationQualitySampler:
             structural_only=False,
             utility_delta=case.retrieval_utility_delta,
             quality_observed=case.neutral_reason is None,
+            content_quality_delta=content.delta,
         )
         return CurationQualityEvidence(
             status=(
@@ -625,7 +636,7 @@ class CurationQualitySampler:
                 if mutation.evidence_id is not None
                 else "evaluated"
                 if case.neutral_reason is None
-                else f"neutral_{case.neutral_reason}"
+                else QualityOutcome.UNOBSERVED.value
             ),
             query_id=query_id,
             before_ranked_memory_ids=[UUID(value) for value in before_ids],
