@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
 import json
@@ -10,7 +11,7 @@ import sqlite3
 from threading import Event, Lock
 from time import time
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Iterator
 
 from mcp_memory.utils.db import (
     SQLITE_BUSY_TIMEOUT_MILLISECONDS,
@@ -769,7 +770,8 @@ class SharedReadCache:
             return []
         return [tuple(row) for row in rows]
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(
             str(self._db_path),
             timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
@@ -778,7 +780,10 @@ class SharedReadCache:
         connection.execute("PRAGMA synchronous=NORMAL;")
         connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS};")
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     def _decode_payload(self, payload_json: Any) -> dict[str, Any] | None:
         if not isinstance(payload_json, str):

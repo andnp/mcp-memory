@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 import sqlite3
 from threading import Event, Thread
 from types import SimpleNamespace
+import warnings
 
 import pytest
 
@@ -21,6 +23,18 @@ from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
 
 
 pytestmark = pytest.mark.small
+
+
+def test_shared_read_cache_closes_sqlite_connections(tmp_path: Path) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+        cache.invalidate_for_mutation(["memory-1"])
+        cache.close()
+        del cache
+        gc.collect()
+
+    assert not [warning for warning in caught if warning.category is ResourceWarning]
 
 
 class FakeTelemetryRepository:
