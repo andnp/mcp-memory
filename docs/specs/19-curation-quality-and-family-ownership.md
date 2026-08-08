@@ -282,6 +282,39 @@ Examples:
 
 The curator may repair existing stock, but repeated producer defects should create an idempotent remediation signal for the source path. Quality reporting should include both repaired defects and prevented/repeated defects.
 
+### 11.4 Proposed quality outcome contract
+
+This is a proposed reporting contract; it does not change the current executor or claim that every field is already persisted. Store mutation verification and productive quality are separate evidence planes:
+
+- **Store mutation verification** proves that an approved action reached its postcondition in the authoritative store, using the operation-specific verification descriptor, transaction/receipt state, and reconciliation checks. It may yield `verified` or `unverified`; it says nothing by itself about retrieval utility, semantic durability, or whether the action was worth doing.
+- **Productive quality** requires independent before/after evidence grounded in a trusted query, replay, content-quality assessment, or an explicitly accepted structural evaluation. It must reconcile with mutation history and the store result. A verified receipt never counts as productive quality by itself.
+
+Every evaluated action or sampled candidate must have exactly one explicit quality disposition:
+
+| Disposition | Meaning | Productive credit |
+| --- | --- | --- |
+| `productive` | Measured utility or durable-content improvement passed the versioned policy | yes |
+| `structural_only` | A verified structural repair passed its structural contract, but no retrieval/content improvement is claimed | only where the versioned policy explicitly allows it |
+| `verified_only` | The store postcondition is verified, but useful quality was not demonstrated | no |
+| `neutral` | Quality was observed and did not materially improve or regress | no |
+| `regressed` | Quality evidence shows a material loss of utility or durable meaning | no; escalate when policy requires |
+| `unverified` | Store or consistency verification failed | no |
+| `unobserved` / `skipped` | Quality could not be evaluated, with a required reason such as no trusted query, incomplete replay, provider ineligibility, or budget/sampling skip | no |
+
+`unobserved`/`skipped` is not a synonym for `neutral`, `no-op`, or successful execution. The reason and affected action/candidate must be retained. Rollups must reconcile direct quality evidence, mutation history, receipts, and dashboard aggregates; missing evidence must remain visible rather than being converted into productive counts.
+
+### 11.5 Proposed durability and retention rubric
+
+Durability is a semantic property, not a function of age, type, size, access count, or the presence of a date. Before omitting, compacting, archiving, or demoting content, the curator should classify each material claim as durable, transient, or mixed and record the classification in its evidence. This rubric is proposed policy, not shipped retention automation.
+
+| Class | Examples | Default treatment |
+| --- | --- | --- |
+| Durable | A dated release deadline (`Release 2026-09-15 is blocked on migration`), incident decision (`2026-08-02 outage review chose queue backoff`), historical decision, status constraint, or source-qualified fact | Preserve the claim, its meaningful date, qualifiers, provenance, and supersession context; rewrite only for clarity |
+| Transient | A dated work log (`2026-08-08 ran the curator audit`), progress chatter (`2026-08-08 still investigating`), routine task-complete residue (`2026-08-08 task complete; changed 3 files`), or stale status with no reusable consequence | Omit or consolidate when the durable takeaway is preserved; retain lineage when moved or summarized |
+| Mixed | A work log or status containing both routine execution residue and a durable deadline, incident, release, decision, or unresolved risk | Extract and preserve the durable portion; omit only the transient residue; record the split/omission rationale |
+
+Dates that carry semantic meaning must be preserved even when surrounding work-log prose is removed. In particular, do not drop an effective date, deadline, release date, incident date, historical as-of date, or temporal qualifier merely because the source also contains transient status text. A bare activity timestamp is not durable solely because it is dated.
+
 ## 12. Provider Data Eligibility
 
 Mutation authorization and provider disclosure are separate policy decisions. A record can be eligible for local deterministic cleanup but ineligible for an external planner.
