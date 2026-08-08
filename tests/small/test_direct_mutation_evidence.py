@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from dataclasses import replace
+
 from mcp_memory.core.direct_mutation_evidence import (
     DirectMutationEntityDelta,
     DirectMutationEvidence,
@@ -82,6 +85,32 @@ def test_sqlite_evidence_save_is_idempotent(tmp_path) -> None:
     assert store.append(evidence) == evidence
     assert store.get_by_idempotency_key(evidence.idempotency_key) == evidence
     assert store.list_for_execution("task-1", 2) == [evidence]
+
+
+def test_sqlite_evidence_append_recovers_from_idempotency_conflict(tmp_path) -> None:
+    """A concurrent duplicate append returns the evidence that won the race."""
+    db = DatabaseManager(tmp_path / "memory.db")
+    existing = _evidence()
+
+    class RaceStore(SQLiteDirectMutationEvidenceStore):
+        def __init__(self) -> None:
+            super().__init__(db)
+            self._raised = False
+
+        def save(self, evidence: DirectMutationEvidence) -> DirectMutationEvidence:
+            if not self._raised:
+                self._raised = True
+                super().save(existing)
+                raise sqlite3.IntegrityError(
+                    "UNIQUE constraint failed: direct_mutation_evidence.idempotency_key"
+                )
+            return super().save(evidence)
+
+    candidate = replace(existing, evidence_id="loser", call_id="call-2")
+    store = RaceStore()
+
+    assert store.append(candidate) == existing
+    assert store.get_by_idempotency_key(existing.idempotency_key) == existing
 
 
 @pytest.mark.asyncio
