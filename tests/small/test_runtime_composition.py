@@ -23,6 +23,7 @@ from mcp_memory.mcp.runtime import (
     WorkspaceRuntimeSpec,
     create_runtime_composition,
 )
+from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
 from mcp_memory.storage.types import StorageBackendResources
 
 
@@ -126,6 +127,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     assert resources is not None
     assert resources.storage is storage
     assert composition.context.relational_search is search_port
+    assert isinstance(composition.context.curation_quality, SQLiteCurationQualityStore)
     assert resources.embedder is embedder
     assert resources.provider_registry is provider_registry
     assert resources.internal_tool_call_tracker is composition.context.internal_tool_call_tracker

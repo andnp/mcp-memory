@@ -13,6 +13,16 @@ from mcp_memory.core.curation_quality_consistency import assess_replay_consisten
 from mcp_memory.core.curation_quality_inputs import CurationQualityMutation
 from mcp_memory.core.curation_quality_policy import QualityOutcome, should_escalate_quality
 from mcp_memory.core.curation_quality_structural import evaluate_structural_mutation
+from mcp_memory.core.curation_shadow import _direct_quality_run, _evaluate_direct_quality
+from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.context import ApplicationContext
+from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
+from mcp_memory.curation_store import (
+    CurationRun,
+    CurationRunOutcome,
+    CurationRunState,
+    SQLiteCurationStore,
+)
 
 
 pytestmark = pytest.mark.small
@@ -48,6 +58,101 @@ def _run():
         frontier_key="direct:test",
         selector_strategy="direct",
     )
+
+
+def _task() -> TaskRecord:
+    return TaskRecord(
+        id="task-1",
+        task_name="memory_curator",
+        data={},
+        workspace_id=None,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+        execution_epoch=2,
+    )
+
+
+def _direct_evidence() -> SimpleNamespace:
+    memory_id = uuid4()
+    return SimpleNamespace(
+        evidence_id="evidence-1",
+        operation="rewrite_memory",
+        outcome="applied_verified",
+        completed_at=datetime.now(UTC),
+        payload={},
+        deltas=(
+            SimpleNamespace(
+                kind="record",
+                entity_id=str(memory_id),
+                before_exists=True,
+                after_exists=True,
+                transition="updated",
+                before_revision="before",
+                after_revision="after",
+                snapshot={"id": str(memory_id)},
+            ),
+        ),
+    )
+
+
+def test_direct_quality_uses_durable_repository(db_manager) -> None:
+    """Direct quality observations survive through the SQLite repository."""
+    quality_store = SQLiteCurationQualityStore(db_manager)
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        relational_search=cast(Any, _Search()),
+        curation_quality=quality_store,
+    )
+    task = _task()
+    run = _direct_quality_run(task)
+    SQLiteCurationStore(db_manager).create_run(
+        CurationRun(
+            run_id=run.run_id,
+            frontier_key=run.frontier_key,
+            context_fingerprint="direct-quality-test",
+            state=CurationRunState.TERMINAL,
+            outcome=CurationRunOutcome.APPLIED,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    evaluation = _evaluate_direct_quality(
+        ctx,
+        task,
+        [_direct_evidence()],
+        campaign_hypothesis=None,
+    )
+
+    assert evaluation.status == "recorded"
+    assert len(evaluation.evidence) == 1
+    stored = quality_store.list_quality_evidence(run_id=_direct_quality_run(task).run_id)
+    assert len(stored) == 1
+    assert stored[0].action_id == evaluation.evidence[0].action_id
+
+
+def test_direct_quality_reports_missing_repository(db_manager) -> None:
+    """Missing quality storage is explicit instead of empty success."""
+    ctx = ApplicationContext(db_manager=db_manager, relational_search=cast(Any, _Search()))
+
+    evaluation = _evaluate_direct_quality(
+        ctx,
+        _task(),
+        [_direct_evidence()],
+        campaign_hypothesis=None,
+    )
+
+    assert evaluation.evidence == ()
+    assert evaluation.status == "unavailable"
+    assert evaluation.reason == "quality_repository_unavailable"
 
 
 def _mutation(*, outcome: str = "applied_verified", operation: str = "rewrite_memory"):

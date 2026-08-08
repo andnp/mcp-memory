@@ -43,10 +43,14 @@ def test_management_view_exposes_only_management_capabilities() -> None:
 def test_task_runtime_view_exposes_only_runtime_capabilities() -> None:
     tracker = object()
     action_store = object()
+    quality_store = object()
+    direct_evidence = object()
     ctx = ApplicationContext(
         session_id="session-a",
         task_queue="queue",
         curation_action_store=action_store,
+        curation_quality=quality_store,
+        direct_mutation_evidence=direct_evidence,
         ai_json_provider="json",
         ai_agent_provider="agent",
         provider_policy_events="events",
@@ -61,6 +65,8 @@ def test_task_runtime_view_exposes_only_runtime_capabilities() -> None:
     assert view.session_id == "session-a"
     assert view.internal_tool_call_tracker is tracker
     assert view.curation_action_store is action_store
+    assert view.curation_quality is quality_store
+    assert view.direct_mutation_evidence is direct_evidence
 
     with pytest.raises(AttributeError):
         getattr(view, "read_cache")
@@ -125,3 +131,21 @@ def test_task_runtime_capabilities_adapt_to_legacy_handler_context() -> None:
     assert adapted.ai_json_provider == "json"
     assert adapted.internal_tool_call_tracker == "tracker"
     assert adapted.curation_action_store is action_store
+
+
+def test_task_runtime_adapter_preserves_direct_quality_capabilities() -> None:
+    """Direct curator handlers retain both durable evidence capabilities."""
+    quality_store = object()
+    direct_evidence = object()
+    ctx = ApplicationContext(
+        curation_quality=quality_store,
+        direct_mutation_evidence=direct_evidence,
+    )
+
+    capabilities = ctx.task_runtime_capabilities()
+    adapted = capabilities.as_context()
+
+    assert capabilities.mutation.curation_quality is quality_store
+    assert capabilities.mutation.direct_mutation_evidence is direct_evidence
+    assert adapted.curation_quality is quality_store
+    assert adapted.direct_mutation_evidence is direct_evidence

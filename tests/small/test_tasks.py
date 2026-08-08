@@ -64,6 +64,8 @@ class _TaskRuntimeContextStub:
     task_queue: object = None
     curation: object = None
     curation_action_store: object = None
+    curation_quality: object = None
+    direct_mutation_evidence: object = None
     ai_json_provider: object = None
     ai_agent_provider: object = None
     ai_provider_registry: dict[str, object] | None = None
