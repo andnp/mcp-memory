@@ -572,7 +572,10 @@ class FakePrimitiveCursor:
                     raise TypeError("expected candidate id sequence")
                 candidate_ids = {str(candidate_id) for candidate_id in candidate_ids_raw}
                 rows = [row for row in rows if str(row["source_id"]) in candidate_ids]
-            self._result = [(row["source_id"], row["embedding_json"]) for row in rows]
+                next_argument_index += 1
+            rows.sort(key=lambda row: str(row["source_id"]))
+            limit = _as_int(arguments[next_argument_index])
+            self._result = [(row["source_id"], row["embedding_json"]) for row in rows[:limit]]
             return
         if normalized.startswith("SELECT source_id, 1 - (embedding_vector <=> CAST(%s AS vector)) AS score FROM embeddings WHERE source_kind = %s AND model_name = %s AND embedding_vector IS NOT NULL AND jsonb_typeof(embedding_json) = 'array' AND jsonb_array_length(embedding_json) = %s"):
             query_embedding = [float(value) for value in json.loads(str(arguments[0]))]
@@ -1110,6 +1113,80 @@ def test_postgres_vector_store_reports_search_diagnostics() -> None:
     assert diagnostics["embedding_vector_column_present"] is False
     assert diagnostics["server_side_vector_search_available"] is False
     assert set(diagnostics) >= {"fetch_ms", "decode_ms", "score_ms", "sort_ms"}
+
+
+def test_postgres_vector_store_skips_malformed_fallback_rows_with_diagnostics() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-good",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+    session_manager.state.embeddings.extend(
+        [
+            {
+                "source_kind": "memory",
+                "source_id": "memory-object",
+                "workspace_id": None,
+                "model_name": "mini-embed",
+                "embedding_json": json.dumps({"not": "an-array"}),
+                "embedding_vector": None,
+                "updated_at": 0.0,
+            },
+            {
+                "source_kind": "memory",
+                "source_id": "memory-invalid-json",
+                "workspace_id": None,
+                "model_name": "mini-embed",
+                "embedding_json": "not-json",
+                "embedding_vector": None,
+                "updated_at": 0.0,
+            },
+        ]
+    )
+
+    diagnostics: dict[str, object] = {}
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        diagnostics=diagnostics,
+        limit=5,
+    )
+
+    assert ranked == [("memory-good", pytest.approx(1.0))]
+    assert diagnostics["skipped_invalid_embedding_count"] == 2
+    assert diagnostics["compatible_row_count"] == 1
+
+
+def test_postgres_vector_store_bounds_client_fallback_rows() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager, fallback_row_cap=2)
+    for source_id in ("memory-c", "memory-a", "memory-b"):
+        store.upsert(
+            source_kind="memory",
+            source_id=source_id,
+            workspace_id=None,
+            model_name="mini-embed",
+            embedding=[1.0, 0.0],
+        )
+
+    diagnostics: dict[str, object] = {}
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        diagnostics=diagnostics,
+        limit=5,
+    )
+
+    assert [source_id for source_id, _score in ranked] == ["memory-a", "memory-b"]
+    assert diagnostics["row_count"] == 2
+    assert diagnostics["fallback_row_cap"] == 2
+    assert diagnostics["fallback_row_cap_applied"] is True
 
 
 def test_postgres_vector_store_caches_server_side_vector_capability_probe() -> None:

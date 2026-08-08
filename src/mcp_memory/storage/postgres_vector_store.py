@@ -67,9 +67,14 @@ class PostgresVectorStore:
         session_manager: SessionManager[DbConnectionLike] | None,
         *,
         event_repository=None,
+        fallback_row_cap: int = 1000,
     ) -> None:
+        """Create a store with a bounded client-side fallback scan."""
+        if fallback_row_cap < 1:
+            raise ValueError("fallback_row_cap must be positive")
         self._sessions = session_manager
         self._event_repository = event_repository
+        self._fallback_row_cap = fallback_row_cap
         self._search_capabilities: PostgresVectorSearchCapabilities | None = None
         self._last_search_diagnostics: dict[str, object] = {}
         self._blocked_fallback_write_count = 0
@@ -630,7 +635,10 @@ class PostgresVectorStore:
             if diagnostics is not None:
                 diagnostics.update(search_diagnostics)
             return scored
-        query = "SELECT source_id, embedding_json FROM embeddings WHERE source_kind = %s AND model_name = %s"
+        query = (
+            "SELECT source_id, embedding_json FROM embeddings "
+            "WHERE source_kind = %s AND model_name = %s"
+        )
         params: list[object] = [source_kind, model_name]
         if workspace_id is not None:
             query += " AND workspace_id = %s"
@@ -638,6 +646,8 @@ class PostgresVectorStore:
         if normalized_candidate_ids:
             query += " AND source_id = ANY(%s::text[])"
             params.append(normalized_candidate_ids)
+        query += " ORDER BY source_id ASC LIMIT %s"
+        params.append(self._fallback_row_cap)
         fetch_started = time.perf_counter()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
@@ -648,11 +658,16 @@ class PostgresVectorStore:
         decode_started = time.perf_counter()
         decoded_rows: list[tuple[str, list[float]]] = []
         skipped_dimension_mismatch_count = 0
+        skipped_invalid_embedding_count = 0
         for row in rows:
             embedding_raw = row[1]
             raw_type_name = type(embedding_raw).__name__
             raw_type_counts[raw_type_name] = raw_type_counts.get(raw_type_name, 0) + 1
-            embedding = _decode_embedding_payload(embedding_raw)
+            try:
+                embedding = _decode_embedding_payload(embedding_raw)
+            except (TypeError, ValueError):
+                skipped_invalid_embedding_count += 1
+                continue
             if len(embedding) != query_dimension:
                 skipped_dimension_mismatch_count += 1
                 continue
@@ -677,6 +692,9 @@ class PostgresVectorStore:
             "query_dimension": query_dimension,
             "dimension_filter_applied": False,
             "skipped_dimension_mismatch_count": skipped_dimension_mismatch_count,
+            "skipped_invalid_embedding_count": skipped_invalid_embedding_count,
+            "fallback_row_cap": self._fallback_row_cap,
+            "fallback_row_cap_applied": len(rows) >= self._fallback_row_cap,
             "search_mode": "client_python_fallback",
             "pgvector_extension_installed": capabilities.pgvector_extension_installed,
             "embedding_vector_column_present": capabilities.embedding_vector_column_present,
