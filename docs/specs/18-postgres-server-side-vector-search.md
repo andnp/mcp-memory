@@ -43,6 +43,10 @@ The current shared-mode semantic path has two active modes.
 ### 3.1 Fallback mode
 
 Fallback mode stores embeddings in `embeddings.embedding_json` and performs ranking outside the database.
+The client-side scan is deliberately bounded by `fallback_row_cap` to protect
+memory and network costs; when the cap is reached, diagnostics set
+`fallback_row_cap_applied = true` and recall may be lower than server-side
+vector ranking.
 
 In simplified form, the current flow is:
 
