@@ -42,6 +42,23 @@ def test_open_connection_timeout_bounds_sqlite_busy_lock(tmp_path: Path) -> None
         manager.close()
 
 
+def test_database_manager_reopens_connection_after_close(tmp_path: Path) -> None:
+    manager = DatabaseManager(tmp_path / "memory.sqlite3")
+    connection = manager.get_connection()
+
+    manager.close()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
+
+    reopened = manager.get_connection()
+    try:
+        assert reopened is not connection
+        assert reopened.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        manager.close()
+
+
 def test_build_retrieval_analytics_rolls_up_direct_search_and_read_rows() -> None:
     payload = build_retrieval_analytics(
         [
