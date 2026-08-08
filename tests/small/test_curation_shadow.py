@@ -1,7 +1,12 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
+from mcp_memory.core.curation_quality import (
+    CurationQualityEvidence,
+    quality_productive_mutation_count,
+)
 from mcp_memory.core.curation_feedback import (
     _feedback_termination_reason,
     _quality_feedback_payload,
@@ -151,3 +156,20 @@ def test_action_failure_feedback_is_bounded() -> None:
     assert len(failures) == 12
     assert all(len(item["affected_ids"]) == 8 for item in failures)
     assert all(item["affected_id_count"] == 10 for item in failures)
+
+
+def test_campaign_productive_count_requires_measured_quality_outcome() -> None:
+    now = datetime.now(UTC)
+    evidence = [
+        CurationQualityEvidence(
+            run_id=uuid4(),
+            action_id=uuid4(),
+            operation="rewrite_memory",
+            policy_version="1",
+            status=status,
+            created_at=now,
+        )
+        for status in ("productive", "structural_only", "neutral", "unverified", "regressed")
+    ]
+
+    assert quality_productive_mutation_count(evidence) == 2

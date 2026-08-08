@@ -11,7 +11,11 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
 from mcp_memory.core.curation_models import CampaignHypothesis
-from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualitySampler
+from mcp_memory.core.curation_quality import (
+    CurationQualityEvidence,
+    CurationQualitySampler,
+    quality_productive_mutation_count,
+)
 from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
@@ -111,6 +115,7 @@ async def run_curator_direct_mcp(
         campaign_hypothesis=campaign_hypothesis,
     )
     verified_mutations = productive_mutation_count(direct_evidence)
+    quality_productive_mutations = quality_productive_mutation_count(quality_evidence)
     mutations = verified_mutations if direct_evidence and ledger_valid else actual_mutations if ledger_valid else 0
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
     outcome = "applied" if mutations else "no_op"
@@ -144,7 +149,7 @@ async def run_curator_direct_mcp(
         curation_campaign_result={
             "outcome": outcome,
             "mutation_count": mutations,
-            "productive_mutation_count": mutations,
+            "productive_mutation_count": quality_productive_mutations,
             "verified_mutation_count": verified_mutations,
             "actual_mutation_count": actual_mutations,
             "tool_calls_executed": tool_calls,

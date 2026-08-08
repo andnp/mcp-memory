@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
@@ -85,6 +85,19 @@ class CurationQualityEvidence(CurationModel):
     override_judge_evidence: dict[str, object] = Field(default_factory=dict)
     override_outcome: str | None = None
     created_at: datetime
+
+
+def quality_productive_mutation_count(
+    quality_evidence: Iterable[CurationQualityEvidence],
+) -> int:
+    return sum(
+        item.status
+        in {
+            QualityOutcome.PRODUCTIVE.value,
+            QualityOutcome.STRUCTURAL_ONLY.value,
+        }
+        for item in quality_evidence
+    )
 
 
 @dataclass(frozen=True, slots=True)
