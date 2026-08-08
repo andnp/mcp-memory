@@ -70,16 +70,16 @@ def build_curation_metrics(
 
     receipt_rows = runner.fetchall(
         """
-        SELECT run_id, operation, status, error_code, applied_at, verified_at
+        SELECT run_id, action_id, operation, status, error_code, applied_at, verified_at
         FROM curation_action_receipts
         """
     )
     quality_rows = (
         runner.fetchall(
             """
-            SELECT run_id, operation, status, retrieval_regression_count, zero_result_change,
+            SELECT run_id, action_id, operation, status, retrieval_regression_count, zero_result_change,
                    payload_size_change, useful_work, content_quality_improved,
-                   content_quality_delta, created_at
+                   content_quality_delta, neutral_reason, created_at
             FROM curation_quality_evidence
             """
         )
@@ -92,6 +92,11 @@ def build_curation_metrics(
         if str(row.get("run_id")) in run_ids
         and _in_window(row.get("created_at"), cutoff)
     ]
+    quality_by_action_id = {
+        str(row.get("action_id")): row
+        for row in quality
+        if row.get("action_id") is not None
+    }
     receipts = [
         row
         for row in receipt_rows
@@ -221,6 +226,25 @@ def build_curation_metrics(
             or row.get("content_quality_delta") is not None
         )
     ]
+    outcome_counts = Counter(
+        outcome
+        for row in quality
+        if (outcome := _quality_outcome(row.get("status"))) is not None
+    )
+    unobserved_reason_counts = Counter(
+        _text(row.get("neutral_reason"), _text(row.get("status"), "unknown"))
+        for row in quality
+        if _quality_outcome(row.get("status")) == "unobserved"
+    )
+    missing_quality_count = sum(
+        1
+        for row in receipts
+        if row.get("status") == "verified"
+        and str(row.get("action_id")) not in quality_by_action_id
+    )
+    if missing_quality_count:
+        unobserved_reason_counts["missing_quality_evidence"] += missing_quality_count
+        outcome_counts["unobserved"] += missing_quality_count
     useful_work_observed = [row for row in quality_observed if row.get("useful_work") is not None]
     useful_work_count = sum(1 for row in useful_work_observed if row.get("useful_work") in (1, True))
     content_quality = [
@@ -273,6 +297,26 @@ def build_curation_metrics(
         ),
         retrieval_quality=CurationQualityMetricsPayload(
             sampled_action_count=len(quality),
+            verified_receipt_count=verified_receipts,
+            productive_quality_count=outcome_counts.get("productive", 0)
+            + outcome_counts.get("structural_only", 0),
+            outcome_counts=dict(
+                sorted(
+                    {
+                        key: outcome_counts.get(key, 0)
+                        for key in (
+                            "productive",
+                            "structural_only",
+                            "verified_only",
+                            "neutral",
+                            "regressed",
+                            "unverified",
+                            "unobserved",
+                        )
+                    }.items()
+                )
+            ),
+            unobserved_reason_counts=dict(sorted(unobserved_reason_counts.items())),
             evaluated_action_count=len(evaluated_quality),
             quality_observed_action_count=len(quality_observed),
             no_query_action_count=sum(1 for row in quality if row.get("status") == "no_query"),
@@ -344,6 +388,21 @@ def _is_specialist_route(value: object) -> bool:
 
 def _mutation_category(operation: str) -> str:
     return _MUTATION_CATEGORY_BY_OPERATION.get(operation, "other")
+
+
+def _quality_outcome(status: object) -> str | None:
+    value = _text(status, "")
+    if value == "productive":
+        return "productive"
+    if value == "structural_only":
+        return "structural_only"
+    if value in {"verified_only", "unverified", "regressed"}:
+        return value
+    if value == "neutral" or value.startswith("neutral_"):
+        return "neutral"
+    if value == "no_query":
+        return "unobserved"
+    return None
 
 
 def _retry_count(row: Mapping[str, object]) -> int:

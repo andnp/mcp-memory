@@ -1154,6 +1154,10 @@ class CurationHistoryMetricsPayload(BaseModel):
 
 class CurationQualityMetricsPayload(BaseModel):
     sampled_action_count: int = 0
+    verified_receipt_count: int = 0
+    productive_quality_count: int = 0
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    unobserved_reason_counts: dict[str, int] = Field(default_factory=dict)
     evaluated_action_count: int = 0
     quality_observed_action_count: int = 0
     no_query_action_count: int = 0
