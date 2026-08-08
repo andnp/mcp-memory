@@ -19,6 +19,7 @@ from mcp_memory.core.curation_quality import (
 from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
+from mcp_memory.core.ports.curation import CurationRepository, CurationRun
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
@@ -205,6 +206,8 @@ def _evaluate_direct_quality(
         sample_rate=1.0,
     )
     run = _direct_quality_run(task)
+    if _persist_direct_quality_run(ctx, run) is None:
+        return _DirectQualityEvaluation((), "unavailable", "curation_repository_unavailable")
     quality_evidence = sampler.evaluate(
         run=run,
         mutations=[mutations_from_direct_evidence(item) for item in evidence],
@@ -215,18 +218,28 @@ def _evaluate_direct_quality(
     return _DirectQualityEvaluation(quality_evidence, "recorded")
 
 
-def _direct_quality_run(task: TaskRecord) -> Any:
+def _persist_direct_quality_run(ctx: ApplicationContext, run: CurationRun) -> CurationRun | None:
+    repository = cast(CurationRepository | None, getattr(ctx, "curation", None))
+    getter = getattr(repository, "get_run", None)
+    creator = getattr(repository, "create_run", None)
+    if not callable(getter) or not callable(creator):
+        return None
+    try:
+        existing = cast(CurationRun | None, getter(run.run_id))
+        return existing if existing is not None else cast(CurationRun, creator(run))
+    except Exception:
+        return None
+
+
+def _direct_quality_run(task: TaskRecord) -> CurationRun:
     run_id = uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality-run:{task.id}:{task.execution_epoch}")
-    return type(
-        "DirectQualityRun",
-        (),
-        {
-            "run_id": run_id,
-            "policy_version": str(task.data.get("policy_version", "direct-quality-v1")),
-            "frontier_key": f"direct:{task.id}",
-            "selector_strategy": str(task.data.get("strategy", "direct")),
-        },
-    )()
+    return CurationRun(
+        run_id=run_id,
+        frontier_key=f"direct:{task.id}",
+        context_fingerprint=f"direct:{task.id}:{task.execution_epoch}",
+        policy_version=str(task.data.get("policy_version", "direct-quality-v1")),
+        selector_strategy=str(task.data.get("strategy", "direct")),
+    )
 
 
 class _DirectQualitySearch:
