@@ -13,6 +13,7 @@ from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.relational.search import (
     RelationalMemorySearchService,
+    SearchExecutionDiagnostics,
     _to_relational_search_result,
 )
 from searchkernel.runtime import clear_query_embedding_cache
@@ -218,7 +219,10 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
     search_result = SimpleNamespace(
         record=record,
         score=0.1234567,
-        provenance=SimpleNamespace(to_dict=lambda: {"matched_by_keyword": True}),
+        provenance=SimpleNamespace(
+            strategies=(),
+            to_dict=lambda: {"matched_by_keyword": True},
+        ),
     )
 
     class _Retrieval:
@@ -246,7 +250,33 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
     assert actual.ranking_debug == {
         "provenance": {"matched_by_keyword": True},
         "canonical_id": "workspace:memory-id",
+        "duplicate_candidate": False,
     }
+
+
+def test_search_diagnostics_signal_multi_strategy_candidates_without_merging() -> None:
+    record = SimpleNamespace(
+        source_id="memory-a",
+        storage_key="workspace:memory-a",
+        title="Duplicate candidate",
+        body="Body",
+        status=SimpleNamespace(value="active"),
+        metadata={"memory_type": "fact", "workspace_ids": []},
+    )
+    result = SimpleNamespace(
+        record=record,
+        score=0.5,
+        provenance=SimpleNamespace(
+            strategies=("keyword", "vector"),
+            to_dict=lambda: {"strategies": ["keyword", "vector"]},
+        ),
+    )
+    mapped = _to_relational_search_result(cast(RecordSearchResult, result))
+    diagnostics = SearchExecutionDiagnostics(duplicate_candidate_ids=["memory-a"])
+
+    assert mapped.ranking_debug is not None
+    assert mapped.ranking_debug["duplicate_candidate"] is True
+    assert diagnostics.to_payload()["duplicate_candidate_ids"] == ["memory-a"]
 
 
 def test_service_search_filters_archived_records_by_default(db_manager) -> None:

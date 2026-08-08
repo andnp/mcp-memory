@@ -91,6 +91,7 @@ class SearchExecutionDiagnostics:
     degraded: bool = False
     trace: dict[str, object] | None = None
     scope: dict[str, object] = field(default_factory=dict)
+    duplicate_candidate_ids: list[str] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -109,6 +110,7 @@ class SearchExecutionDiagnostics:
             "degraded": self.degraded,
             "trace": None if self.trace is None else dict(self.trace),
             "scope": dict(self.scope),
+            "duplicate_candidate_ids": list(self.duplicate_candidate_ids),
         }
 
 
@@ -331,6 +333,11 @@ class RelationalMemorySearchService:
                 if debug and outcome.trace is not None
                 else None
             ),
+            duplicate_candidate_ids=[
+                result.record_id
+                for result in outcome.results
+                if _is_duplicate_candidate(result)
+            ],
         )
         return results, diagnostics
 
@@ -449,8 +456,14 @@ def _to_relational_search_result(result: RecordSearchResult) -> RelationalSearch
         ranking_debug={
             "provenance": result.provenance.to_dict(),
             "canonical_id": record.storage_key,
+            "duplicate_candidate": _is_duplicate_candidate(result),
         },
     )
+
+
+def _is_duplicate_candidate(result: RecordSearchResult) -> bool:
+    """Flag one record found by multiple retrieval strategies without merging it."""
+    return len(result.provenance.strategies) > 1
 
 
 def _smart_truncate(text: str, *, max_chars: int = 200) -> str:

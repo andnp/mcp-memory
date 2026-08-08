@@ -10,6 +10,7 @@ from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
     build_search_scope_diagnostics,
+    _is_duplicate_candidate,
     _to_relational_search_result,
 )
 
@@ -98,6 +99,11 @@ class SearchMemoryRecordsOperation:
                 workspace_id=workspace_id,
                 ranking_workspace_id=ranking_workspace_id,
             ),
+            duplicate_candidate_ids=[
+                result.record_id
+                for result in outcome.results
+                if _is_duplicate_candidate(result)
+            ],
             trace=trace,
         )
 
