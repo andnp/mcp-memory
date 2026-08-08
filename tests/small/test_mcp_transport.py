@@ -120,6 +120,37 @@ async def test_internal_dispatch_records_tracker_counts_via_session_bound_task_r
     }
 
 
+
+@pytest.mark.asyncio
+async def test_internal_dispatch_assigns_scoped_call_identity() -> None:
+    observed = []
+    ctx = ApplicationContext(session_id="session-123")
+
+    def _service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        from mcp_memory.core.curator_evidence import current_curator_execution
+
+        observed.append(current_curator_execution())
+        return {"status": "ok"}
+
+    services = {"internal_peek_record": _service}
+    for _ in range(2):
+        await transport._dispatch_tool(
+            ctx,
+            "internal_peek_record",
+            {"task_id": "task-1", "execution_epoch": 3},
+            service_resolver=lambda: services,
+            on_success=transport._record_internal_tool_call,
+        )
+
+    first, second = observed
+    assert first is not None
+    assert second is not None
+    assert [first.sequence, second.sequence] == [1, 2]
+    assert first.call_id != second.call_id
+    assert first.task_id == second.task_id == "task-1"
+    assert first.execution_epoch == second.execution_epoch == 3
+
+
 @pytest.mark.asyncio
 async def test_internal_dispatch_unknown_tool_does_not_record_tracker_counts() -> None:
     tracker = InternalToolCallTracker()
