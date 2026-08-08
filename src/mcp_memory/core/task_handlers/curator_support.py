@@ -627,6 +627,7 @@ def filter_curator_candidates(
     curation = getattr(ctx, "curation", None)
     get_state = getattr(curation, "get_candidate_state", None)
     put_state = getattr(curation, "put_candidate_state", None)
+    compare_and_set_state = getattr(curation, "compare_and_set_candidate_state", None)
     if not callable(get_state):
         return candidates
 
@@ -640,33 +641,31 @@ def filter_curator_candidates(
         identity = curator_candidate_revision_token(ctx, record)
         state = cast(CurationCandidateState | None, get_state(memory_id))
         if state is not None and state.last_observed_revision_token != identity:
-            if (
-                callable(put_state)
-                and state.disposition is CandidateDisposition.ESCALATED
+            update = {
+                "last_observed_revision_token": identity,
+                "cooldown_until": None,
+                "consecutive_no_op_count": 0,
+            }
+            if not (
+                state.disposition is CandidateDisposition.ESCALATED
                 and state.last_disposition_reason in _CURATOR_QUALITY_FEEDBACK_REASONS
             ):
-                put_state(
-                    state.model_copy(
-                        update={
-                            "last_observed_revision_token": identity,
-                            "cooldown_until": None,
-                            "consecutive_no_op_count": 0,
-                        }
-                    )
+                update.update(
+                    disposition=CandidateDisposition.PENDING,
+                    last_disposition_reason="candidate_revision_or_adjacency_changed",
                 )
+            updated = state.model_copy(update=update)
+            if callable(compare_and_set_state):
+                persisted = cast(
+                    CurationCandidateState | None,
+                    compare_and_set_state(memory_id, state.last_observed_revision_token, updated),
+                )
+                state = persisted
+                if persisted is None:
+                    state = cast(CurationCandidateState | None, get_state(memory_id))
             elif callable(put_state):
-                put_state(
-                    state.model_copy(
-                        update={
-                            "last_observed_revision_token": identity,
-                            "disposition": CandidateDisposition.PENDING,
-                            "consecutive_no_op_count": 0,
-                            "cooldown_until": None,
-                            "last_disposition_reason": "candidate_revision_or_adjacency_changed",
-                        }
-                    )
-                )
-            state = None
+                put_state(updated)
+                state = updated
         if record.id in preserve_memory_ids:
             eligible.append(record)
             continue
