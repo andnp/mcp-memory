@@ -25,6 +25,7 @@ class CurationQualityMutation:
     structural_deltas: tuple[Mapping[str, Any], ...] = ()
     affected_memory_clusters: tuple[tuple[UUID, ...], ...] = ()
     evidence_id: str | None = None
+    action_identity_required: bool = False
 
 
 def mutation_from_receipt(receipt: Any) -> CurationQualityMutation:
@@ -45,7 +46,7 @@ def mutation_from_receipt(receipt: Any) -> CurationQualityMutation:
 
 def mutations_from_direct_evidence(evidence: Any) -> CurationQualityMutation:
     """Adapt persisted direct evidence while retaining its independent fields."""
-    evidence_id = str(getattr(evidence, "evidence_id", ""))
+    evidence_id = _optional_identity(getattr(evidence, "evidence_id", None))
     payload = getattr(evidence, "payload", {})
     if not isinstance(payload, Mapping):
         payload = {}
@@ -75,7 +76,7 @@ def mutations_from_direct_evidence(evidence: Any) -> CurationQualityMutation:
         if delta["kind"] == "record" and isinstance(delta["snapshot"], Mapping)
     }
     return CurationQualityMutation(
-        mutation_id=uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality:{evidence_id}"),
+        mutation_id=direct_action_id(evidence_id) if evidence_id else _legacy_direct_action_id(evidence),
         operation=str(getattr(evidence, "operation", "unknown")),
         affected_memory_ids=tuple(
             UUID(str(delta["entity_id"]))
@@ -96,7 +97,30 @@ def mutations_from_direct_evidence(evidence: Any) -> CurationQualityMutation:
         structural_deltas=deltas,
         affected_memory_clusters=clusters,
         evidence_id=evidence_id,
+        action_identity_required=True,
     )
+
+
+def direct_action_id(evidence_id: str) -> UUID:
+    """Return the stable action identity bridged from direct evidence."""
+    return uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality:{evidence_id}")
+
+
+def _legacy_direct_action_id(evidence: Any) -> UUID:
+    identity = ":".join(
+        str(getattr(evidence, field, ""))
+        for field in (
+            "task_id",
+            "execution_epoch",
+            "session_id",
+            "call_id",
+            "sequence",
+            "tool_name",
+            "operation",
+            "idempotency_key",
+        )
+    )
+    return uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality:missing:{identity}")
 
 
 def _optional_uuid(value: Any) -> UUID | None:
@@ -106,6 +130,13 @@ def _optional_uuid(value: Any) -> UUID | None:
         return UUID(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _optional_identity(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def _is_uuid(value: str) -> bool:

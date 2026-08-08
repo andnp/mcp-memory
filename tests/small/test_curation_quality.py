@@ -100,6 +100,7 @@ class _PostgresQualityConnection:
                 content_quality_improved INTEGER,
                 engagement_utility_delta REAL,
                 engagement_evidence_json TEXT NOT NULL DEFAULT '{}',
+                evidence_id TEXT,
                 PRIMARY KEY (run_id, action_id)
             )
             """

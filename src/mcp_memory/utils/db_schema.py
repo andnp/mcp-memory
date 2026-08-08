@@ -690,6 +690,7 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             content_quality_improved INTEGER,
             engagement_utility_delta REAL,
             engagement_evidence_json TEXT NOT NULL DEFAULT '{}',
+            evidence_id TEXT,
             PRIMARY KEY (run_id, action_id),
             FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
         );
@@ -747,6 +748,7 @@ def create_direct_mutation_evidence_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "curation_quality_evidence", "content_quality_improved", "INTEGER")
     ensure_column(conn, "curation_quality_evidence", "engagement_utility_delta", "REAL")
     ensure_column(conn, "curation_quality_evidence", "engagement_evidence_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "curation_quality_evidence", "evidence_id", "TEXT")
 
 
 def create_mutation_history_schema(conn: sqlite3.Connection) -> None:

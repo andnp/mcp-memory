@@ -23,6 +23,7 @@ from mcp_memory.core.curation_evaluation import (
 )
 from mcp_memory.core.curation_quality_inputs import (
     CurationQualityMutation,
+    direct_action_id,
     mutation_from_receipt,
 )
 from mcp_memory.core.curation_quality_provenance import (
@@ -54,6 +55,7 @@ from mcp_memory.core.ports.curation import (
 class CurationQualityEvidence(CurationModel):
     run_id: UUID
     action_id: UUID
+    evidence_id: str | None = None
     operation: str
     affected_memory_ids: list[UUID] = Field(default_factory=list)
     policy_version: str
@@ -213,7 +215,17 @@ class CurationQualitySampler:
         if not mutations:
             return ()
         normalized = tuple(_coerce_mutation(mutation) for mutation in mutations)
-        raw = [self._evaluate_action(run, mutation, campaign_hypothesis) for mutation in mutations]
+        identity_errors = _action_identity_errors(normalized)
+        raw = [
+            self._evaluate_action_with_identity(
+                run,
+                original,
+                mutation,
+                campaign_hypothesis,
+                identity_error=identity_errors[index],
+            )
+            for index, (original, mutation) in enumerate(zip(mutations, normalized, strict=True))
+        ]
         evaluated = [
             item
             for item in raw
@@ -274,6 +286,7 @@ class CurationQualitySampler:
             or (item.content_quality_delta is not None and item.content_quality_delta < 0)
             for item in raw
         )
+
         if wave_acceptance:
             wave_status = "accepted"
         elif not quality_observations or (explicit is None and not heuristic_regression):
@@ -287,6 +300,7 @@ class CurationQualitySampler:
             }
             for item in raw
         )
+
         action_ids = [mutation.mutation_id for mutation in normalized]
         return tuple(
             item.model_copy(
@@ -309,6 +323,24 @@ class CurationQualitySampler:
                 }
             )
             for item in raw
+        )
+
+    def _evaluate_action_with_identity(
+        self,
+        run: CurationRun,
+        original: CurationQualityMutation | CurationActionReceipt,
+        mutation: CurationQualityMutation,
+        campaign_hypothesis: CampaignHypothesis | None,
+        *,
+        identity_error: str | None,
+    ) -> CurationQualityEvidence:
+        if identity_error is None:
+            return self._evaluate_action(run, original, campaign_hypothesis)
+        return self._evaluate_action(
+            run,
+            mutation,
+            campaign_hypothesis,
+            identity_error=identity_error,
         )
 
     def _escalate_quality_regression(
@@ -391,16 +423,29 @@ class CurationQualitySampler:
         campaign_hypothesis: CampaignHypothesis | None,
         *,
         after_results_by_query: Mapping[str, tuple[ReplayResult, ...]] | None = None,
+        identity_error: str | None = None,
     ) -> CurationQualityEvidence:
         mutation = _coerce_mutation(mutation)
         common = {
             "run_id": run.run_id,
             "action_id": mutation.mutation_id,
+            "evidence_id": mutation.evidence_id,
             "operation": mutation.operation,
             "affected_memory_ids": list(mutation.affected_memory_ids),
             "policy_version": run.policy_version,
             "created_at": self._clock(),
         }
+        if identity_error is not None:
+            return CurationQualityEvidence(
+                status=QualityOutcome.UNOBSERVED.value,
+                useful_work=None,
+                neutral_reason=f"action_identity_{identity_error}",
+                engagement_evidence={
+                    "action_identity_error": identity_error,
+                    "mutation_evidence_id": mutation.evidence_id,
+                },
+                **common,
+            )
         content = self._content_quality(mutation)
         if mutation.evidence_id is not None and not mutation.verified:
             return CurationQualityEvidence(
@@ -1185,3 +1230,33 @@ def _coerce_mutation(
     if isinstance(value, CurationQualityMutation):
         return value
     return mutation_from_receipt(value)
+
+
+def _action_identity_errors(
+    mutations: Sequence[CurationQualityMutation],
+) -> tuple[str | None, ...]:
+    evidence_counts = Counter(
+        mutation.evidence_id
+        for mutation in mutations
+        if mutation.action_identity_required and mutation.evidence_id is not None
+    )
+    missing_identity_action_counts = Counter(
+        mutation.mutation_id
+        for mutation in mutations
+        if mutation.action_identity_required and mutation.evidence_id is None
+    )
+    errors: list[str | None] = []
+    for mutation in mutations:
+        if not mutation.action_identity_required:
+            errors.append(None)
+        elif mutation.evidence_id is None:
+            errors.append(
+                "ambiguous" if missing_identity_action_counts[mutation.mutation_id] > 1 else "missing"
+            )
+        elif evidence_counts[mutation.evidence_id] > 1:
+            errors.append("ambiguous")
+        elif mutation.mutation_id != direct_action_id(mutation.evidence_id):
+            errors.append("mismatch")
+        else:
+            errors.append(None)
+    return tuple(errors)

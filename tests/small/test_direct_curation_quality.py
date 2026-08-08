@@ -10,7 +10,11 @@ import pytest
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_quality_clusters import evaluate_cluster_utility
 from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
-from mcp_memory.core.curation_quality_inputs import CurationQualityMutation
+from mcp_memory.core.curation_quality_inputs import (
+    CurationQualityMutation,
+    direct_action_id,
+    mutations_from_direct_evidence,
+)
 from mcp_memory.core.curation_quality_policy import (
     QualityOutcome,
     classify_quality_outcome,
@@ -174,6 +178,64 @@ def test_direct_quality_run_recovers_from_concurrent_insert() -> None:
     persisted = _persist_direct_quality_run(context, run)
 
     assert persisted == run
+
+
+def test_direct_evidence_bridges_to_stable_action_identity() -> None:
+    """Derive one stable action ID from the persisted direct evidence ID."""
+    mutation = mutations_from_direct_evidence(_direct_evidence())
+
+    assert mutation.action_identity_required is True
+    assert mutation.evidence_id == "evidence-1"
+    assert mutation.mutation_id == direct_action_id("evidence-1")
+
+
+def test_action_identity_mismatch_is_unobserved(db_manager) -> None:
+    """Reject quality credit when an action claims the wrong direct evidence ID."""
+    memory_id = uuid4()
+    mutation = CurationQualityMutation(
+        mutation_id=uuid4(),
+        operation="rewrite_memory",
+        affected_memory_ids=(memory_id,),
+        applied=True,
+        verified=True,
+        evidence_id="evidence-1",
+        action_identity_required=True,
+    )
+    repository = _EvidenceRepository()
+    evidence = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search(),
+        repository=cast(Any, repository),
+        sample_rate=1.0,
+    ).evaluate(run=cast(Any, _run()), mutations=[mutation])
+
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
+    assert evidence[0].neutral_reason == "action_identity_mismatch"
+    assert evidence[0].productive_mutation_count == 0
+
+
+def test_missing_action_identity_is_unobserved(db_manager) -> None:
+    """Reject quality credit when direct evidence has no durable identity."""
+    memory_id = uuid4()
+    mutation = CurationQualityMutation(
+        mutation_id=uuid4(),
+        operation="rewrite_memory",
+        affected_memory_ids=(memory_id,),
+        applied=True,
+        verified=True,
+        action_identity_required=True,
+    )
+    repository = _EvidenceRepository()
+    evidence = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search(),
+        repository=cast(Any, repository),
+        sample_rate=1.0,
+    ).evaluate(run=cast(Any, _run()), mutations=[mutation])
+
+    assert evidence[0].status == QualityOutcome.UNOBSERVED.value
+    assert evidence[0].neutral_reason == "action_identity_missing"
+    assert evidence[0].productive_mutation_count == 0
 
 
 def _mutation(*, outcome: str = "applied_verified", operation: str = "rewrite_memory"):

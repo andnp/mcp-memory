@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 30
+POSTGRES_SCHEMA_VERSION = 31
 
 
 @dataclass(frozen=True)
@@ -928,6 +928,14 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS attempt INTEGER",
             "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS attempt_identity TEXT",
             "CREATE INDEX IF NOT EXISTS idx_provider_usage_attempt_identity ON provider_usage(attempt_identity)",
+        ),
+    ),
+    PostgresMigration(
+        version=31,
+        name="add_curation_quality_evidence_identity",
+        statements=(
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS evidence_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_curation_quality_evidence_identity ON curation_quality_evidence(evidence_id)",
         ),
     ),
 )

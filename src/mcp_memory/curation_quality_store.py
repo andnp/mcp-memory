@@ -30,8 +30,8 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     retrieval_utility_delta, acceptance_met, neutral_reason
                     , content_quality_score_before, content_quality_score_after,
                     content_quality_delta, content_quality_improved,
-                    engagement_utility_delta, engagement_evidence_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    engagement_utility_delta, engagement_evidence_json, evidence_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, action_id) DO UPDATE SET
                     operation = excluded.operation,
                     affected_memory_ids_json = excluded.affected_memory_ids_json,
@@ -53,7 +53,8 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     content_quality_delta = excluded.content_quality_delta,
                     content_quality_improved = excluded.content_quality_improved,
                     engagement_utility_delta = excluded.engagement_utility_delta,
-                    engagement_evidence_json = excluded.engagement_evidence_json
+                    engagement_evidence_json = excluded.engagement_evidence_json,
+                    evidence_id = excluded.evidence_id
                 """,
                 _values(evidence),
             )
@@ -96,8 +97,8 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     retrieval_utility_delta, acceptance_met, neutral_reason
                     , content_quality_score_before, content_quality_score_after,
                     content_quality_delta, content_quality_improved,
-                    engagement_utility_delta, engagement_evidence_json
-                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    engagement_utility_delta, engagement_evidence_json, evidence_id
+                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                 ON CONFLICT (run_id, action_id) DO UPDATE SET
                     operation = EXCLUDED.operation,
                     affected_memory_ids_json = EXCLUDED.affected_memory_ids_json,
@@ -119,7 +120,8 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     content_quality_delta = EXCLUDED.content_quality_delta,
                     content_quality_improved = EXCLUDED.content_quality_improved,
                     engagement_utility_delta = EXCLUDED.engagement_utility_delta,
-                    engagement_evidence_json = EXCLUDED.engagement_evidence_json
+                    engagement_evidence_json = EXCLUDED.engagement_evidence_json,
+                    evidence_id = EXCLUDED.evidence_id
                 """,
                 _values(evidence),
             )
@@ -172,6 +174,7 @@ def _values(evidence: CurationQualityEvidence) -> tuple[object, ...]:
         None if evidence.content_quality_improved is None else int(evidence.content_quality_improved),
         evidence.engagement_utility_delta,
         _json(evidence.engagement_evidence),
+        evidence.evidence_id,
     )
 
 
@@ -179,6 +182,7 @@ def _from_row(row: Any) -> CurationQualityEvidence:
     return CurationQualityEvidence(
         run_id=UUID(str(row["run_id"])),
         action_id=UUID(str(row["action_id"])),
+        evidence_id=_optional_text(_row_value(row, "evidence_id")),
         operation=str(row["operation"]),
         affected_memory_ids=[UUID(value) for value in _json_value(row["affected_memory_ids_json"], [])],
         policy_version=str(row["policy_version"]),
@@ -205,20 +209,21 @@ def _from_row(row: Any) -> CurationQualityEvidence:
 
 def _from_postgres_row(row: tuple[object, ...]) -> CurationQualityEvidence:
     return CurationQualityEvidence(
-        run_id=UUID(str(row[0])),
-        action_id=UUID(str(row[1])),
-        operation=str(row[2]),
-        affected_memory_ids=[UUID(value) for value in _json_value(row[3], [])],
-        policy_version=str(row[4]),
-        query_id=None if row[5] is None else str(row[5]),
-        status=str(row[6]),
-        before_ranked_memory_ids=[UUID(value) for value in _json_value(row[7], [])],
-        after_ranked_memory_ids=[UUID(value) for value in _json_value(row[8], [])],
-        retrieval_regression_count=_optional_int(row[9]),
-        zero_result_change=_optional_int(row[10]),
-        payload_size_change=_optional_int(row[11]),
-        useful_work=None if row[12] is None else bool(row[12]),
-        created_at=_datetime(row[13]),
+        run_id=UUID(str(_row_at(row, 0))),
+        action_id=UUID(str(_row_at(row, 1))),
+        evidence_id=_optional_text(_row_at(row, 23)),
+        operation=str(_row_at(row, 2)),
+        affected_memory_ids=[UUID(value) for value in _json_value(_row_at(row, 3), [])],
+        policy_version=str(_row_at(row, 4)),
+        query_id=_optional_text(_row_at(row, 5)),
+        status=str(_row_at(row, 6)),
+        before_ranked_memory_ids=[UUID(value) for value in _json_value(_row_at(row, 7), [])],
+        after_ranked_memory_ids=[UUID(value) for value in _json_value(_row_at(row, 8), [])],
+        retrieval_regression_count=_optional_int(_row_at(row, 9)),
+        zero_result_change=_optional_int(_row_at(row, 10)),
+        payload_size_change=_optional_int(_row_at(row, 11)),
+        useful_work=_optional_bool(_row_at(row, 12)),
+        created_at=_datetime(_row_at(row, 13)),
         retrieval_utility_delta=_optional_float(_row_at(row, 14)),
         acceptance_met=_optional_bool(_row_at(row, 15)),
         neutral_reason=_optional_text(_row_at(row, 16)),
