@@ -547,6 +547,36 @@ def test_postgres_provider_usage_repository_tracks_conversation_lifecycle() -> N
     assert conversation.duration_seconds == pytest.approx(5.0)
 
 
+def test_postgres_provider_usage_repository_preserves_execution_attribution() -> None:
+    """Postgres storage accepts the same provider attribution fields as SQLite."""
+    session_manager = FakeSessionManager()
+    repository = PostgresProviderUsageRepository(session_manager, workspace_id="workspace-a")
+
+    repository.record_call(
+        task_name="memory-curator",
+        task_id="curator-task",
+        execution_epoch=9,
+        request_id="request-9",
+        attempt=2,
+        attempt_identity="curator-task:9:request-9:2",
+        subprocess_pid=None,
+        provider_key="copilot-strong",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+        status="success",
+        duration_seconds=1.0,
+        created_at=10.0,
+        error_text=None,
+    )
+
+    row = session_manager.state.provider_usage[-1]
+    assert row["task_id"] == "curator-task"
+    assert row["execution_epoch"] == 9
+    assert row["request_id"] == "request-9"
+    assert row["attempt"] == 2
+    assert row["attempt_identity"] == "curator-task:9:request-9:2"
+
+
 def test_postgres_provider_usage_repository_counts_conversation_statuses_since() -> None:
     session_manager = FakeSessionManager()
     repository = PostgresProviderUsageRepository(session_manager, workspace_id="workspace-a")

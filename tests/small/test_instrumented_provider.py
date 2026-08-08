@@ -6,6 +6,8 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
+from mcp_memory.core.providers.interfaces import AgenticRunResult
+from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
@@ -119,13 +121,17 @@ async def test_instrumented_provider_records_attempts_from_typed_observer_events
     result = await provider.ask("typed observer event")
     attempt = attempt_repository.get_attempt(task_id="typed-observer-task", execution_epoch=7)
     usage_row = db_manager.get_connection().execute(
-        "SELECT status, subprocess_pid FROM provider_usage WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        "SELECT execution_epoch, attempt, attempt_identity, status, subprocess_pid FROM provider_usage WHERE task_id = ? ORDER BY id DESC LIMIT 1",
         ("typed-observer-task",),
     ).fetchone()
     conversation = repository.list_conversations(task_name="memory-curator", limit=1)[0]
 
     assert result == {"ok": True}
     assert usage_row is not None
+    assert usage_row["execution_epoch"] == 7
+    assert usage_row["attempt"] == 1
+    assert usage_row["attempt_identity"].startswith("typed-observer-task:7:")
+    assert usage_row["attempt_identity"].endswith(":1")
     assert usage_row["status"] == "success"
     assert usage_row["subprocess_pid"] == 8181
     assert conversation.task_id == "typed-observer-task"
@@ -184,3 +190,127 @@ async def test_instrumented_provider_exposes_authoritative_json_call_telemetry(d
     assert result.started_at == pytest.approx(10.0)
     assert result.completed_at == pytest.approx(11.0)
     assert result.provider_call is True
+
+
+def test_instrumented_provider_admission_skip_keeps_epoch_without_request_id(db_manager) -> None:
+    """Policy admission skips remain task-attributed while lacking call identity."""
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        object(),
+        usage_repository=repository,
+        provider_key="copilot-strong",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id="skipped-curator-task",
+        execution_epoch=3,
+        workspace_id="workspace-a",
+    )
+
+    provider.record_admission_skip(
+        ProviderAdmissionDecision(
+            allowed=False,
+            reason="provider_rate_limited",
+            reason_category="admission",
+            error_text="temporarily unavailable",
+        ),
+        now=20.0,
+    )
+
+    row = db_manager.get_connection().execute(
+        "SELECT task_id, execution_epoch, request_id, attempt, attempt_identity, status "
+        "FROM provider_usage WHERE task_id = ?",
+        ("skipped-curator-task",),
+    ).fetchone()
+    assert tuple(row) == ("skipped-curator-task", 3, None, None, None, "skipped")
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_usage_identity_changes_with_restart_epoch(db_manager) -> None:
+    """Provider usage identities distinguish retry calls from restarted epochs."""
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            return {"prompt": prompt}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    base = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    )
+    await base.with_usage_context(
+        task_name="memory-curator",
+        task_id="restartable-curator-task",
+        execution_epoch=4,
+        workspace_id="workspace-a",
+    ).ask("first epoch")
+    await base.with_usage_context(
+        task_name="memory-curator",
+        task_id="restartable-curator-task",
+        execution_epoch=5,
+        workspace_id="workspace-a",
+    ).ask("restarted epoch")
+
+    rows = db_manager.get_connection().execute(
+        "SELECT execution_epoch, attempt_identity FROM provider_usage "
+        "WHERE task_id = ? ORDER BY execution_epoch",
+        ("restartable-curator-task",),
+    ).fetchall()
+    assert [row["execution_epoch"] for row in rows] == [4, 5]
+    assert rows[0]["attempt_identity"].startswith("restartable-curator-task:4:")
+    assert rows[1]["attempt_identity"].startswith("restartable-curator-task:5:")
+
+
+@pytest.mark.asyncio
+async def test_instrumented_agentic_session_correlates_observer_and_usage_request(db_manager) -> None:
+    """Persistent agent turns share request identity across observer and usage rows."""
+    class _Session:
+        def __init__(self, observer) -> None:
+            self._observer = observer
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self._observer(ProviderAttemptStartedEvent(attempt=1, prompt=prompt, subprocess_pid=777, started_at=1.0))
+            return AgenticRunResult(status="success", summary="done")
+
+        async def close(self) -> None:
+            return None
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def open_agent_session(self, *, allowed_tool_names=None, tools=None):
+            del allowed_tool_names, tools
+            return _Session(self._observer)
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="copilot-sdk",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id="agentic-session-task",
+        execution_epoch=8,
+        workspace_id="workspace-a",
+    )
+
+    session = await provider.open_agent_session()
+    await session.run_agent("inspect")
+    await session.close()
+
+    usage = db_manager.get_connection().execute(
+        "SELECT request_id, attempt_identity FROM provider_usage WHERE task_id = ?",
+        ("agentic-session-task",),
+    ).fetchone()
+    conversation = repository.get_conversation(usage["request_id"])[0]
+    assert usage["attempt_identity"].startswith("agentic-session-task:8:")
+    assert conversation.task_id == "agentic-session-task"

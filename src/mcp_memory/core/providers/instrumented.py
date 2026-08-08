@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class _ProviderObserverState:
     last_event: ProviderObserverEvent | None = None
+    request_id: str | None = None
 
 
 class InstrumentedAIProvider:
@@ -223,6 +224,11 @@ class InstrumentedAIProvider:
             termination_reason=termination_reason,
         )
 
+    def _attempt_identity(self, *, request_id: str | None, attempt: int | None) -> str | None:
+        if self._task_id is None or self._execution_epoch is None or request_id is None or attempt is None:
+            return None
+        return f"{self._task_id}:{self._execution_epoch}:{request_id}:{attempt}"
+
     def _guard_test_execution(self) -> None:
         if not self._block_test_execution:
             return
@@ -246,7 +252,7 @@ class InstrumentedAIProvider:
             ):
                 return
             state.last_event = event
-            self._handle_observer_event(request_id=request_id, prompt=prompt, event=event)
+            self._handle_observer_event(request_id=state.request_id or request_id, prompt=prompt, event=event)
 
         return _observer
 
@@ -264,6 +270,7 @@ class InstrumentedAIProvider:
                 attempt=event.attempt,
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
@@ -316,6 +323,7 @@ class InstrumentedAIProvider:
             attempt=event.attempt,
             task_name=self._task_name,
             task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
             provider_key=self._provider_key,
             provider_name=self._provider_name,
             model_name=self._model_name,
@@ -363,7 +371,10 @@ class InstrumentedAIProvider:
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
             request_id=None,
+            attempt=None,
+            attempt_identity=None,
             subprocess_pid=None,
             provider_key=self._provider_key,
             provider_name=self._provider_name,
@@ -388,12 +399,13 @@ class InstrumentedAIProvider:
     ):
         provider = self._provider
         binder = getattr(provider, "with_observer", None)
+        observer_state = _ProviderObserverState()
         if callable(binder):
             provider = binder(
                 self._build_observer(
                     prompt="",
                     request_id=str(uuid4()),
-                    state=_ProviderObserverState(),
+                    state=observer_state,
                 )
             )
         opener = getattr(provider, "open_agent_session", None)
@@ -403,7 +415,7 @@ class InstrumentedAIProvider:
         if tools is not None:
             opener_kwargs["tools"] = tools
         session = await cast(Callable[..., Awaitable[Any]], opener)(**opener_kwargs)
-        return _InstrumentedAgenticSession(self, session)
+        return _InstrumentedAgenticSession(self, session, observer_state)
 
     async def ask_json(
         self,
@@ -423,7 +435,10 @@ class InstrumentedAIProvider:
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 request_id=request_id,
+                attempt=0,
+                attempt_identity=self._attempt_identity(request_id=request_id, attempt=0),
                 subprocess_pid=None,
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
@@ -479,7 +494,12 @@ class InstrumentedAIProvider:
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 request_id=request_id,
+                attempt=_extract_attempt(observer_state.last_event),
+                attempt_identity=self._attempt_identity(
+                    request_id=request_id, attempt=_extract_attempt(observer_state.last_event)
+                ),
                 subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
@@ -543,7 +563,12 @@ class InstrumentedAIProvider:
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 request_id=request_id,
+                attempt=_extract_attempt(observer_state.last_event),
+                attempt_identity=self._attempt_identity(
+                    request_id=request_id, attempt=_extract_attempt(observer_state.last_event)
+                ),
                 subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
@@ -622,7 +647,12 @@ class InstrumentedAIProvider:
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
             request_id=request_id,
+            attempt=_extract_attempt(observer_state.last_event),
+            attempt_identity=self._attempt_identity(
+                request_id=request_id, attempt=_extract_attempt(observer_state.last_event)
+            ),
             subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
             provider_key=self._provider_key,
             provider_name=self._provider_name,
@@ -704,7 +734,10 @@ class InstrumentedAIProvider:
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 request_id=request_id,
+                attempt=0,
+                attempt_identity=self._attempt_identity(request_id=request_id, attempt=0),
                 subprocess_pid=None,
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
@@ -739,7 +772,12 @@ class InstrumentedAIProvider:
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 request_id=request_id,
+                attempt=_extract_attempt(observer_state.last_event),
+                attempt_identity=self._attempt_identity(
+                    request_id=request_id, attempt=_extract_attempt(observer_state.last_event)
+                ),
                 subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
@@ -781,7 +819,12 @@ class InstrumentedAIProvider:
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
+                execution_epoch=self._execution_epoch,
                 request_id=request_id,
+                attempt=_extract_attempt(observer_state.last_event),
+                attempt_identity=self._attempt_identity(
+                    request_id=request_id, attempt=_extract_attempt(observer_state.last_event)
+                ),
                 subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
@@ -837,7 +880,12 @@ class InstrumentedAIProvider:
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
             request_id=request_id,
+            attempt=_extract_attempt(observer_state.last_event),
+            attempt_identity=self._attempt_identity(
+                request_id=request_id, attempt=_extract_attempt(observer_state.last_event)
+            ),
             subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
             provider_key=self._provider_key,
             provider_name=self._provider_name,
@@ -863,13 +911,15 @@ class InstrumentedAIProvider:
 
 
 class _InstrumentedAgenticSession:
-    def __init__(self, provider: InstrumentedAIProvider, session) -> None:
+    def __init__(self, provider: InstrumentedAIProvider, session, observer_state: _ProviderObserverState) -> None:
         self._provider = provider
         self._session = session
+        self._observer_state = observer_state
 
     async def run_agent(self, prompt: str) -> AgenticRunResult:
         started_at = time.time()
         request_id = str(uuid4())
+        self._observer_state.request_id = request_id
         self._provider._guard_test_execution()
         self._provider._enforce_rate_limits()
         try:
@@ -879,7 +929,10 @@ class _InstrumentedAgenticSession:
             self._provider._usage_repository.record_call(
                 task_name=self._provider._task_name,
                 task_id=self._provider._task_id,
+                execution_epoch=self._provider._execution_epoch,
                 request_id=request_id,
+                attempt=1,
+                attempt_identity=self._provider._attempt_identity(request_id=request_id, attempt=1),
                 subprocess_pid=None,
                 provider_key=self._provider._provider_key,
                 provider_name=self._provider._provider_name,
@@ -899,7 +952,10 @@ class _InstrumentedAgenticSession:
             self._provider._usage_repository.record_call(
                 task_name=self._provider._task_name,
                 task_id=self._provider._task_id,
+                execution_epoch=self._provider._execution_epoch,
                 request_id=request_id,
+                attempt=1,
+                attempt_identity=self._provider._attempt_identity(request_id=request_id, attempt=1),
                 subprocess_pid=None,
                 provider_key=self._provider._provider_key,
                 provider_name=self._provider._provider_name,
@@ -917,7 +973,10 @@ class _InstrumentedAgenticSession:
         self._provider._usage_repository.record_call(
             task_name=self._provider._task_name,
             task_id=self._provider._task_id,
+            execution_epoch=self._provider._execution_epoch,
             request_id=request_id,
+            attempt=1,
+            attempt_identity=self._provider._attempt_identity(request_id=request_id, attempt=1),
             subprocess_pid=None,
             provider_key=self._provider._provider_key,
             provider_name=self._provider._provider_name,
