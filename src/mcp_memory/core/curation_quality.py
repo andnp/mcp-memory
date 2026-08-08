@@ -29,6 +29,7 @@ from mcp_memory.core.curation_quality_provenance import (
     QualityQuery,
     QueryProvenance,
 )
+from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -460,6 +461,23 @@ class CurationQualitySampler:
             ReplayResult(memory_id)
             for memory_id in before_ids
         )
+        after_epochs = _search_epochs(self._search)
+        consistency_payload = mutation.payload.get("quality_consistency", {})
+        consistency_data = (
+            consistency_payload if isinstance(consistency_payload, Mapping) else {}
+        )
+        consistency = assess_replay_consistency(
+            before_context=query.query_context,
+            after_context=query.query_context,
+            before_epochs=query.before_search_epochs,
+            after_epochs=after_epochs,
+            replay_complete=replay_complete,
+            unrelated_write_count=_non_negative_int(
+                consistency_data.get("unrelated_write_count")
+            ),
+            write_pollution=bool(consistency_data.get("write_pollution", False)),
+            index_lag=bool(consistency_data.get("index_lag", False)),
+        )
         report = evaluate_query_replay(
             [
                 ReplayCase(
@@ -479,10 +497,35 @@ class CurationQualitySampler:
                     before_query_context=query.query_context,
                     after_query_context=query.query_context,
                     before_search_epochs=query.before_search_epochs,
+                    after_search_epochs=after_epochs,
+                    consistency_flags=consistency.flags,
                 )
             ]
         )
         case = report.cases[0]
+        if not consistency.verified:
+            return CurationQualityEvidence(
+                status="unverified",
+                query_id=query_id,
+                query_text=query_text,
+                before_ranked_memory_ids=[UUID(value) for value in before_ids],
+                after_ranked_memory_ids=[
+                    UUID(result.memory_id) for result in after_results[:top_k]
+                ],
+                retrieval_regression_count=0,
+                zero_result_change=0,
+                useful_work=None,
+                retrieval_utility_delta=None,
+                neutral_reason=consistency.flags[0],
+                engagement_evidence={
+                    "query_provenance": query.provenance.value,
+                    "query_trusted": query.trusted,
+                    "consistency_flags": list(consistency.flags),
+                    "before_search_epochs": dict(query.before_search_epochs),
+                    "after_search_epochs": dict(after_epochs),
+                },
+                **common,
+            )
         acceptance_met = (
             None
             if explicit_hypothesis is None
@@ -999,6 +1042,24 @@ def _epoch(value: object) -> float | None:
 
 def _context_memory_id(context: Any) -> str:
     return str(context.record.id)
+
+
+def _search_epochs(search: Any) -> dict[str, int]:
+    reader = getattr(search, "get_search_epochs", None)
+    if not callable(reader):
+        return {}
+    values = reader()
+    if not isinstance(values, Mapping):
+        return {}
+    return {
+        str(key): int(value)
+        for key, value in values.items()
+        if isinstance(value, int) and not isinstance(value, bool)
+    }
+
+
+def _non_negative_int(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _coerce_mutation(
