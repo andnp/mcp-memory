@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_memory.core.curator_telemetry import aggregate_provider_attempts
+from mcp_memory.core.curator_telemetry import aggregate_provider_attempts, classify_quality_utility
 from mcp_memory.management.reporting_rows import build_task_result_view
 from mcp_memory.operational_store_rows import ProviderUsageSample
 
@@ -76,3 +76,40 @@ def test_task_result_projection_uses_persisted_evidence_over_provider_claims() -
     assert view.curator_telemetry.quality_evidence == 1
     assert view.curator_telemetry.discrepancies.reported_mutations_delta == 86
     assert view.metadata.mutations == 2
+
+
+@pytest.mark.parametrize(
+    ("utility", "neutral_reason", "expected"),
+    [
+        (0.0, None, "neutral"),
+        (-0.01, None, "regression"),
+        (0.01, None, "improved"),
+        (-0.01, "no_query", "neutral"),
+    ],
+)
+def test_quality_classifier_preserves_neutral_denominator(
+    utility: float,
+    neutral_reason: str | None,
+    expected: str,
+) -> None:
+    assert classify_quality_utility(utility, neutral_reason=neutral_reason) == expected
+
+
+def test_task_projection_counts_composite_quality_denominators() -> None:
+    view = build_task_result_view(
+        {
+            "curation_campaign_result": {
+                "quality_evidence": [
+                    {"retrieval_utility_delta": 0.0},
+                    {"retrieval_utility_delta": -0.2, "content_quality_delta": 0.1},
+                    {"engagement_utility_delta": 0.3},
+                ]
+            }
+        }
+    )
+
+    assert view.curator_telemetry is not None
+    assert view.curator_telemetry.quality_evidence == 3
+    assert view.curator_telemetry.quality_neutral == 1
+    assert view.curator_telemetry.quality_regressions == 1
+    assert view.curator_telemetry.quality_improvements == 1
