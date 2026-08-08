@@ -10,6 +10,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
 from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.core.curation_validation import CurationMutationBudget
+from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     finalize_agentic_tool_tracking,
     reset_agentic_tool_tracking,
@@ -98,10 +99,14 @@ async def run_curator_direct_mcp(
         allowed_tool_names=CURATOR_AGENT_TOOLS,
     )
     ledger_valid = bool(ledger_validation["valid"])
-    mutations = actual_mutations if ledger_valid else 0
+    direct_evidence = _direct_evidence_for_task(ctx, task)
+    verified_mutations = productive_mutation_count(direct_evidence)
+    mutations = verified_mutations if direct_evidence else actual_mutations if ledger_valid else 0
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
     outcome = "applied" if mutations else "no_op"
-    if not ledger_valid:
+    if direct_evidence:
+        outcome = _project_direct_evidence_outcome(direct_evidence, actual_mutations)
+    elif not ledger_valid:
         outcome = "ledger_invalid"
     if claimed_work_item is not None:
         complete_work_item(ctx, claimed_work_item.id)
@@ -116,6 +121,7 @@ async def run_curator_direct_mcp(
         tool_calls_executed=tool_calls,
         mutations=mutations,
         actual_mutation_count=actual_mutations,
+        verified_mutation_count=verified_mutations,
         tool_call_ledger=tool_call_ledger,
         tool_call_ledger_validation=ledger_validation,
         **provider_metadata,
@@ -127,6 +133,7 @@ async def run_curator_direct_mcp(
             "outcome": outcome,
             "mutation_count": mutations,
             "productive_mutation_count": mutations,
+            "verified_mutation_count": verified_mutations,
             "actual_mutation_count": actual_mutations,
             "tool_calls_executed": tool_calls,
             "tool_names_used": list(getattr(tool_snapshot, "tool_names_used", [])),
@@ -135,6 +142,29 @@ async def run_curator_direct_mcp(
             **provider_metadata,
         },
     )
+
+
+def _direct_evidence_for_task(ctx: ApplicationContext, task: TaskRecord) -> list[Any]:
+    repository = getattr(ctx, "direct_mutation_evidence", None)
+    reader = getattr(repository, "list_for_execution", None)
+    if not callable(reader):
+        return []
+    return list(cast(Iterable[Any], reader(task.id, task.execution_epoch)))
+
+
+def _project_direct_evidence_outcome(evidence: list[Any], actual_mutations: int) -> str:
+    outcomes = {str(getattr(item, "outcome", "")) for item in evidence}
+    if not actual_mutations:
+        return "no_op"
+    if DirectMutationOutcome.LEDGER_INVALID in outcomes:
+        return DirectMutationOutcome.LEDGER_INVALID.value
+    if DirectMutationOutcome.MUTATION_EVIDENCE_INVALID in outcomes:
+        return DirectMutationOutcome.MUTATION_EVIDENCE_INVALID.value
+    if DirectMutationOutcome.APPLIED_UNVERIFIED in outcomes:
+        return DirectMutationOutcome.APPLIED_UNVERIFIED.value
+    if DirectMutationOutcome.APPLIED_VERIFIED in outcomes:
+        return DirectMutationOutcome.APPLIED_VERIFIED.value
+    return DirectMutationOutcome.NO_OP.value
 
 
 def _direct_curator_prompt(

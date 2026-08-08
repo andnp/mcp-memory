@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Iterable
@@ -92,17 +92,11 @@ class DirectMutationEvidence:
         outcome: str | None = None,
         error_code: str | None = None,
     ) -> "DirectMutationEvidence":
-        return DirectMutationEvidence(
-            **{
-                **asdict(self),
-                "payload": _json_safe(payload),
-                "ledger_entry": _json_safe(ledger_entry),
-                "deltas": tuple(deltas),
-                "outcome": outcome,
-                "error_code": error_code,
-                "completed_at": _now(),
-                "finalized_at": _now(),
-            }
+        return replace(
+            self,
+            payload=_json_safe(payload), ledger_entry=_json_safe(ledger_entry),
+            deltas=tuple(deltas), outcome=outcome, error_code=error_code,
+            completed_at=_now(), finalized_at=_now(),
         )
 
 
@@ -139,15 +133,11 @@ def reconcile_direct_mutation_evidence(
     else:
         outcome = DirectMutationOutcome.APPLIED_VERIFIED
         error = None
-    return DirectMutationEvidence(
-        **{
-            **asdict(evidence),
-            "payload": _json_safe(result),
-            "ledger_entry": _json_safe(ledger),
-            "outcome": str(outcome),
-            "error_code": error,
-            "finalized_at": evidence.finalized_at or _now(),
-        }
+    return replace(
+        evidence,
+        payload=_json_safe(result), ledger_entry=_json_safe(ledger),
+        outcome=str(outcome), error_code=error,
+        finalized_at=evidence.finalized_at or _now(),
     )
 
 
