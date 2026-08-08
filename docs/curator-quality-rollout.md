@@ -94,6 +94,12 @@ For each run, and again before promotion:
 6. Compare direct counts and provider usage with task and dashboard aggregates.
 7. Review all mismatches before continuing; do not repair rollups by deleting or rewriting evidence.
 
+The identity boundaries are deliberately separate: provider attempts reconcile at the run level
+using task ID, execution epoch, request ID, and attempt identity; quality evidence reconciles at
+the action level using the persisted direct-mutation evidence ID and derived action ID. A missing,
+mismatched, or ambiguous identity is an `unobserved`/attribution failure and receives no productive
+quality credit. Provider attempt identities must never be joined directly to action IDs.
+
 ## Live manual verification
 
 For a bounded operator-invoked canary:
