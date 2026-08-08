@@ -99,6 +99,8 @@ def test_curation_metrics_use_persisted_receipts_and_history_not_provider_claims
     assert metrics.history.restore_available is True
     assert metrics.verified_yield == 1.0
     assert metrics.verified_receipt_count == 1
+    assert metrics.retrieval_quality.verified_receipt_count == 1
+    assert metrics.retrieval_quality.productive_quality_count == 0
 
 
 def test_curation_metrics_pass_explicit_query_adapter_to_runner() -> None:
@@ -189,6 +191,75 @@ def test_curation_quality_metrics_separate_neutral_results_and_denominators(db_m
     assert quality.content_quality_neutral_count == 1
     assert quality.content_quality_regression_count == 1
     assert quality.content_quality_delta == pytest.approx(0.1)
+
+
+def test_curation_quality_metrics_report_outcomes_and_unobserved_reasons(db_manager) -> None:
+    now = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+    run_id = uuid4()
+    connection = db_manager.get_connection()
+    connection.execute(
+        "INSERT INTO curation_runs (run_id, frontier_key, context_fingerprint, state, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(run_id), "frontier", "fingerprint", "terminal", "applied", now.isoformat()),
+    )
+    quality_store = SQLiteCurationQualityStore(db_manager)
+    for status, reason, delta in (
+        ("productive", None, 0.2),
+        ("structural_only", "structural_delta_observed", None),
+        ("neutral", "no_trusted_query", None),
+        ("regressed", None, -0.2),
+        ("unverified", "mutation_evidence_unverified", None),
+        ("no_query", "no_trusted_query", None),
+    ):
+        quality_store.put_quality_evidence(
+            CurationQualityEvidence(
+                run_id=run_id,
+                action_id=uuid4(),
+                operation="normalize_memory",
+                policy_version="test",
+                status=status,
+                neutral_reason=reason,
+                content_quality_delta=delta,
+                created_at=now,
+            )
+        )
+    connection.commit()
+
+    quality = build_curation_metrics(db_manager, window_hours=24, now=now.timestamp()).retrieval_quality
+
+    assert quality.outcome_counts == {
+        "neutral": 1,
+        "productive": 1,
+        "regressed": 1,
+        "structural_only": 1,
+        "unobserved": 1,
+        "unverified": 1,
+        "verified_only": 0,
+    }
+    assert quality.productive_quality_count == 2
+    assert quality.unobserved_reason_counts == {
+        "no_trusted_query": 1,
+    }
+
+
+def test_curation_quality_metrics_are_empty_without_persisted_data(db_manager) -> None:
+    quality = build_curation_metrics(
+        db_manager,
+        window_hours=24,
+        now=datetime(2026, 7, 15, 12, 0, tzinfo=UTC).timestamp(),
+    ).retrieval_quality
+
+    assert quality.verified_receipt_count == 0
+    assert quality.productive_quality_count == 0
+    assert quality.outcome_counts == {
+        "neutral": 0,
+        "productive": 0,
+        "regressed": 0,
+        "structural_only": 0,
+        "unobserved": 0,
+        "unverified": 0,
+        "verified_only": 0,
+    }
+    assert quality.unobserved_reason_counts == {}
 
 
 def test_curation_metrics_report_plan_yield_failures_retries_and_categories(db_manager) -> None:
