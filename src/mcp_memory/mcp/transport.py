@@ -9,6 +9,11 @@ import inspect
 from mcp.types import TextContent
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curator_evidence import (
+    begin_tool_call,
+    current_curator_execution,
+    finish_tool_call,
+)
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 
@@ -117,15 +122,31 @@ async def _dispatch_tool(
     if service is None:
         return _unknown_tool_response(name)
 
-    response = await call_service(
-        service,
-        ctx,
-        arguments,
-        compact_success=compact_success,
-    )
+    execution_token = None
     if on_success is not None:
-        on_success(ctx, name, arguments, response)
-    return response
+        raw_task_id = arguments.get("task_id")
+        task_id = raw_task_id if isinstance(raw_task_id, str) else None
+        raw_epoch = arguments.get("execution_epoch")
+        execution_epoch = raw_epoch if isinstance(raw_epoch, int) and not isinstance(raw_epoch, bool) else None
+        if current_curator_execution() is not None or task_id is not None:
+            execution_token = begin_tool_call(
+                task_id=task_id,
+                execution_epoch=execution_epoch,
+                session_id=getattr(ctx, "session_id", None),
+            )
+    try:
+        response = await call_service(
+            service,
+            ctx,
+            arguments,
+            compact_success=compact_success,
+        )
+        if on_success is not None:
+            on_success(ctx, name, arguments, response)
+        return response
+    finally:
+        if execution_token is not None:
+            finish_tool_call(execution_token)
 
 
 def tool_services() -> dict[str, ToolService]:
