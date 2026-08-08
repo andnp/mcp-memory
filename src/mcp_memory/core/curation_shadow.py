@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
 from typing import Any, cast
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
 from mcp_memory.core.curation_models import CampaignHypothesis
+from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualitySampler
+from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
@@ -100,6 +104,12 @@ async def run_curator_direct_mcp(
     )
     ledger_valid = bool(ledger_validation["valid"])
     direct_evidence = _direct_evidence_for_task(ctx, task)
+    quality_evidence = _evaluate_direct_quality(
+        ctx,
+        task,
+        direct_evidence,
+        campaign_hypothesis=campaign_hypothesis,
+    )
     verified_mutations = productive_mutation_count(direct_evidence)
     mutations = verified_mutations if direct_evidence and ledger_valid else actual_mutations if ledger_valid else 0
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
@@ -141,8 +151,13 @@ async def run_curator_direct_mcp(
             "tool_names_used": list(getattr(tool_snapshot, "tool_names_used", [])),
             "tool_call_ledger": tool_call_ledger,
             "tool_call_ledger_validation": ledger_validation,
+            "quality_evidence": [
+                item.model_dump(mode="json") for item in quality_evidence
+            ],
+            "quality_outcomes": _quality_outcome_counts(quality_evidence),
             **provider_metadata,
         },
+        quality_evidence=[item.model_dump(mode="json") for item in quality_evidence],
     )
 
 
@@ -152,6 +167,79 @@ def _direct_evidence_for_task(ctx: ApplicationContext, task: TaskRecord) -> list
     if not callable(reader):
         return []
     return list(cast(Iterable[Any], reader(task.id, task.execution_epoch)))
+
+
+def _evaluate_direct_quality(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    evidence: list[Any],
+    *,
+    campaign_hypothesis: CampaignHypothesis | None,
+) -> tuple[CurationQualityEvidence, ...]:
+    if not evidence or ctx.db_manager is None or ctx.relational_search is None:
+        return ()
+    repository = _DirectQualityEvidenceRepository()
+    sampler = CurationQualitySampler(
+        db_manager=ctx.db_manager,
+        search=_DirectQualitySearch(ctx),
+        repository=repository,
+        candidate_repository=getattr(ctx, "curation", None),
+        sample_rate=1.0,
+    )
+    run = _direct_quality_run(task)
+    return sampler.evaluate(
+        run=run,
+        mutations=[mutations_from_direct_evidence(item) for item in evidence],
+        campaign_hypothesis=campaign_hypothesis,
+    )
+
+
+def _direct_quality_run(task: TaskRecord) -> Any:
+    run_id = uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality-run:{task.id}:{task.execution_epoch}")
+    return type(
+        "DirectQualityRun",
+        (),
+        {
+            "run_id": run_id,
+            "policy_version": str(task.data.get("policy_version", "direct-quality-v1")),
+            "frontier_key": f"direct:{task.id}",
+            "selector_strategy": str(task.data.get("strategy", "direct")),
+        },
+    )()
+
+
+class _DirectQualitySearch:
+    def __init__(self, ctx: ApplicationContext) -> None:
+        self._search = ctx.relational_search
+        self._repository = ctx.repository
+
+    def search_memories_for_maintenance(self, query: str, *, limit: int = 50) -> Any:
+        return self._search.search_memories_for_maintenance(query, limit=limit)
+
+    def get_search_epochs(self) -> dict[str, int]:
+        reader = getattr(self._repository, "get_search_epochs", None)
+        values = reader() if callable(reader) else {}
+        return dict(values) if isinstance(values, dict) else {}
+
+
+@dataclass
+class _DirectQualityEvidenceRepository:
+    values: list[CurationQualityEvidence] = field(default_factory=list)
+
+    def put_quality_evidence(self, evidence: CurationQualityEvidence) -> CurationQualityEvidence:
+        self.values.append(evidence)
+        return evidence
+
+    def list_quality_evidence(self, *, run_id: UUID | None = None, limit: int = 100) -> list[CurationQualityEvidence]:
+        values = self.values if run_id is None else [item for item in self.values if item.run_id == run_id]
+        return values[: max(1, min(limit, 1000))]
+
+
+def _quality_outcome_counts(evidence: Iterable[CurationQualityEvidence]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in evidence:
+        counts[item.status] = counts.get(item.status, 0) + 1
+    return counts
 
 
 def _project_direct_evidence_outcome(evidence: list[Any], actual_mutations: int) -> str:
