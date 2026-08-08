@@ -94,4 +94,15 @@ For each run, and again before promotion:
 6. Compare direct counts and provider usage with task and dashboard aggregates.
 7. Review all mismatches before continuing; do not repair rollups by deleting or rewriting evidence.
 
+## Live manual verification
+
+For a bounded operator-invoked canary:
+
+1. Confirm the daemon is running and `admin health` has no new transport or persistence errors.
+2. Trigger exactly one forced `memory-curator` task; do not start a second run while the first is pending or running.
+3. Inspect `admin task show <task-id>` after completion. Reconcile task status, run result, direct-evidence rows, quality-evidence status, and mutation counts.
+4. Inspect the daemon log for errors from the same time window. A completed task is not a clean pass when the transport logged a mutation-evidence persistence failure.
+5. Treat `quality_evidence_status=not_applicable` as missing quality proof for a quality canary. Structural-only reviews still require their structural contract and must not be counted as productive retrieval quality.
+6. Stop further mutation admission when any task result, evidence store, or daemon-log signal disagrees; preserve the run ID, task ID, execution epoch, and log window for reconciliation.
+
 For rollback actions and evidence preservation, see [Curator quality rollback](curator-quality-rollback.md).

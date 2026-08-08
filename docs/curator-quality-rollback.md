@@ -12,6 +12,8 @@ Use this procedure when the curator quality rollout breaches a stop condition in
 4. Record the stop time, rollout stage, code/policy version, affected runs, and the exact stop condition.
 5. Freeze the evidence window for investigation: raw tool ledgers, direct mutation evidence, receipts, quality evidence, mutation history, provider usage, and dashboard snapshots.
 
+If direct mutation evidence cannot be persisted, treat the run as unreconciled even if the provider reports success. Keep curator mutation admission disabled until the storage error and the task-level error signal are both verified.
+
 Containment disables future direct mutation. It does not delete or rewrite evidence and does not silently restore records.
 
 ## Determine scope
