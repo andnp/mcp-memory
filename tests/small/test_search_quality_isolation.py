@@ -150,12 +150,17 @@ class NativeKernelRecallHarness:
             filters={"workspace_id": "workspace"},
         )
 
+    def close(self) -> None:
+        self.backend.db_manager.get_connection().close()
+
 
 @pytest.mark.asyncio
 async def test_native_kernel_harness_retrieves_quality_record() -> None:
     harness = NativeKernelRecallHarness.build()
-
-    outcome = await harness.search("summary specificity retrieval")
+    try:
+        outcome = await harness.search("summary specificity retrieval")
+    finally:
+        harness.close()
 
     assert outcome.results
     assert outcome.results[0].record_id == "quality"
@@ -286,7 +291,10 @@ class MemoryRecallHarness:
     @classmethod
     def build(cls) -> MemoryRecallHarness:
         native = NativeKernelRecallHarness.build()
-        records = tuple(_memory_record(record) for record in native.records)
+        try:
+            records = tuple(_memory_record(record) for record in native.records)
+        finally:
+            native.close()
         repository = MemoryRecallRepository(records)
         embedder = RecallEmbedder()
         vector_backend = MemoryRecallVectorBackend()
@@ -327,7 +335,11 @@ async def test_paraphrase_recall_matches_native_kernel(
     query: str,
     expected_id: str,
 ) -> None:
-    native = await NativeKernelRecallHarness.build().search(query)
+    native_harness = NativeKernelRecallHarness.build()
+    try:
+        native = await native_harness.search(query)
+    finally:
+        native_harness.close()
     memory = await MemoryRecallHarness.build().search(query)
 
     assert expected_id in [result.record_id for result in native.results]
