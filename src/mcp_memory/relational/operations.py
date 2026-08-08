@@ -85,6 +85,10 @@ class SearchMemoryRecordsOperation:
         )
         return results, SearchExecutionDiagnostics(
             timing_ms=timing_ms,
+            candidate_counts={
+                str(stage): int(count)
+                for stage, count in outcome.candidate_counts.items()
+            },
             kernel_diagnostics=list(outcome.diagnostics),
             cache_diagnostics=list(outcome.cache_diagnostics),
             failure_count=len(outcome.failures),

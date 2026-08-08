@@ -446,6 +446,11 @@ def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) 
     assert diagnostics.failure_count == len(outcome.failures)
     assert diagnostics.missing_record_count == len(outcome.missing_record_ids)
     assert diagnostics.degraded is outcome.degraded
+    assert diagnostics.candidate_counts == {
+        str(stage): int(count)
+        for stage, count in outcome.candidate_counts.items()
+    }
+    assert diagnostics.to_payload()["candidate_counts"] == diagnostics.candidate_counts
     assert diagnostics.to_payload()["kernel_diagnostics"] == list(outcome.diagnostics)
 
 

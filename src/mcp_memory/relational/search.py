@@ -82,6 +82,7 @@ class SearchExecutionDiagnostics:
     keyword_candidate_count: int = 0
     semantic_candidate_count: int = 0
     semantic_candidate_strategy: str = "kernel"
+    candidate_counts: dict[str, int] = field(default_factory=dict)
     vector_search: dict[str, object] | None = None
     kernel_diagnostics: list[str] = field(default_factory=list)
     cache_diagnostics: list[str] = field(default_factory=list)
@@ -97,6 +98,7 @@ class SearchExecutionDiagnostics:
             "keyword_candidate_count": self.keyword_candidate_count,
             "semantic_candidate_count": self.semantic_candidate_count,
             "semantic_candidate_strategy": self.semantic_candidate_strategy,
+            "candidate_counts": dict(self.candidate_counts),
             "vector_search": (
                 None if self.vector_search is None else dict(self.vector_search)
             ),
@@ -311,6 +313,10 @@ class RelationalMemorySearchService:
         )
         diagnostics = SearchExecutionDiagnostics(
             timing_ms=timing_ms,
+            candidate_counts={
+                str(stage): int(count)
+                for stage, count in outcome.candidate_counts.items()
+            },
             kernel_diagnostics=list(outcome.diagnostics),
             cache_diagnostics=list(outcome.cache_diagnostics),
             failure_count=len(outcome.failures),

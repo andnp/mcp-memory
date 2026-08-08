@@ -10,6 +10,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import TypedDict
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import (
@@ -103,6 +104,29 @@ class RankingSignals:
     keyword_token_coverage: float = 0.0
     expanded_by_graph: bool = False
     exact_identifier_match: bool = False
+
+
+class RankingExplanation(TypedDict):
+    rrf_score: float
+    calibrated_score: float
+    recency_bonus: float
+    graph_support_bonus: float
+    workspace_multiplier: float
+    access_bonus: float
+    authority_multiplier: float
+    authority_supporting_links: float
+    authority_contradicting_links: float
+    authority_superseding_links: float
+    degradation_multiplier: float
+    keyword_token_coverage: float
+    semantic_score: float
+    exact_identifier_match: bool
+    exact_identifier_multiplier: float
+    ranking_signal_multiplier: float
+    final_score: float
+    memory_type: str
+    status: str
+    workspace_match: bool
 
 
 @dataclass(slots=True)
@@ -307,7 +331,7 @@ class RankingEngine:
         *,
         signals: RankingSignals | None = None,
         keyword_candidates_present: bool = False,
-    ) -> dict[str, float | str | bool]:
+    ) -> RankingExplanation:
         record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
         calibrated_score = self.calibrate_score(rrf_score)
         recency_bonus = self.type_aware_recency_bonus(record)
@@ -393,6 +417,7 @@ def _weighted_incoming_link_count(counts: dict[str, int]) -> float:
 
 __all__ = [
     "RankingEngine",
+    "RankingExplanation",
     "RankingSignals",
     "ScoringWeights",
     "_keyword_token_coverage",
