@@ -267,7 +267,13 @@ class CurationQualitySampler:
             wave_status = "neutral"
         else:
             wave_status = "rejected"
-        productive = sum(mutation.verified for mutation in normalized)
+        productive = sum(
+            item.status in {
+                QualityOutcome.PRODUCTIVE.value,
+                QualityOutcome.STRUCTURAL_ONLY.value,
+            }
+            for item in raw
+        )
         action_ids = [mutation.mutation_id for mutation in normalized]
         return tuple(
             item.model_copy(
