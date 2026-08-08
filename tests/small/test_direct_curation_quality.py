@@ -110,6 +110,7 @@ def test_direct_quality_uses_durable_repository(db_manager) -> None:
     ctx = ApplicationContext(
         db_manager=db_manager,
         relational_search=cast(Any, _Search()),
+        curation=SQLiteCurationStore(db_manager),
         curation_quality=quality_store,
     )
     task = _task()

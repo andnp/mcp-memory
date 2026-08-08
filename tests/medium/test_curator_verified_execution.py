@@ -131,7 +131,7 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         runtime.ai_agent_provider = provider
         if invalid_ledger:
             monkeypatch.setattr(
-                "mcp_memory.core.curation_shadow.finalize_agentic_tool_tracking",
+                "mcp_memory.core.task_handlers.agentic_tool_tracking.finalize_agentic_tool_tracking",
                 lambda ctx, task_id: SimpleNamespace(
                     total_calls=1,
                     mutating_calls=1,
@@ -193,6 +193,8 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         assert result["input_tokens"] == 20
         assert result["output_tokens"] == 4
         assert result["total_tokens"] == 24
+        persisted_runs = runtime.curation.list_runs()
+        assert any(run.frontier_key == "direct:direct-curator-task" for run in persisted_runs)
         expected_ledger = [
             {
                 "sequence": 1,
