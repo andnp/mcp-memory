@@ -11,6 +11,9 @@ from mcp_memory.core.curation_feedback import (
     _feedback_termination_reason,
     _quality_feedback_payload,
 )
+from mcp_memory.core.curation_shadow import _direct_curator_prompt
+from mcp_memory.core.curation_validation import CurationMutationBudget
+from mcp_memory.core.ports.tasks import TaskRecord
 
 
 def _result(
@@ -173,3 +176,35 @@ def test_campaign_productive_count_requires_measured_quality_outcome() -> None:
     ]
 
     assert quality_productive_mutation_count(evidence) == 2
+
+
+def test_direct_curator_prompt_contains_durability_retention_guardrails() -> None:
+    prompt = _direct_curator_prompt(
+        task=cast(TaskRecord, SimpleNamespace(id="curator-task")),
+        seed_records=[],
+        campaign_hypothesis=None,
+        mutation_budget=CurationMutationBudget(max_accepted_mutations=2),
+    )
+
+    assert "durable content" in prompt
+    assert "transient content" in prompt
+    assert "mixed content" in prompt
+    assert "deadline, release, incident, historical, or decision meaning" in prompt
+    assert "preserve meaningful dates and qualifiers" in prompt
+    assert "work logs, status updates, task-complete summaries, and execution residue" in prompt
+    assert "advisory cleanup candidates" in prompt
+    assert "Never archive or delete solely due to age, date, or access" in prompt
+    assert "preserve every durable claim and its meaningful qualifiers" in prompt
+
+
+def test_direct_curator_prompt_does_not_direct_blanket_date_deletion() -> None:
+    prompt = _direct_curator_prompt(
+        task=cast(TaskRecord, SimpleNamespace(id="curator-task")),
+        seed_records=[],
+        campaign_hypothesis=None,
+        mutation_budget=CurationMutationBudget(),
+    ).lower()
+
+    assert "delete all dated memories" not in prompt
+    assert "delete every dated memory" not in prompt
+    assert "archive all dated memories" not in prompt
