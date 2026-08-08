@@ -3,7 +3,9 @@
 **Status:** Active
 
 ## 1. Core Principle
-The server uses one shared SQLite database for operational state.
+SQLite is the default local backend for operational state. When shared mode
+selects Postgres, Postgres is authoritative; any local SQLite state is
+derivative support state rather than a second source of truth.
 
 The schema should be:
 - rigid for core memory/task/link relationships
