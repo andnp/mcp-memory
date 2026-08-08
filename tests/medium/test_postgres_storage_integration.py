@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.direct_mutation_evidence import DirectMutationEntityDelta, DirectMutationEvidence
 from mcp_memory.core.agent_runtime import (
     FACT_CHECKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
@@ -36,6 +37,7 @@ from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
+from mcp_memory.storage.postgres_direct_mutation_evidence_store import PostgresDirectMutationEvidenceStore
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
@@ -204,6 +206,30 @@ def test_postgres_integration_bootstraps_schema_and_exercises_runtime_primitives
     assert [item.id for item in claimed_repairs] == [repair_item.id]
     assert completed_repair.status == "completed"
     assert [memory_id for memory_id, _score in ranked] == ["memory-1", "memory-2"]
+
+
+def test_postgres_integration_persists_direct_mutation_evidence(postgres_storage_config) -> None:
+    """Persist boolean existence flags through the deployed integer schema."""
+    ensure_postgres_schema(postgres_storage_config)
+    evidence = DirectMutationEvidence.start(
+        task_id="postgres-evidence-task", execution_epoch=1, session_id="session-1", call_id="call-1",
+        sequence=1, tool_name="internal_update_memory_record", arguments={"memory_id": "memory-1"},
+    ).finish(
+        payload={"status": "ok", "record": {"id": "memory-1"}}, ledger_entry={"status": "success"},
+        deltas=(
+            DirectMutationEntityDelta("record", "memory-1", before_exists=False, after_exists=True),
+            DirectMutationEntityDelta("link", "link-1", before_exists=True, after_exists=False),
+        ),
+    )
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        store = PostgresDirectMutationEvidenceStore(manager)
+        assert store.save(evidence) == evidence
+        assert store.get(evidence.evidence_id) == evidence
+        assert store.append(evidence) == evidence
+
+    assert [delta.before_exists for delta in evidence.deltas] == [False, True]
+    assert [delta.after_exists for delta in evidence.deltas] == [True, False]
 
 
 def test_postgres_integration_work_item_repository_matches_shared_contract(postgres_storage_config) -> None:

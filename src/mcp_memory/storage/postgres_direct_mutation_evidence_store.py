@@ -75,20 +75,21 @@ class PostgresDirectMutationEvidenceStore:
                 return None if row is None else self._from_row(connection, row)
 
     def _from_row(self, connection: DbConnectionLike, row: Any) -> DirectMutationEvidence:
+        evidence_id = row[0]
         with connection.cursor() as cursor:
-            cursor.execute("SELECT * FROM direct_mutation_entity_deltas WHERE evidence_id = %s ORDER BY ordinal", (row["evidence_id"],))
+            cursor.execute("SELECT * FROM direct_mutation_entity_deltas WHERE evidence_id = %s ORDER BY ordinal", (evidence_id,))
             deltas = cast(list[Any], cursor.fetchall())
         return DirectMutationEvidence(
-            evidence_id=row["evidence_id"], task_id=row["task_id"], execution_epoch=row["execution_epoch"],
-            session_id=row["session_id"], call_id=row["call_id"], sequence=row["sequence"],
-            tool_name=row["tool_name"], operation=row["operation"], idempotency_key=row["idempotency_key"],
-            payload=_json_value(row["payload_json"]), ledger_entry=_json_value(row["ledger_json"]),
+            evidence_id=evidence_id, task_id=row[1], execution_epoch=row[2],
+            session_id=row[3], call_id=row[4], sequence=row[5],
+            tool_name=row[6], operation=row[7], idempotency_key=row[8],
+            payload=_json_value(row[9]), ledger_entry=_json_value(row[10]),
             deltas=tuple(DirectMutationEntityDelta(
-                kind=item["entity_kind"], entity_id=item["entity_id"], before_revision=item["before_revision"],
-                after_revision=item["after_revision"], before_exists=bool(item["before_exists"]),
-                after_exists=bool(item["after_exists"]), transition=item["transition"], snapshot=_json_value(item["snapshot_json"]),
-            ) for item in deltas), outcome=row["outcome"], error_code=row["error_code"],
-            started_at=row["started_at"], completed_at=row["completed_at"], finalized_at=row["finalized_at"],
+                kind=item[2], entity_id=item[3], before_revision=item[4],
+                after_revision=item[5], before_exists=bool(item[6]),
+                after_exists=bool(item[7]), transition=item[8], snapshot=_json_value(item[9]),
+            ) for item in deltas),
+            outcome=row[11], error_code=row[12], started_at=row[13], completed_at=row[14], finalized_at=row[15],
         )
 
     @contextmanager
