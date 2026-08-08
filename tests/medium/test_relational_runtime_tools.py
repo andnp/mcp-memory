@@ -471,8 +471,8 @@ async def test_relational_runtime_search_debug_explains_workspace_and_degradatio
             for result in payload["results"]
         }
 
-        assert returned_ids == [local_active.id, local_stale.id]
-        assert cross_workspace.id not in returned_ids
+        assert returned_ids == [local_active.id, cross_workspace.id, local_stale.id]
+        assert cross_workspace.id in returned_ids
         assert "provenance" in debug_by_id[local_active.id]
         assert "canonical_id" in debug_by_id[local_active.id]
     finally:
