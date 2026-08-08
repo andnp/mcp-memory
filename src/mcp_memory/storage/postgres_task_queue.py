@@ -130,15 +130,19 @@ class PostgresTaskQueue:
 
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    ("mcp-memory:background-cleanup-claim",),
+                claim_query = (
+                    f"SELECT id, task_name FROM tasks WHERE {' AND '.join(clauses)} "
+                    "ORDER BY priority ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                 )
-                cursor.execute(
-                    f"SELECT id FROM tasks WHERE {' AND '.join(clauses)} ORDER BY priority ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
-                    tuple(params),
-                )
+                cursor.execute(claim_query, tuple(params))
                 row = cursor.fetchone()
+                if row is not None and str(row[1]) in cleanup_names:
+                    cursor.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        ("mcp-memory:background-cleanup-claim",),
+                    )
+                    cursor.execute(claim_query, tuple(params))
+                    row = cursor.fetchone()
                 if row is None:
                     connection.commit()
                     return None
