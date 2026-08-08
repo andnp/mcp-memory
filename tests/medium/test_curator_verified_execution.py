@@ -181,14 +181,14 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         assert "internal_update_memory_record" in provider.allowed_tools
         assert result["execution_mode"] == "curation_direct_mcp"
         assert result["curation_outcome"] == (
-            "ledger_invalid" if invalid_ledger else "mutation_evidence_invalid"
+            "ledger_invalid" if invalid_ledger else "applied_verified"
         )
         assert result["tool_calls_executed"] == 1
-        assert result["mutations"] == 0
+        assert result["mutations"] == (0 if invalid_ledger else 1)
         assert result["actual_mutation_count"] == 1
         assert result["tool_call_ledger_validation"]["valid"] is not invalid_ledger
         assert result["curation_campaign_result"]["productive_mutation_count"] == (
-            0
+            0 if invalid_ledger else 1
         )
         assert result["provider_call_count"] == 1
         assert result["provider_calls_used"] == 1

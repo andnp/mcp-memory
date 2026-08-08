@@ -152,6 +152,10 @@ async def _dispatch_tool(
                 tool_name=name,
                 arguments=arguments,
             )
+            direct_evidence = direct_evidence.finish(
+                payload={"before_entities": _before_entity_snapshots(ctx, arguments)},
+                ledger_entry={},
+            )
     try:
         response = await call_service(
             service,
@@ -345,7 +349,13 @@ def _finalize_direct_mutation_evidence(
                  if item.get("call_id") == evidence.call_id),
                 {},
             )
-    deltas = entity_deltas_for_payload(payload, arguments, repository=getattr(ctx, "repository", None))
+    before_entities = evidence.payload.get("before_entities")
+    deltas = entity_deltas_for_payload(
+        payload,
+        arguments,
+        repository=getattr(ctx, "repository", None),
+        before_entities=before_entities if isinstance(before_entities, dict) else None,
+    )
     semantic = _semantic_postcondition(ctx, payload, deltas)
     finalized = reconcile_direct_mutation_evidence(
         evidence.finish(payload=payload, ledger_entry=ledger_entry, deltas=deltas),
@@ -383,3 +393,19 @@ def _semantic_postcondition(
         return False
     repository = getattr(ctx, "repository", None)
     return True if repository is not None else None
+
+
+def _before_entity_snapshots(ctx: ApplicationContext, arguments: dict[str, object]) -> dict[str, dict[str, object]]:
+    repository = getattr(ctx, "repository", None)
+    getter = getattr(repository, "get_memory", None)
+    if not callable(getter):
+        return {}
+    values: dict[str, dict[str, object]] = {}
+    for key in ("memory_id", "source_memory_id", "canonical_memory_id", "source_id", "target_id"):
+        value = arguments.get(key)
+        if not isinstance(value, str) or value.startswith("ext:"):
+            continue
+        record = getter(value)
+        if record is not None:
+            values[value] = {"id": value, "updated_at": getattr(record, "updated_at", None), "status": getattr(record, "status", None)}
+    return values

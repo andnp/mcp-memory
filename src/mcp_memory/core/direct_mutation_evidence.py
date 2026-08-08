@@ -92,9 +92,12 @@ class DirectMutationEvidence:
         outcome: str | None = None,
         error_code: str | None = None,
     ) -> "DirectMutationEvidence":
+        merged_payload = _json_safe(payload)
+        if isinstance(merged_payload, dict) and isinstance(self.payload.get("before_entities"), dict):
+            merged_payload = {**merged_payload, "before_entities": self.payload["before_entities"]}
         return replace(
             self,
-            payload=_json_safe(payload), ledger_entry=_json_safe(ledger_entry),
+            payload=merged_payload, ledger_entry=_json_safe(ledger_entry),
             deltas=tuple(deltas), outcome=outcome, error_code=error_code,
             completed_at=_now(), finalized_at=_now(),
         )
@@ -150,6 +153,7 @@ def entity_deltas_for_payload(
     arguments: dict[str, Any],
     *,
     repository: Any = None,
+    before_entities: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[DirectMutationEntityDelta, ...]:
     """Extract record/link transitions from compact internal tool responses."""
     records = list(_record_payloads(payload))
@@ -160,9 +164,10 @@ def entity_deltas_for_payload(
         if not isinstance(entity_id, str) or entity_id in seen:
             continue
         seen.add(entity_id)
+        before_payload = (before_entities or {}).get(entity_id)
         get_memory = getattr(repository, "get_memory", None)
-        before = get_memory(entity_id) if callable(get_memory) else None
-        before_revision = getattr(before, "updated_at", None)
+        before = get_memory(entity_id) if callable(get_memory) and before_payload is None else None
+        before_revision = (before_payload or {}).get("updated_at") or getattr(before, "updated_at", None)
         after_revision = record.get("updated_at") if isinstance(record.get("updated_at"), str) else None
         transition = "created" if before is None else "updated"
         if key == "deleted":
@@ -174,7 +179,7 @@ def entity_deltas_for_payload(
             entity_id=entity_id,
             before_revision=before_revision,
             after_revision=after_revision,
-            before_exists=before is not None,
+            before_exists=before_payload is not None or before is not None,
             after_exists=key != "deleted",
             transition=transition,
             snapshot=dict(record),
@@ -187,9 +192,9 @@ def entity_deltas_for_payload(
             "link_type": arguments.get("link_type"),
         }
     source_id, target_id, link_type = link.get("source_id"), link.get("target_id"), link.get("link_type")
-    if all(isinstance(item, str) and item for item in (source_id, target_id, link_type)) and "link" in payload:
+    if all(isinstance(item, str) and item for item in (source_id, target_id, link_type)):
         entity_id = f"{source_id}:{target_id}:{link_type}"
-        transition = "deleted" if payload.get("deleted") is not None else "created"
+        transition = "created" if "link" in payload else "deleted"
         deltas.append(DirectMutationEntityDelta(
             kind=EvidenceEntityKind.LINK, entity_id=entity_id,
             before_exists=transition == "deleted", after_exists=transition != "deleted",

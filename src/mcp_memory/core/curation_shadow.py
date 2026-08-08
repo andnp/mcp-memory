@@ -101,7 +101,7 @@ async def run_curator_direct_mcp(
     ledger_valid = bool(ledger_validation["valid"])
     direct_evidence = _direct_evidence_for_task(ctx, task)
     verified_mutations = productive_mutation_count(direct_evidence)
-    mutations = verified_mutations if direct_evidence else actual_mutations if ledger_valid else 0
+    mutations = verified_mutations if direct_evidence and ledger_valid else actual_mutations if ledger_valid else 0
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
     outcome = "applied" if mutations else "no_op"
     if direct_evidence and not ledger_valid:
