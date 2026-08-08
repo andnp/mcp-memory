@@ -56,12 +56,21 @@ class ReplayCase:
     expected_query: str | None = None
     trusted_query: bool = True
     replay_complete: bool = True
+    before_query_context: Mapping[str, object] = field(default_factory=dict)
+    after_query_context: Mapping[str, object] = field(default_factory=dict)
+    before_search_epochs: Mapping[str, int] = field(default_factory=dict)
+    after_search_epochs: Mapping[str, int] = field(default_factory=dict)
+    consistency_flags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.query_id.strip():
             raise ValueError("query_id must be non-empty")
         if self.top_k < 1:
             raise ValueError("top_k must be positive")
+
+    @property
+    def query_context_matches(self) -> bool:
+        return dict(self.before_query_context) == dict(self.after_query_context)
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +231,10 @@ def _neutral_reason(
 ) -> str | None:
     if not case.trusted_query:
         return "no_trusted_query"
+    if not case.query_context_matches:
+        return "query_context_changed"
+    if case.consistency_flags:
+        return case.consistency_flags[0]
     if case.query_text is not None and not case.query_text.strip():
         return "blank_query"
     if (

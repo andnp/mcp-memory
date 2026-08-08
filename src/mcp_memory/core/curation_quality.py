@@ -21,6 +21,10 @@ from mcp_memory.core.curation_evaluation import (
     ReplaySnapshot,
     evaluate_query_replay,
 )
+from mcp_memory.core.curation_quality_inputs import (
+    CurationQualityMutation,
+    mutation_from_receipt,
+)
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -32,7 +36,6 @@ from mcp_memory.core.ports.curation import (
     CurationActionReceipt,
     CurationCandidateState,
     CurationRepository,
-    CurationReceiptState,
     CurationRun,
 )
 
@@ -145,16 +148,21 @@ class CurationQualitySampler:
         self,
         *,
         run: CurationRun,
-        receipts: Sequence[CurationActionReceipt],
+        receipts: Sequence[CurationActionReceipt] = (),
+        mutations: Sequence[CurationQualityMutation] | None = None,
         campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> tuple[CurationQualityEvidence, ...]:
+        selected_mutations = tuple(
+            mutations
+            if mutations is not None
+            else (mutation_from_receipt(receipt) for receipt in receipts)
+        )
         selected = [
-            receipt
-            for receipt in receipts
-            if receipt.status is CurationReceiptState.VERIFIED
-            and receipt.mutation_event_id is not None
-            and receipt.affected_ids
-            and self._is_sampled(run.run_id, receipt.action_id)
+            mutation
+            for mutation in selected_mutations
+            if mutation.applied
+            and mutation.affected_memory_ids
+            and self._is_sampled(run.run_id, mutation.mutation_id)
         ][: self._max_actions]
         wave_id = uuid4()
         evidence = self._evaluate_wave(
@@ -166,27 +174,26 @@ class CurationQualitySampler:
         for item in evidence:
             self._repository.put_quality_evidence(item)
         if self._candidate_repository is not None:
-            for item, receipt in zip(evidence, selected, strict=True):
-                self._escalate_quality_regression(run, item, receipt)
+            for item, mutation in zip(evidence, selected, strict=True):
+                self._escalate_quality_regression(run, item, mutation)
         return evidence
 
     def _evaluate_wave(
         self,
         run: CurationRun,
-        receipts: Sequence[CurationActionReceipt],
+        mutations: Sequence[CurationQualityMutation | CurationActionReceipt],
         campaign_hypothesis: CampaignHypothesis | None,
         *,
         wave_id: UUID,
     ) -> tuple[CurationQualityEvidence, ...]:
-        if not receipts:
+        if not mutations:
             return ()
-        raw = [self._evaluate_action(run, receipt, campaign_hypothesis) for receipt in receipts]
+        normalized = tuple(_coerce_mutation(mutation) for mutation in mutations)
+        raw = [self._evaluate_action(run, mutation, campaign_hypothesis) for mutation in mutations]
         evaluated = [item for item in raw if item.status == "evaluated" and item.query_id]
         explicit = campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
         complete_receipts = all(
-            receipt.status is CurationReceiptState.VERIFIED
-            and receipt.mutation_event_id is not None
-            for receipt in receipts
+            mutation.applied and mutation.verified for mutation in normalized
         )
         collateral = sum(item.retrieval_regression_count or 0 for item in evaluated)
         goal_improved = any(
@@ -244,8 +251,8 @@ class CurationQualitySampler:
             wave_status = "neutral"
         else:
             wave_status = "rejected"
-        productive = len(receipts)
-        action_ids = [receipt.action_id for receipt in receipts]
+        productive = sum(mutation.verified for mutation in normalized)
+        action_ids = [mutation.mutation_id for mutation in normalized]
         return tuple(
             item.model_copy(
                 update={
@@ -268,7 +275,7 @@ class CurationQualitySampler:
         self,
         run: CurationRun,
         evidence: CurationQualityEvidence,
-        receipt: CurationActionReceipt,
+        mutation: CurationQualityMutation,
     ) -> None:
         candidate_repository = self._candidate_repository
         if candidate_repository is None:
@@ -286,7 +293,7 @@ class CurationQualitySampler:
             reason = "acceptance_not_met"
         else:
             return
-        for memory_id in self._intended_memory_ids(receipt):
+        for memory_id in mutation.affected_memory_ids:
             previous = candidate_repository.get_candidate_state(memory_id)
             coverage_evidence = (
                 {} if previous is None else dict(previous.coverage_evidence_json)
@@ -333,27 +340,28 @@ class CurationQualitySampler:
     def _evaluate_action(
         self,
         run: CurationRun,
-        receipt: CurationActionReceipt,
+        mutation: CurationQualityMutation | CurationActionReceipt,
         campaign_hypothesis: CampaignHypothesis | None,
         *,
         after_results_by_query: Mapping[str, tuple[ReplayResult, ...]] | None = None,
     ) -> CurationQualityEvidence:
+        mutation = _coerce_mutation(mutation)
         common = {
             "run_id": run.run_id,
-            "action_id": receipt.action_id,
-            "operation": receipt.operation,
-            "affected_memory_ids": list(receipt.affected_ids),
+            "action_id": mutation.mutation_id,
+            "operation": mutation.operation,
+            "affected_memory_ids": list(mutation.affected_memory_ids),
             "policy_version": run.policy_version,
             "created_at": self._clock(),
         }
-        content = self._content_quality(receipt)
-        if receipt.operation in {"create_link", "remove_link"}:
+        content = self._content_quality(mutation)
+        if mutation.operation in {"create_link", "remove_link"}:
             return CurationQualityEvidence(status="structural_only", **common)
 
         explicit_hypothesis = (
             campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
         )
-        query = self._find_historical_query(receipt, explicit_hypothesis)
+        query = self._find_historical_query(mutation, explicit_hypothesis)
         if query is None:
             return CurationQualityEvidence(
                 status=(
@@ -404,7 +412,7 @@ class CurationQualitySampler:
         intended_ids = (
             list(explicit_hypothesis.expected_memory_ids)
             if explicit_hypothesis is not None and explicit_hypothesis.expected_memory_ids
-            else self._intended_memory_ids(receipt)
+            else list(mutation.affected_memory_ids)
         )
         top_k = (
             explicit_hypothesis.top_k
@@ -416,7 +424,7 @@ class CurationQualitySampler:
             if explicit_hypothesis is not None
             else self._read_backed_engagement(
                 intended_ids,
-                cutoff=receipt.applied_at or self._clock(),
+                cutoff=mutation.applied_at or self._clock(),
             )
         )
         engagement_delta = (
@@ -653,8 +661,9 @@ class CurationQualitySampler:
             },
         }
 
-    def _content_quality(self, receipt: CurationActionReceipt) -> _ContentQualityComparison:
-        if receipt.operation not in {"normalize_memory", "rewrite_memory"}:
+    def _content_quality(self, mutation: CurationQualityMutation | CurationActionReceipt) -> _ContentQualityComparison:
+        mutation = _coerce_mutation(mutation)
+        if mutation.operation not in {"normalize_memory", "rewrite_memory"}:
             return _ContentQualityComparison()
         rows = _fetch_rows(
             self._db_manager,
@@ -663,7 +672,7 @@ class CurationQualitySampler:
             FROM memory_record_revisions
             WHERE event_id = ?
             """,
-            (str(receipt.mutation_event_id),),
+            (str(mutation.mutation_event_id),),
         )
         scores = [
             (_content_quality_score(row[0]), _content_quality_score(row[1]))
@@ -681,7 +690,13 @@ class CurationQualitySampler:
             improved=delta > 0,
         )
 
-    def _intended_memory_ids(self, receipt: CurationActionReceipt) -> list[UUID]:
+    def _intended_memory_ids(
+        self,
+        mutation: CurationQualityMutation | CurationActionReceipt,
+    ) -> list[UUID]:
+        mutation = _coerce_mutation(mutation)
+        if mutation.mutation_event_id is None:
+            return list(mutation.affected_memory_ids)
         rows = _fetch_rows(
             self._db_manager,
             """
@@ -689,7 +704,7 @@ class CurationQualitySampler:
             FROM memory_record_revisions
             WHERE event_id = ?
             """,
-            (str(receipt.mutation_event_id),),
+            (str(mutation.mutation_event_id),),
         )
         snapshots = {
             str(row[0]): (row[1], row[2])
@@ -697,7 +712,7 @@ class CurationQualitySampler:
             if row[0] is not None
         }
         intended: list[UUID] = []
-        for memory_id in receipt.affected_ids:
+        for memory_id in mutation.affected_memory_ids:
             after_exists, snapshot = snapshots.get(str(memory_id), (True, None))
             if not after_exists:
                 continue
@@ -714,7 +729,7 @@ class CurationQualitySampler:
                 ):
                     continue
             intended.append(memory_id)
-        return intended if snapshots else list(receipt.affected_ids)
+        return intended if snapshots else list(mutation.affected_memory_ids)
 
     def _is_sampled(self, run_id: UUID, action_id: UUID) -> bool:
         if self._sample_rate >= 1.0:
@@ -724,14 +739,14 @@ class CurationQualitySampler:
 
     def _find_historical_query(
         self,
-        receipt: CurationActionReceipt,
+        mutation: CurationQualityMutation,
         explicit_hypothesis: CampaignHypothesis | None = None,
     ) -> tuple[str, str, list[str], bool] | None:
         if explicit_hypothesis is not None and explicit_hypothesis.query:
-            return self._find_explicit_query(receipt, explicit_hypothesis.query)
+            return self._find_explicit_query(mutation, explicit_hypothesis.query)
         if explicit_hypothesis is not None and explicit_hypothesis.target_mode is CampaignTargetMode.ZERO_RESULTS:
             return None
-        target_ids = [str(value) for value in receipt.affected_ids]
+        target_ids = [str(value) for value in mutation.affected_memory_ids]
         placeholders = ", ".join("?" for _ in target_ids)
         rows = _fetch_rows(
             self._db_manager,
@@ -747,7 +762,7 @@ class CurationQualitySampler:
             target_ids,
         )
         target_id_set = set(target_ids)
-        cutoff = receipt.applied_at or self._clock()
+        cutoff = mutation.applied_at or self._clock()
         grouped: dict[str, list[Any]] = defaultdict(list)
         for row in rows:
             invocation_id, _, memory_id, _, _, created_at = row
@@ -765,12 +780,12 @@ class CurationQualitySampler:
 
     def _find_explicit_query(
         self,
-        receipt: CurationActionReceipt,
+        mutation: CurationQualityMutation,
         query_text: str | None,
     ) -> tuple[str, str, list[str], bool] | None:
         if not query_text or not query_text.strip():
             return None
-        cutoff = receipt.applied_at or self._clock()
+        cutoff = mutation.applied_at or self._clock()
         rows = _fetch_rows(
             self._db_manager,
             """
@@ -936,3 +951,11 @@ def _epoch(value: object) -> float | None:
 
 def _context_memory_id(context: Any) -> str:
     return str(context.record.id)
+
+
+def _coerce_mutation(
+    value: CurationQualityMutation | CurationActionReceipt,
+) -> CurationQualityMutation:
+    if isinstance(value, CurationQualityMutation):
+        return value
+    return mutation_from_receipt(value)
