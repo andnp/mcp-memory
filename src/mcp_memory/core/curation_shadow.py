@@ -13,6 +13,7 @@ from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     finalize_agentic_tool_tracking,
     reset_agentic_tool_tracking,
+    validate_agentic_tool_tracking_snapshot,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import complete_work_item, release_work_item
@@ -90,10 +91,18 @@ async def run_curator_direct_mcp(
             await session.close()
 
     tool_calls = int(getattr(tool_snapshot, "total_calls", 0))
-    mutations = int(getattr(tool_snapshot, "mutating_calls", 0))
+    actual_mutations = int(getattr(tool_snapshot, "mutating_calls", 0))
     tool_call_ledger = list(getattr(tool_snapshot, "tool_call_ledger", []))
+    ledger_validation = validate_agentic_tool_tracking_snapshot(
+        tool_snapshot,
+        allowed_tool_names=CURATOR_AGENT_TOOLS,
+    )
+    ledger_valid = bool(ledger_validation["valid"])
+    mutations = actual_mutations if ledger_valid else 0
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
     outcome = "applied" if mutations else "no_op"
+    if not ledger_valid:
+        outcome = "ledger_invalid"
     if claimed_work_item is not None:
         complete_work_item(ctx, claimed_work_item.id)
     return sampling_payload(
@@ -106,17 +115,23 @@ async def run_curator_direct_mcp(
         claimed_work_item_count=1 if claimed_work_item is not None else 0,
         tool_calls_executed=tool_calls,
         mutations=mutations,
+        actual_mutation_count=actual_mutations,
         tool_call_ledger=tool_call_ledger,
+        tool_call_ledger_validation=ledger_validation,
         **provider_metadata,
         curation_outcome=outcome,
-        curation_no_op_reason=None if mutations else "agent_no_mutations",
+        curation_no_op_reason=(
+            "tool_call_ledger_invalid" if not ledger_valid else None if mutations else "agent_no_mutations"
+        ),
         curation_campaign_result={
             "outcome": outcome,
             "mutation_count": mutations,
             "productive_mutation_count": mutations,
+            "actual_mutation_count": actual_mutations,
             "tool_calls_executed": tool_calls,
             "tool_names_used": list(getattr(tool_snapshot, "tool_names_used", [])),
             "tool_call_ledger": tool_call_ledger,
+            "tool_call_ledger_validation": ledger_validation,
             **provider_metadata,
         },
     )

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
+from mcp_memory.internal_tool_call_tracking import (
+    InternalToolCallSnapshot,
+    InternalToolCallTracker,
+)
+from mcp_memory.core.task_handlers.agentic_tool_tracking import (
+    validate_agentic_tool_tracking_snapshot,
+)
 
 
 def test_internal_tool_call_tracker_binds_session_and_counts_mutations() -> None:
@@ -93,3 +99,54 @@ def test_internal_tool_call_tracker_falls_back_to_single_active_task() -> None:
     assert snapshot.total_calls == 1
     assert snapshot.mutating_calls == 1
     assert snapshot.by_name == {"internal_merge_memory_into_canonical": 1}
+
+
+def test_validate_agentic_tool_tracking_snapshot_accepts_finalized_ledger() -> None:
+    tracker = InternalToolCallTracker()
+    tracker.reset_task("task-1")
+    tracker.record_call("internal_peek_record")
+    tracker.record_call("internal_update_memory_record")
+
+    snapshot = tracker.finalize_task("task-1")
+
+    validation = validate_agentic_tool_tracking_snapshot(
+        snapshot,
+        allowed_tool_names=("internal_peek_record", "internal_update_memory_record"),
+    )
+
+    assert validation == {"valid": True, "issues": []}
+
+
+def test_validate_agentic_tool_tracking_snapshot_reports_bounded_ledger_errors() -> None:
+    snapshot = InternalToolCallSnapshot(
+        task_id="task-1",
+        total_calls=2,
+        mutating_calls=0,
+        tool_call_ledger=[
+            {"sequence": 3, "tool_name": "internal_unknown", "kind": "read", "status": "pending"},
+            {"sequence": 2, "tool_name": "internal_update_memory_record", "kind": "read", "status": "success"},
+        ],
+    )
+
+    validation = validate_agentic_tool_tracking_snapshot(
+        snapshot,
+        allowed_tool_names=("internal_update_memory_record",),
+    )
+
+    assert validation["valid"] is False
+    assert {issue["code"] for issue in validation["issues"]} == {
+        "kind_mismatch",
+        "mutation_count_mismatch",
+        "status_invalid",
+        "sequence_invalid",
+        "tool_not_allowed",
+    }
+
+
+def test_validate_agentic_tool_tracking_snapshot_rejects_missing_snapshot() -> None:
+    validation = validate_agentic_tool_tracking_snapshot(None, allowed_tool_names=())
+
+    assert validation == {
+        "valid": False,
+        "issues": [{"code": "snapshot_missing", "message": "snapshot is missing"}],
+    }

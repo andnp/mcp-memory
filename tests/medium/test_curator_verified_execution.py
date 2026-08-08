@@ -98,9 +98,11 @@ def _task(runtime: Any) -> TaskRecord:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_ledger", [False, True])
 async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    invalid_ledger: bool,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -127,6 +129,25 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         )
         provider = _DirectProvider(runtime, record.id)
         runtime.ai_agent_provider = provider
+        if invalid_ledger:
+            monkeypatch.setattr(
+                "mcp_memory.core.curation_shadow.finalize_agentic_tool_tracking",
+                lambda ctx, task_id: SimpleNamespace(
+                    total_calls=1,
+                    mutating_calls=1,
+                    tool_names_used=["internal_unexpected_tool"],
+                    tool_call_ledger=[
+                        {
+                            "sequence": 1,
+                            "tool_name": "internal_unexpected_tool",
+                            "kind": "mutation",
+                            "status": "success",
+                            "argument_keys": [],
+                            "memory_ids": [],
+                        }
+                    ],
+                ),
+            )
         runtime.provider_usage = _ConversationUsage(
             [
                 SimpleNamespace(
@@ -159,15 +180,20 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         assert provider.allowed_tools is not None
         assert "internal_update_memory_record" in provider.allowed_tools
         assert result["execution_mode"] == "curation_direct_mcp"
-        assert result["curation_outcome"] == "applied"
+        assert result["curation_outcome"] == ("ledger_invalid" if invalid_ledger else "applied")
         assert result["tool_calls_executed"] == 1
-        assert result["mutations"] == 1
+        assert result["mutations"] == (0 if invalid_ledger else 1)
+        assert result["actual_mutation_count"] == 1
+        assert result["tool_call_ledger_validation"]["valid"] is not invalid_ledger
+        assert result["curation_campaign_result"]["productive_mutation_count"] == (
+            0 if invalid_ledger else 1
+        )
         assert result["provider_call_count"] == 1
         assert result["provider_calls_used"] == 1
         assert result["input_tokens"] == 20
         assert result["output_tokens"] == 4
         assert result["total_tokens"] == 24
-        assert result["tool_call_ledger"] == [
+        expected_ledger = [
             {
                 "sequence": 1,
                 "tool_name": "internal_update_memory_record",
@@ -177,6 +203,11 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
                 "memory_ids": [str(record.id)],
             }
         ]
+        if invalid_ledger:
+            expected_ledger[0]["tool_name"] = "internal_unexpected_tool"
+            expected_ledger[0]["argument_keys"] = []
+            expected_ledger[0]["memory_ids"] = []
+        assert result["tool_call_ledger"] == expected_ledger
         assert "A direct MCP curator conclusion." not in str(result["tool_call_ledger"])
         refreshed = runtime.repository.get_memory(record.id)
         assert refreshed is not None and refreshed.summary == "A direct MCP curator conclusion."
