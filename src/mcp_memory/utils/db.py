@@ -35,11 +35,14 @@ class DatabaseManager:
         busy_timeout_milliseconds: int | None = None,
     ) -> sqlite3.Connection:
         effective_timeout_seconds = SQLITE_BUSY_TIMEOUT_SECONDS if timeout_seconds is None else max(timeout_seconds, 0.0)
-        effective_busy_timeout_milliseconds = (
-            SQLITE_BUSY_TIMEOUT_MILLISECONDS
-            if busy_timeout_milliseconds is None
-            else max(busy_timeout_milliseconds, 0)
-        )
+        if busy_timeout_milliseconds is None:
+            effective_busy_timeout_milliseconds = (
+                SQLITE_BUSY_TIMEOUT_MILLISECONDS
+                if timeout_seconds is None
+                else int(effective_timeout_seconds * 1000)
+            )
+        else:
+            effective_busy_timeout_milliseconds = max(busy_timeout_milliseconds, 0)
         conn = sqlite3.connect(
             str(self._db_path),
             check_same_thread=False,

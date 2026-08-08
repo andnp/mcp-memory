@@ -13,9 +13,33 @@ from mcp_memory.mcp.internal_services import internal_search_memory_records_serv
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.utils.db import DatabaseManager
 
 
 pytestmark = pytest.mark.small
+
+
+def test_open_connection_timeout_bounds_sqlite_busy_lock(tmp_path: Path) -> None:
+    manager = DatabaseManager(tmp_path / "memory.sqlite3")
+    blocker = manager.get_connection()
+    bounded = manager.open_connection(timeout_seconds=0.1)
+    overridden = manager.open_connection(timeout_seconds=0.1, busy_timeout_milliseconds=2500)
+
+    try:
+        assert manager.get_connection().execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+        assert bounded.execute("PRAGMA busy_timeout").fetchone()[0] == 100
+        assert overridden.execute("PRAGMA busy_timeout").fetchone()[0] == 2500
+
+        blocker.execute("BEGIN IMMEDIATE")
+        started_at = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            bounded.execute("UPDATE schema_metadata SET value = value WHERE key = 'schema_version'")
+        assert time.monotonic() - started_at < 1.0
+    finally:
+        blocker.rollback()
+        bounded.close()
+        overridden.close()
+        manager.close()
 
 
 def test_build_retrieval_analytics_rolls_up_direct_search_and_read_rows() -> None:
@@ -366,7 +390,9 @@ def test_build_nerd_metrics_includes_retrieval_analytics(monkeypatch, tmp_path: 
         runtime.close()
 
 
-def test_search_memory_records_service_returns_results_while_sqlite_write_lock_is_held(monkeypatch, tmp_path: Path) -> None:
+def test_search_memory_records_service_returns_results_while_sqlite_write_lock_is_held(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -387,6 +413,12 @@ def test_search_memory_records_service_returns_results_while_sqlite_write_lock_i
             tags=["search", "reliability"],
         )
         assert record is not None
+        assert runtime.embedding_maintenance is not None
+        monkeypatch.setattr(
+            runtime.embedding_maintenance,
+            "ensure_searchable_memory_embeddings",
+            lambda _candidates: None,
+        )
 
         lock_conn = sqlite3.connect(str(runtime.db_manager.db_path), timeout=0.1)
         try:
