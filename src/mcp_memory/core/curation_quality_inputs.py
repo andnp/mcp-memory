@@ -23,6 +23,7 @@ class CurationQualityMutation:
     before_entities: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     after_entities: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     structural_deltas: tuple[Mapping[str, Any], ...] = ()
+    affected_memory_clusters: tuple[tuple[UUID, ...], ...] = ()
     evidence_id: str | None = None
 
 
@@ -62,6 +63,12 @@ def mutations_from_direct_evidence(evidence: Any) -> CurationQualityMutation:
         for delta in getattr(evidence, "deltas", ())
     )
     before_entities = payload.get("before_entities", {})
+    raw_clusters = payload.get("affected_memory_clusters", ())
+    clusters = tuple(
+        tuple(UUID(str(value)) for value in cluster if _is_uuid(str(value)))
+        for cluster in raw_clusters
+        if isinstance(cluster, (list, tuple))
+    ) if isinstance(raw_clusters, (list, tuple)) else ()
     after_entities: dict[str, Mapping[str, Any]] = {
         str(delta["entity_id"]): delta["snapshot"]
         for delta in deltas
@@ -87,6 +94,7 @@ def mutations_from_direct_evidence(evidence: Any) -> CurationQualityMutation:
         ),
         after_entities=after_entities,
         structural_deltas=deltas,
+        affected_memory_clusters=clusters,
         evidence_id=evidence_id,
     )
 

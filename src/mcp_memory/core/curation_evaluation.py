@@ -10,6 +10,8 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from mcp_memory.core.curation_quality_clusters import evaluate_cluster_utility
+
 
 @dataclass(frozen=True, slots=True)
 class ReplayResult:
@@ -61,6 +63,7 @@ class ReplayCase:
     before_search_epochs: Mapping[str, int] = field(default_factory=dict)
     after_search_epochs: Mapping[str, int] = field(default_factory=dict)
     consistency_flags: tuple[str, ...] = ()
+    affected_memory_clusters: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.query_id.strip():
@@ -90,6 +93,18 @@ class ReplayCaseReport:
     intended_top_k_before: int = 0
     intended_top_k_after: int = 0
     intended_top_k_loss: bool = False
+    cluster_utility_before: float = 0.0
+    cluster_utility_after: float = 0.0
+    duplicate_density_before: float = 0.0
+    duplicate_density_after: float = 0.0
+
+    @property
+    def cluster_utility_delta(self) -> float:
+        return self.cluster_utility_after - self.cluster_utility_before
+
+    @property
+    def duplicate_density_change(self) -> float:
+        return self.duplicate_density_after - self.duplicate_density_before
 
     @property
     def intended_rank_change(self) -> int | None:
@@ -188,6 +203,12 @@ def _evaluate_case(case: ReplayCase) -> ReplayCaseReport:
     intended_top_k_before = set(before_ids[: case.top_k]) & intended
     intended_top_k_after = set(after_ids[: case.top_k]) & intended
     neutral_reason = _neutral_reason(case, intended, before_ids, after_ids)
+    cluster_utility = evaluate_cluster_utility(
+        before_ids=before_ids,
+        after_ids=after_ids,
+        clusters=case.affected_memory_clusters,
+        top_k=case.top_k,
+    )
     return ReplayCaseReport(
         query_id=case.query_id,
         intended_rank_before=_first_rank(before_ids, intended),
@@ -206,7 +227,7 @@ def _evaluate_case(case: ReplayCase) -> ReplayCaseReport:
             zero_results=not case.before.results,
             top_k=case.top_k,
             neutral=neutral_reason is not None,
-        ),
+        ) + cluster_utility.before,
         retrieval_utility_after=_case_utility(
             intended_rank=_first_rank(after_ids, intended),
             irrelevant_top_results=sum(
@@ -215,11 +236,15 @@ def _evaluate_case(case: ReplayCase) -> ReplayCaseReport:
             zero_results=not case.after.results,
             top_k=case.top_k,
             neutral=neutral_reason is not None,
-        ),
+        ) + cluster_utility.after,
         neutral_reason=neutral_reason,
         intended_top_k_before=len(intended_top_k_before),
         intended_top_k_after=len(intended_top_k_after),
         intended_top_k_loss=bool(intended_top_k_before - intended_top_k_after),
+        cluster_utility_before=cluster_utility.before,
+        cluster_utility_after=cluster_utility.after,
+        duplicate_density_before=cluster_utility.duplicate_density_before,
+        duplicate_density_after=cluster_utility.duplicate_density_after,
     )
 
 

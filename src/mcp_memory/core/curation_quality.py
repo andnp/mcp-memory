@@ -499,6 +499,10 @@ class CurationQualitySampler:
                     before_search_epochs=query.before_search_epochs,
                     after_search_epochs=after_epochs,
                     consistency_flags=consistency.flags,
+                    affected_memory_clusters=tuple(
+                        tuple(str(value) for value in cluster)
+                        for cluster in mutation.affected_memory_clusters
+                    ),
                 )
             ]
         )
@@ -575,6 +579,8 @@ class CurationQualitySampler:
                 ),
                 "query_provenance": query.provenance.value,
                 "query_trusted": query.trusted,
+                "cluster_utility_delta": case.cluster_utility_delta,
+                "duplicate_density_change": case.duplicate_density_change,
             },
             content_quality_score_before=content.before,
             content_quality_score_after=content.after,
