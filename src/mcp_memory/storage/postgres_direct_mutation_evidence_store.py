@@ -45,8 +45,8 @@ class PostgresDirectMutationEvidenceStore:
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (evidence.evidence_id, ordinal, delta.kind, delta.entity_id,
-                         delta.before_revision, delta.after_revision, delta.before_exists,
-                         delta.after_exists, delta.transition, json.dumps(delta.snapshot, sort_keys=True)),
+                         delta.before_revision, delta.after_revision, int(delta.before_exists),
+                         int(delta.after_exists), delta.transition, json.dumps(delta.snapshot, sort_keys=True)),
                     )
             connection.commit()
         return evidence
