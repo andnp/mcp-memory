@@ -26,7 +26,7 @@ This is a proposed direction, not the canonical description of current runtime b
 - `15-search-repair-queue-architecture.md` owns embedding-repair behavior.
 - `16-storage-backend-selection-and-shared-mode.md` and `17-shared-mode-readthrough-cache.md` own backend authority and cache boundaries.
 - `20-memory-mutation-history-and-restore.md` owns reversible history, protected memories, and restore behavior.
-- `../plans/10-curation-harness-and-typed-planner.md` owns the planner/executor runtime design.
+- `../plans/10-curation-harness-and-typed-planner.md` owns the direct-agent curator runtime boundary.
 
 ## 3. Decision
 

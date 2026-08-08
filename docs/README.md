@@ -74,7 +74,7 @@ Recommended entries:
 
 - `plans/07-architecture-review-and-refactor-roadmap.md` — larger refactor context
 - `plans/08-24h-health-follow-up-task-list.md` — operator follow-up context
-- `plans/10-curation-harness-and-typed-planner.md` — draft direction for automatic memory cleanup
+- `plans/10-curation-harness-and-typed-planner.md` — active direct-agent curator contract
 - `plans/11-curation-implementation-task-list.md` — small-agent implementation backlog for the curation direction
 - `plans/09-dual-backend-storage-and-writeback-cache.md` — historical bridge for the storage/cache transition
 - `plans/09-single-writer-task-state-resilience.md` — task-state hardening context

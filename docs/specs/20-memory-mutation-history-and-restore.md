@@ -28,7 +28,7 @@ This is a proposed direction, not the canonical description of current runtime b
 - `16-storage-backend-selection-and-shared-mode.md` owns backend authority.
 - `17-shared-mode-readthrough-cache.md` owns derivative-cache behavior.
 - `19-curation-quality-and-family-ownership.md` owns semantic policy, human intent, and maintenance-family boundaries.
-- `../plans/10-curation-harness-and-typed-planner.md` owns typed planning, action transactions, receipts, and reconciliation.
+- `../plans/10-curation-harness-and-typed-planner.md` owns the direct-agent curator boundary; this spec owns mutation history, receipts, protection, and restore semantics.
 
 ## 3. Decision
 
