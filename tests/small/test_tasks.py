@@ -2686,7 +2686,7 @@ async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_requeues_running_tasks_interrupted_by_shutdown(db_manager) -> None:
+async def test_runtime_task_worker_cancels_running_tasks_interrupted_by_shutdown(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
     task = queue.enqueue(
@@ -2726,16 +2726,16 @@ async def test_runtime_task_worker_requeues_running_tasks_interrupted_by_shutdow
     task_runs = queue.list_task_runs(task_id=task.id)
 
     assert cancelled.is_set()
-    assert task_after_stop.status == "pending"
-    assert task_after_stop.cancellation_reason is None
-    assert task_after_stop.cancelled_by is None
-    assert task_after_stop.last_error == "Task interrupted during daemon shutdown; retrying"
-    assert [task_run.status for task_run in task_runs] == ["retry"]
-    assert task_runs[0].result == {"retry_reason": "Task interrupted during daemon shutdown; retrying"}
+    assert task_after_stop.status == "cancelled"
+    assert task_after_stop.cancellation_reason == "daemon_shutdown"
+    assert task_after_stop.cancelled_by == "daemon"
+    assert task_after_stop.last_error == "daemon_shutdown"
+    assert [task_run.status for task_run in task_runs] == ["cancelled"]
+    assert task_runs[0].result == {"cancelled_by": "daemon", "reason": "daemon_shutdown"}
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_requeues_shutdown_interruption_and_reconciles_attempts_and_conversations(
+async def test_runtime_task_worker_cancels_shutdown_interruption_and_reconciles_attempts_and_conversations(
     db_manager,
 ) -> None:
     queue = SQLiteTaskQueue(db_manager)
@@ -2821,15 +2821,15 @@ async def test_runtime_task_worker_requeues_shutdown_interruption_and_reconciles
     conversation = provider_usage.get_conversation("req-shutdown-retry")[0]
 
     assert cancelled.is_set()
-    assert task_after_stop.status == "pending"
-    assert task_after_stop.last_error == "Task interrupted during daemon shutdown; retrying"
-    assert attempt.status == "error"
-    assert attempt.termination_reason == "daemon_shutdown_retry"
-    assert attempt.error_text == "Task interrupted during daemon shutdown; retrying"
-    assert conversation.status == "error"
-    assert conversation.reason_category == "recovery"
-    assert conversation.reason_code == "daemon_shutdown_retry"
-    assert conversation.error_text == "Task interrupted during daemon shutdown; retrying"
+    assert task_after_stop.status == "cancelled"
+    assert task_after_stop.cancellation_reason == "daemon_shutdown"
+    assert task_after_stop.cancelled_by == "daemon"
+    assert task_after_stop.last_error == "daemon_shutdown"
+    assert attempt.status == "cancelled"
+    assert attempt.termination_reason == "task_cancelled"
+    assert attempt.error_text == "daemon_shutdown"
+    assert conversation.status == "cancelled"
+    assert conversation.error_text == "daemon_shutdown"
 
 
 @pytest.mark.asyncio

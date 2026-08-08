@@ -199,6 +199,32 @@ class RuntimeTaskWorker:
 
     async def stop(self, grace_period_seconds: float) -> None:
         self._stop_event.set()
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is not None:
+            while True:
+                running_tasks = await asyncio.to_thread(
+                    task_queue.list_tasks,
+                    status="running",
+                    workspace_id=None,
+                    limit=200,
+                )
+                if not running_tasks:
+                    break
+                for task in running_tasks:
+                    try:
+                        await asyncio.to_thread(
+                            task_queue.request_cancel,
+                            task.id,
+                            cancelled_by="daemon",
+                            reason="daemon_shutdown",
+                        )
+                    except ValueError:
+                        logger.debug(
+                            "Task was terminalized before daemon shutdown cancellation",
+                            extra={"task_id": task.id},
+                        )
+                if len(running_tasks) < 200:
+                    break
         runner = self._runner
         reconciliation_runner = self._reconciliation_runner
         active_runners = [task for task in (runner, reconciliation_runner) if task is not None]
@@ -689,18 +715,13 @@ class RuntimeTaskWorker:
                 )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
             elif self._stop_event.is_set():
-                retried_task = await asyncio.to_thread(
-                    task_queue.retry_running_task,
+                cancelled_task = await asyncio.to_thread(
+                    task_queue.finalize_cancellation,
                     task.id,
-                    "Task interrupted during daemon shutdown; retrying",
-                    None,
-                    task.execution_epoch,
+                    cancelled_at=None,
+                    execution_epoch=task.execution_epoch,
                 )
-                await asyncio.to_thread(
-                    self._reconcile_retryable_interruption,
-                    retried_task,
-                    termination_reason="daemon_shutdown_retry",
-                )
+                await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
             else:
                 failed_task = await asyncio.to_thread(
                     task_queue.fail_permanently,
