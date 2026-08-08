@@ -30,6 +30,7 @@ Use ZeroMQ over a stable local IPC socket between the MCP thin proxy and the dae
 ### Current Timeout Behavior
 - the MCP thin proxy applies a 60s client timeout budget for daemon-backed tool calls
 - the daemon transport enforces bounded execution deadlines instead of allowing requests to hang forever
+- daemon health probes are bounded independently of request execution: the proxy monitor uses a 2.0s deadline, hook health snapshots use 0.2s, and socket probes are clamped to a short 0.05–0.1s range
 - slower request classes such as search, read, `record_thought`, and internal tool paths use an extended 60s transport budget; ordinary paths keep a shorter default deadline
 - when a transport deadline expires, the daemon returns a structured timeout payload (`status = "error"`, `error = "daemon_request_timed_out"`, plus path/timeout metadata)
 - repeated client-observed timeout failures trigger background daemon metadata refresh and can escalate to a forced daemon restart
@@ -122,7 +123,13 @@ The following are still product decisions, not current guarantees:
 ## 8. Current Stop/Restart Safety Notes
 
 - daemon stop/restart now targets the daemon process group, not only the top-level daemon PID
+- shutdown first requests terminal cancellation for running tasks with daemon provenance (`reason = "daemon_shutdown"`, `cancelled_by = "daemon"`); runner cancellation is a follow-up cleanup action, not a replacement for the terminal task state
 - graceful shutdown still starts with `SIGTERM`
 - if the daemon does not exit within the configured grace window, shutdown escalates to `SIGKILL`
 - stale socket cleanup runs after stop/recovery so the next boot does not inherit a dead transport endpoint
 - this shipped behavior exists specifically to avoid the previously observed failure mode where CLI/status could show “no daemon registered” while the old daemon process was still alive and interfering with memory reads/writes
+
+Best-effort SQLite-side surface and retrieval-telemetry writes use a bounded 0.1s
+connection wait. Lock contention can therefore skip non-authoritative bookkeeping
+without extending the request indefinitely; authoritative memory and task writes do
+not use this best-effort path.

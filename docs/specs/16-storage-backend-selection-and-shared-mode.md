@@ -133,6 +133,10 @@ The intended storage architecture has four layers:
 3. repository/query layer
 4. search adapter layer
 
+The application layer owns the cache and search contracts consumed by use cases.
+The storage layer owns the SQLite and Postgres adapters for those contracts, including
+backend-specific SQL, connection behavior, and derivative cache persistence.
+
 This seam already exists in broad shape, but the codebase still has cleanup work remaining.
 Several helper/operator modules still branch on connection API shape and adapt SQL by backend instead of depending on stable protocol-level interfaces.
 
@@ -140,6 +144,7 @@ The intended direction remains:
 
 - runtime composition should depend on backend-neutral interfaces where practical
 - backend-specific SQL should live in backend-specific repository/query implementations
+- cache and search policy should remain in application-owned contracts rather than backend adapters
 - helper and operator surfaces should not need to probe whether they received SQLite or Postgres
 
 ## 8. Search decision

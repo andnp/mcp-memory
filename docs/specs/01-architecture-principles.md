@@ -35,6 +35,13 @@ The MCP-facing process should stay thin.
 - the global daemon owns runtime state
 - daemon responsibilities include background work, management API, and persistence coordination
 
+### 4.1 Application and Storage Boundaries
+
+- the application layer owns the cache and search contracts used by memory read/search use cases
+- the storage layer owns the SQLite and Postgres adapters that implement those contracts
+- backend-specific SQL, connection behavior, and cache persistence stay behind storage implementations
+- application use cases must not select a backend by inspecting connection or cursor details
+
 ## 5. Explicit Authority for Shared-Mode Cache and Writeback
 Shared-mode cache behavior must stay narrow and honest.
 

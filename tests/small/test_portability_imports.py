@@ -63,6 +63,34 @@ def test_shared_read_cache_dtos_are_application_owned_with_storage_aliases() -> 
     assert StorageSharedReadCacheSearchRequest is SharedReadCacheSearchRequest
 
 
+def test_search_cache_request_normalizes_ranking_context_without_timing_fields() -> None:
+    request = SharedReadCacheSearchRequest(
+        query="ports",
+        workspace_id="workspace-a",
+        limit=10,
+        adaptive_limit=False,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        ranking_workspace_id="workspace-b",
+    )
+
+    params = request.normalized_params()
+
+    assert params == {
+        "cache_schema_version": 1,
+        "query": "ports",
+        "workspace_id": "workspace-a",
+        "limit": 10,
+        "adaptive_limit": False,
+        "memory_type": None,
+        "status": None,
+        "include_superseded": False,
+        "ranking_workspace_id": "workspace-b",
+    }
+    assert not any(key.endswith("_ms") or "time" in key for key in params)
+
+
 FORBIDDEN_CORE_IMPORT_ROOTS = (
     "mcp_memory.application",
     "mcp_memory.management",
