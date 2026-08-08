@@ -13,16 +13,15 @@ from mcp_memory.core.curation_quality_consistency import assess_replay_consisten
 from mcp_memory.core.curation_quality_inputs import CurationQualityMutation
 from mcp_memory.core.curation_quality_policy import QualityOutcome, should_escalate_quality
 from mcp_memory.core.curation_quality_structural import evaluate_structural_mutation
-from mcp_memory.core.curation_shadow import _direct_quality_run, _evaluate_direct_quality
+from mcp_memory.core.curation_shadow import (
+    _direct_quality_run,
+    _evaluate_direct_quality,
+    _persist_direct_quality_run,
+)
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.context import ApplicationContext
 from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
-from mcp_memory.curation_store import (
-    CurationRun,
-    CurationRunOutcome,
-    CurationRunState,
-    SQLiteCurationStore,
-)
+from mcp_memory.curation_store import SQLiteCurationStore
 
 
 pytestmark = pytest.mark.small
@@ -49,6 +48,20 @@ class _EvidenceRepository:
     def put_quality_evidence(self, evidence):
         self.values.append(evidence)
         return evidence
+
+
+class _RacingCurationRepository:
+    def __init__(self) -> None:
+        self.run = None
+
+    def get_run(self, run_id):
+        if self.run is not None and self.run.run_id == run_id:
+            return self.run
+        return None
+
+    def create_run(self, run):
+        self.run = run
+        raise RuntimeError("simulated concurrent insert")
 
 
 def _run():
@@ -115,16 +128,6 @@ def test_direct_quality_uses_durable_repository(db_manager) -> None:
     )
     task = _task()
     run = _direct_quality_run(task)
-    SQLiteCurationStore(db_manager).create_run(
-        CurationRun(
-            run_id=run.run_id,
-            frontier_key=run.frontier_key,
-            context_fingerprint="direct-quality-test",
-            state=CurationRunState.TERMINAL,
-            outcome=CurationRunOutcome.APPLIED,
-            created_at=datetime.now(UTC),
-        )
-    )
 
     evaluation = _evaluate_direct_quality(
         ctx,
@@ -135,6 +138,9 @@ def test_direct_quality_uses_durable_repository(db_manager) -> None:
 
     assert evaluation.status == "recorded"
     assert len(evaluation.evidence) == 1
+    persisted = SQLiteCurationStore(db_manager).get_run(run.run_id)
+    assert persisted is not None
+    assert persisted.state.value == "terminal"
     stored = quality_store.list_quality_evidence(run_id=_direct_quality_run(task).run_id)
     assert len(stored) == 1
     assert stored[0].action_id == evaluation.evidence[0].action_id
@@ -154,6 +160,16 @@ def test_direct_quality_reports_missing_repository(db_manager) -> None:
     assert evaluation.evidence == ()
     assert evaluation.status == "unavailable"
     assert evaluation.reason == "quality_repository_unavailable"
+
+
+def test_direct_quality_run_recovers_from_concurrent_insert() -> None:
+    repository = _RacingCurationRepository()
+    run = _direct_quality_run(_task())
+    context = ApplicationContext(curation=repository)
+
+    persisted = _persist_direct_quality_run(context, run)
+
+    assert persisted == run
 
 
 def _mutation(*, outcome: str = "applied_verified", operation: str = "rewrite_memory"):

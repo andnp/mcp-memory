@@ -19,7 +19,12 @@ from mcp_memory.core.curation_quality import (
 from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
-from mcp_memory.core.ports.curation import CurationRepository, CurationRun
+from mcp_memory.core.ports.curation import (
+    CurationRepository,
+    CurationRun,
+    CurationRunOutcome,
+    CurationRunState,
+)
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
@@ -224,11 +229,16 @@ def _persist_direct_quality_run(ctx: ApplicationContext, run: CurationRun) -> Cu
     creator = getattr(repository, "create_run", None)
     if not callable(getter) or not callable(creator):
         return None
+    existing = cast(CurationRun | None, getter(run.run_id))
+    if existing is not None:
+        return existing
     try:
-        existing = cast(CurationRun | None, getter(run.run_id))
-        return existing if existing is not None else cast(CurationRun, creator(run))
+        return cast(CurationRun, creator(run))
     except Exception:
-        return None
+        existing = cast(CurationRun | None, getter(run.run_id))
+        if existing is None:
+            raise
+        return existing
 
 
 def _direct_quality_run(task: TaskRecord) -> CurationRun:
@@ -239,6 +249,8 @@ def _direct_quality_run(task: TaskRecord) -> CurationRun:
         context_fingerprint=f"direct:{task.id}:{task.execution_epoch}",
         policy_version=str(task.data.get("policy_version", "direct-quality-v1")),
         selector_strategy=str(task.data.get("strategy", "direct")),
+        state=CurationRunState.TERMINAL,
+        outcome=CurationRunOutcome.APPLIED,
     )
 
 
