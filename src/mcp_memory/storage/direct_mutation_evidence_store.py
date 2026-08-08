@@ -20,7 +20,15 @@ class SQLiteDirectMutationEvidenceStore:
         existing = self.get_by_idempotency_key(evidence.idempotency_key)
         if existing is not None:
             return existing
-        return self.save(evidence)
+        try:
+            return self.save(evidence)
+        except sqlite3.IntegrityError as exc:
+            if "idempotency_key" not in str(exc):
+                raise
+            existing = self.get_by_idempotency_key(evidence.idempotency_key)
+            if existing is None:
+                raise
+            return existing
 
     def save(self, evidence: DirectMutationEvidence) -> DirectMutationEvidence:
         conn = self._db.get_connection()
