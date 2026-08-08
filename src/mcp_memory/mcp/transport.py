@@ -14,6 +14,12 @@ from mcp_memory.core.curator_evidence import (
     current_curator_execution,
     finish_tool_call,
 )
+from mcp_memory.core.direct_mutation_evidence import (
+    DirectMutationEvidence,
+    entity_deltas_for_payload,
+    reconcile_direct_mutation_evidence,
+)
+from mcp_memory.internal_tool_call_tracking import internal_tool_is_mutating
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 
@@ -123,6 +129,7 @@ async def _dispatch_tool(
         return _unknown_tool_response(name)
 
     execution_token = None
+    direct_evidence: DirectMutationEvidence | None = None
     if on_success is not None:
         raw_task_id = arguments.get("task_id")
         task_id = raw_task_id if isinstance(raw_task_id, str) else None
@@ -133,6 +140,17 @@ async def _dispatch_tool(
                 task_id=task_id,
                 execution_epoch=execution_epoch,
                 session_id=getattr(ctx, "session_id", None),
+            )
+        if internal_tool_is_mutating(name) and getattr(ctx, "direct_mutation_evidence", None) is not None:
+            current = current_curator_execution()
+            direct_evidence = DirectMutationEvidence.start(
+                task_id=task_id if task_id is not None else getattr(current, "task_id", None),
+                execution_epoch=execution_epoch if execution_epoch is not None else getattr(current, "execution_epoch", None),
+                session_id=getattr(current, "session_id", None) or getattr(ctx, "session_id", None),
+                call_id=getattr(current, "call_id", None),
+                sequence=getattr(current, "sequence", None),
+                tool_name=name,
+                arguments=arguments,
             )
     try:
         response = await call_service(
@@ -145,6 +163,8 @@ async def _dispatch_tool(
             on_success(ctx, name, arguments, response)
         return response
     finally:
+        if direct_evidence is not None:
+            _finalize_direct_mutation_evidence(ctx, direct_evidence, arguments, locals().get("response"))
         if execution_token is not None:
             finish_tool_call(execution_token)
 
@@ -306,3 +326,60 @@ def _internal_tool_response_succeeded(response: list[TextContent]) -> bool:
             return True
         return not (isinstance(payload, dict) and payload.get("status") == "error")
     return True
+
+
+def _finalize_direct_mutation_evidence(
+    ctx: ApplicationContext,
+    evidence: DirectMutationEvidence,
+    arguments: dict[str, object],
+    response: object,
+) -> None:
+    payload = _response_payload(response)
+    tracker = getattr(ctx, "internal_tool_call_tracker", None)
+    ledger_entry: dict[str, object] = {}
+    if isinstance(tracker, InternalToolCallTracker) and evidence.task_id is not None:
+        snapshot = tracker.snapshot_task(evidence.task_id)
+        if snapshot is not None:
+            ledger_entry = next(
+                (dict(item) for item in reversed(snapshot.tool_call_ledger)
+                 if item.get("call_id") == evidence.call_id),
+                {},
+            )
+    deltas = entity_deltas_for_payload(payload, arguments, repository=getattr(ctx, "repository", None))
+    semantic = _semantic_postcondition(ctx, payload, deltas)
+    finalized = reconcile_direct_mutation_evidence(
+        evidence.finish(payload=payload, ledger_entry=ledger_entry, deltas=deltas),
+        ledger_entry=ledger_entry,
+        payload=payload,
+        semantic_postcondition=semantic,
+    )
+    store = getattr(ctx, "direct_mutation_evidence", None)
+    saver = getattr(store, "save", None)
+    if callable(saver):
+        saver(finalized)
+
+
+def _response_payload(response: object) -> dict[str, object]:
+    if not isinstance(response, list):
+        return {"status": "error", "error": "missing_response"}
+    for content in response:
+        if content.type == "text":
+            try:
+                value = json.loads(content.text)
+            except (TypeError, ValueError):
+                return {"status": "error", "error": "malformed_response"}
+            return value if isinstance(value, dict) else {"status": "error", "error": "malformed_response"}
+    return {"status": "error", "error": "missing_response"}
+
+
+def _semantic_postcondition(
+    ctx: ApplicationContext,
+    payload: dict[str, object],
+    deltas: tuple[object, ...],
+) -> bool | None:
+    if payload.get("status", "ok") == "error":
+        return False
+    if not deltas:
+        return False
+    repository = getattr(ctx, "repository", None)
+    return True if repository is not None else None

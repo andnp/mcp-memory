@@ -155,6 +155,68 @@ def productive_mutation_count(evidence: Iterable[DirectMutationEvidence]) -> int
     return sum(item.outcome == DirectMutationOutcome.APPLIED_VERIFIED for item in evidence)
 
 
+def entity_deltas_for_payload(
+    payload: dict[str, Any],
+    arguments: dict[str, Any],
+    *,
+    repository: Any = None,
+) -> tuple[DirectMutationEntityDelta, ...]:
+    """Extract record/link transitions from compact internal tool responses."""
+    records = list(_record_payloads(payload))
+    seen: set[str] = set()
+    deltas: list[DirectMutationEntityDelta] = []
+    for key, record in records:
+        entity_id = record.get("id")
+        if not isinstance(entity_id, str) or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        before = repository.get_memory(entity_id) if repository is not None else None
+        before_revision = getattr(before, "updated_at", None)
+        after_revision = record.get("updated_at") if isinstance(record.get("updated_at"), str) else None
+        transition = "created" if before is None else "updated"
+        if key == "deleted":
+            transition, after_revision = "deleted", None
+        elif record.get("status") == "archived" and getattr(before, "status", None) != "archived":
+            transition = "archived"
+        deltas.append(DirectMutationEntityDelta(
+            kind=EvidenceEntityKind.RECORD,
+            entity_id=entity_id,
+            before_revision=before_revision,
+            after_revision=after_revision,
+            before_exists=before is not None,
+            after_exists=key != "deleted",
+            transition=transition,
+            snapshot=dict(record),
+        ))
+    link = payload.get("link")
+    if not isinstance(link, dict):
+        link = {
+            "source_id": arguments.get("source_id"),
+            "target_id": arguments.get("target_id"),
+            "link_type": arguments.get("link_type"),
+        }
+    source_id, target_id, link_type = link.get("source_id"), link.get("target_id"), link.get("link_type")
+    if all(isinstance(item, str) and item for item in (source_id, target_id, link_type)) and "link" in payload:
+        entity_id = f"{source_id}:{target_id}:{link_type}"
+        transition = "deleted" if payload.get("deleted") is not None else "created"
+        deltas.append(DirectMutationEntityDelta(
+            kind=EvidenceEntityKind.LINK, entity_id=entity_id,
+            before_exists=transition == "deleted", after_exists=transition != "deleted",
+            transition=transition, snapshot=dict(link),
+        ))
+    return tuple(deltas)
+
+
+def _record_payloads(payload: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(value.get("id"), str):
+            yield key, value
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    yield key, item
+
+
 def _ledger_matches(evidence: DirectMutationEvidence, ledger: object) -> bool:
     if not isinstance(ledger, dict):
         return False
