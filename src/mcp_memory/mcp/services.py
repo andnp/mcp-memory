@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 from mcp_memory.application.memory_use_cases import (
     CommitSkillReviewUseCase,
+    ReadSkillReviewLedgerUseCase,
     ReadMemoryRecordUseCase,
     RecordSkillObservationUseCase,
     RecordThoughtUseCase,
@@ -27,6 +28,7 @@ from mcp_memory.mcp.adapters import (
     parse_record_thought_arguments,
     parse_resolve_skill_observation_arguments,
     parse_search_arguments,
+    parse_skill_review_ledger_arguments,
     parse_skill_observation_arguments,
 )
 from mcp_memory.mcp.cache_policy import (
@@ -121,6 +123,12 @@ def commit_skill_review_service(ctx: ApplicationContext, arguments: dict) -> dic
     return CommitSkillReviewUseCase(ctx).execute(parse_commit_skill_review_arguments(arguments))
 
 
+def skill_review_ledger_service(ctx: MemoryReadContext, arguments: dict) -> dict:
+    return ReadSkillReviewLedgerUseCase(_memory_read_dependencies(ctx)).execute(
+        parse_skill_review_ledger_arguments(arguments)
+    )
+
+
 def search_memory_records_service(
     ctx: MemoryReadContext,
     arguments: dict,
@@ -208,6 +216,7 @@ __all__ = [
     "record_skill_observation_service",
     "resolve_skill_observation_service",
     "commit_skill_review_service",
+    "skill_review_ledger_service",
     "search_memory_records_service",
     "search_memory_records_async_service",
     "read_memory_record_service",

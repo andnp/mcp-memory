@@ -6,12 +6,17 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Literal, Mapping
 from uuid import UUID
 
 
 PROTOCOL_VERSION = 1
+LEDGER_PROTOCOL_VERSION = 1
+LEDGER_ID = "skill-observation-ledger-v1"
+LEDGER_PAGE_SIZE_MAX = 100
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_LEDGER_TOKEN = re.compile(r"^([0-9a-f]{64}):(0|[1-9][0-9]*)$")
 Resolution = Literal["actioned", "verified", "deferred"]
 
 
@@ -99,6 +104,62 @@ class SkillReviewCommitResponse:
         }
 
 
+@dataclass(frozen=True)
+class SkillReviewLedgerRequest:
+    workspace_id: str
+    page_size: int
+    page_token: str | None = None
+    protocol_version: int = LEDGER_PROTOCOL_VERSION
+
+
+def parse_skill_review_ledger_request(arguments: Mapping[str, object]) -> SkillReviewLedgerRequest:
+    """Validate one read-only ledger page request."""
+    version = arguments.get("protocol_version")
+    if isinstance(version, bool) or version != LEDGER_PROTOCOL_VERSION:
+        raise ValueError("unsupported_ledger_protocol_version")
+    workspace_id = _required_text(arguments, "workspace_id")
+    page_size_value = arguments.get("page_size", LEDGER_PAGE_SIZE_MAX)
+    if isinstance(page_size_value, bool) or not isinstance(page_size_value, int):
+        raise ValueError("page_size must be an integer")
+    if not 1 <= page_size_value <= LEDGER_PAGE_SIZE_MAX:
+        raise ValueError(f"page_size must be between 1 and {LEDGER_PAGE_SIZE_MAX}")
+    page_token = arguments.get("page_token")
+    if page_token is not None:
+        if not isinstance(page_token, str) or _LEDGER_TOKEN.fullmatch(page_token) is None:
+            raise ValueError("page_token is invalid")
+    return SkillReviewLedgerRequest(workspace_id, page_size_value, page_token)
+
+
+def ledger_token_parts(page_token: str | None) -> tuple[str | None, int]:
+    """Decode a snapshot-bound page cursor into its identity and offset."""
+    if page_token is None:
+        return None, 0
+    match = _LEDGER_TOKEN.fullmatch(page_token)
+    if match is None:
+        raise ValueError("page_token is invalid")
+    return match.group(1), int(match.group(2))
+
+
+def skill_review_ledger_entry(record: object) -> dict[str, object]:
+    """Build the bounded summary projection used by the review agent."""
+    metadata = getattr(record, "metadata", {})
+    return {
+        "memory_id": str(getattr(record, "id")),
+        "memory_ref": getattr(record, "memory_ref"),
+        "title": str(getattr(record, "title")),
+        "summary": str(getattr(record, "summary") or ""),
+        "skill": str(metadata.get("skill", "")) if isinstance(metadata, Mapping) else "",
+        "created_at": str(getattr(record, "created_at")),
+        "updated_at": str(getattr(record, "updated_at")),
+    }
+
+
+def skill_review_ledger_snapshot_id(entries: Sequence[Mapping[str, object]]) -> str:
+    """Hash the complete ordered ledger projection for page consistency."""
+    encoded = json.dumps(list(entries), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def parse_skill_review_commit_request(arguments: Mapping[str, object]) -> SkillReviewCommitRequest:
     """Validate one protocol request before any storage mutation is attempted."""
     version = arguments.get("protocol_version")
@@ -174,6 +235,9 @@ def _required_text(value: Mapping[str, object], key: str) -> str:
 
 
 __all__ = [
+    "LEDGER_ID",
+    "LEDGER_PAGE_SIZE_MAX",
+    "LEDGER_PROTOCOL_VERSION",
     "PROTOCOL_VERSION",
     "Resolution",
     "SkillReviewCommitDisposition",
@@ -181,5 +245,10 @@ __all__ = [
     "SkillReviewCommitResponse",
     "SkillReviewDisposition",
     "SkillReviewEvidence",
+    "SkillReviewLedgerRequest",
+    "ledger_token_parts",
     "parse_skill_review_commit_request",
+    "parse_skill_review_ledger_request",
+    "skill_review_ledger_entry",
+    "skill_review_ledger_snapshot_id",
 ]

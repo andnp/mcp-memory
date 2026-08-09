@@ -2,7 +2,12 @@ from mcp.types import Tool
 
 SKILL_REVIEW_READ_ONLY_SCOPE = "skill_review_read_only"
 SKILL_REVIEW_READ_ONLY_TOOLS = frozenset(
-    {"search_memory_records", "read_memory_records", "read_memory_record"}
+    {
+        "get_skill_review_ledger",
+        "search_memory_records",
+        "read_memory_records",
+        "read_memory_record",
+    }
 )
 SKILL_REVIEW_WRITER_SCOPE = "skill_review_writer"
 SKILL_REVIEW_WRITER_TOOLS = frozenset({"commit_skill_review"})
@@ -77,6 +82,23 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
                     "note": {"type": "string"},
                 },
                 "required": ["memory_id", "resolution", "note"],
+            },
+        ),
+        Tool(
+            name="get_skill_review_ledger",
+            description=(
+                "Return a deterministic, summary-first page of every open skill observation for one workspace. "
+                "Use the returned next_page_token until it is null; page tokens are bound to the snapshot_id."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "protocol_version": {"type": "integer", "const": 1},
+                    "workspace_id": {"type": "string"},
+                    "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "page_token": {"type": "string"},
+                },
+                "required": ["protocol_version", "workspace_id"],
             },
         ),
         Tool(

@@ -25,6 +25,7 @@ class MemorySearchPort(Protocol):
     def resolve_memory_id(self, memory_id: str) -> str | None: ...
 
 
+
 CACHE_SCHEMA_VERSION = 1
 
 

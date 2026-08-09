@@ -111,7 +111,12 @@ def test_skill_review_scope_advertises_only_read_tools() -> None:
     """Expose only memory search and read tools to isolated skill reviews."""
     names = [tool.name for tool in get_memory_tools(SKILL_REVIEW_READ_ONLY_SCOPE)]
 
-    assert names == ["search_memory_records", "read_memory_records", "read_memory_record"]
+    assert names == [
+        "get_skill_review_ledger",
+        "search_memory_records",
+        "read_memory_records",
+        "read_memory_record",
+    ]
     assert allowed_memory_tool_names(SKILL_REVIEW_READ_ONLY_SCOPE) == frozenset(names)
 
 

@@ -1274,6 +1274,39 @@ class RelationalMemoryRepository:
         rows = conn.execute(query, params).fetchall()
         return [self._hydrate_record(conn, row) for row in rows]
 
+    def list_skill_review_observations(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[RelationalMemoryRecord]:
+        """List the authoritative open skill-observation ledger slice."""
+        if limit <= 0 or offset < 0:
+            raise ValueError("ledger limit and offset are invalid")
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            """
+            SELECT DISTINCT memories.*
+            FROM memories
+            JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id
+            WHERE memory_workspaces.workspace_id = ?
+              AND memories.status = 'active'
+              AND memories.type = 'observation'
+              AND EXISTS (
+                  SELECT 1
+                  FROM memory_tags
+                  JOIN tags ON tags.id = memory_tags.tag_id
+                  WHERE memory_tags.memory_id = memories.id
+                    AND tags.name = 'skill-observation'
+              )
+            ORDER BY memories.updated_at ASC, memories.created_at ASC, memories.id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (workspace_id, limit, offset),
+        ).fetchall()
+        return [self._hydrate_record(conn, row) for row in rows]
+
     def count_memories_updated_since(
         self,
         cutoff: str,

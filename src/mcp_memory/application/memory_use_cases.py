@@ -39,7 +39,15 @@ from mcp_memory.application.payloads import (
     build_read_payload,
     build_search_result_payloads,
 )
-from mcp_memory.application.skill_review_contract import SkillReviewCommitRequest
+from mcp_memory.application.skill_review_contract import (
+    LEDGER_ID,
+    LEDGER_PROTOCOL_VERSION,
+    SkillReviewCommitRequest,
+    SkillReviewLedgerRequest,
+    ledger_token_parts,
+    skill_review_ledger_entry,
+    skill_review_ledger_snapshot_id,
+)
 from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
     SearchMemoryRecordsOperation,
@@ -652,6 +660,41 @@ class ResolveSkillObservationUseCase:
 
     def execute(self, arguments: dict) -> dict:
         return _resolve_skill_observation(self._ctx, arguments)
+
+
+class ReadSkillReviewLedgerUseCase:
+    def __init__(self, ctx: MemoryReadDependencies) -> None:
+        self._ctx = ctx
+
+    def execute(self, request: SkillReviewLedgerRequest) -> dict[str, object]:
+        repository = self._ctx.repository
+        if repository is None:
+            return {"status": "error", "error": "repository_not_initialized"}
+        records = repository.list_skill_review_observations(
+            request.workspace_id,
+            limit=100_000,
+            offset=0,
+        )
+        entries = [skill_review_ledger_entry(record) for record in records]
+        snapshot_id = skill_review_ledger_snapshot_id(entries)
+        token_snapshot, offset = ledger_token_parts(request.page_token)
+        if token_snapshot is not None and token_snapshot != snapshot_id:
+            return {"status": "error", "error": "ledger_snapshot_changed"}
+        page = entries[offset : offset + request.page_size]
+        next_offset = offset + len(page)
+        next_page_token = (
+            f"{snapshot_id}:{next_offset}" if next_offset < len(entries) else None
+        )
+        return {
+            "status": "ok",
+            "protocol_version": LEDGER_PROTOCOL_VERSION,
+            "ledger_id": LEDGER_ID,
+            "workspace_id": request.workspace_id,
+            "snapshot_id": snapshot_id,
+            "total_count": len(entries),
+            "records": page,
+            "next_page_token": next_page_token,
+        }
 
 
 class CommitSkillReviewUseCase:

@@ -10,7 +10,9 @@ from mcp_memory.mcp.validation import (
 )
 from mcp_memory.application.skill_review_contract import (
     SkillReviewCommitRequest,
+    SkillReviewLedgerRequest,
     parse_skill_review_commit_request,
+    parse_skill_review_ledger_request,
 )
 
 
@@ -44,6 +46,11 @@ def parse_resolve_skill_observation_arguments(arguments: dict) -> dict[str, obje
 def parse_commit_skill_review_arguments(arguments: dict) -> SkillReviewCommitRequest:
     """Parse the versioned batch disposition request at the MCP boundary."""
     return parse_skill_review_commit_request(arguments)
+
+
+def parse_skill_review_ledger_arguments(arguments: dict) -> SkillReviewLedgerRequest:
+    """Parse a versioned read-only ledger page request."""
+    return parse_skill_review_ledger_request(arguments)
 
 
 def parse_search_arguments(arguments: dict) -> dict:

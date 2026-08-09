@@ -606,6 +606,66 @@ class PostgresRelationalMemoryRepository:
             )
         return [records_by_id[memory_id] for memory_id in memory_ids if memory_id in records_by_id]
 
+    def list_skill_review_observations(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[RelationalMemoryRecord]:
+        """List the authoritative open skill-observation ledger slice."""
+        if limit <= 0 or offset < 0:
+            raise ValueError("ledger limit and offset are invalid")
+        query = """
+            SELECT DISTINCT memories.id, memories.title, memories.content, memories.summary,
+                memories.type, memories.status, memories.created_at, memories.updated_at,
+                memories.read_count, memories.access_score, memories.last_accessed_at,
+                memories.last_surfaced_at, memories.metadata, memories.memory_ref, memories.archived_at
+            FROM memories
+            JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id
+            WHERE memory_workspaces.workspace_id = %s
+              AND memories.status = 'active'
+              AND memories.type = 'observation'
+              AND EXISTS (
+                  SELECT 1
+                  FROM memory_tags
+                  JOIN tags ON tags.id = memory_tags.tag_id
+                  WHERE memory_tags.memory_id = memories.id
+                    AND tags.name = 'skill-observation'
+              )
+            ORDER BY memories.updated_at ASC, memories.created_at ASC, memories.id ASC
+            LIMIT %s OFFSET %s
+        """
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, (workspace_id, limit, offset))
+                rows = cursor.fetchall()
+                memory_ids = [str(row[0]) for row in rows]
+                workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, memory_ids)
+                tags_by_memory_id = self._tags_by_memory_id(cursor, memory_ids)
+        return [
+            RelationalMemoryRecord(
+                id=str(row[0]),
+                title=str(row[1]),
+                content=str(row[2]),
+                summary=None if row[3] is None else str(row[3]),
+                type=str(row[4]),
+                status=str(row[5]),
+                created_at=str(row[6]),
+                updated_at=str(row[7]),
+                read_count=self._coerce_int(row[8]),
+                access_score=self._coerce_float(row[9]),
+                last_accessed_at=None if row[10] is None else str(row[10]),
+                last_surfaced_at=None if row[11] is None else str(row[11]),
+                metadata=self._load_metadata(row[12]),
+                memory_ref=self._coerce_int(row[13]),
+                archived_at=None if row[14] is None else str(row[14]),
+                workspace_ids=workspace_ids_by_memory_id.get(str(row[0]), []),
+                tags=tags_by_memory_id.get(str(row[0]), []),
+            )
+            for row in rows
+        ]
+
     def list_memory_ids(
         self,
         workspace_id: str | None = None,
