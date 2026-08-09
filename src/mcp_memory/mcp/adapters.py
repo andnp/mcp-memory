@@ -28,8 +28,8 @@ def parse_skill_observation_arguments(arguments: dict) -> dict[str, object]:
 
 def parse_resolve_skill_observation_arguments(arguments: dict) -> dict[str, object]:
     resolution = require_string(arguments, "resolution")
-    if resolution not in {"actioned", "deferred"}:
-        raise ValueError("resolution must be actioned or deferred")
+    if resolution not in {"actioned", "deferred", "verified"}:
+        raise ValueError("resolution must be actioned, deferred, or verified")
     return {
         "memory_id": require_string(arguments, "memory_id"),
         "resolution": resolution,

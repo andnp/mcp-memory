@@ -183,11 +183,12 @@ def test_record_skill_observation_reports_missing_workspace() -> None:
 
 @pytest.mark.parametrize(
     ("resolution", "expected_status"),
-    [("actioned", "archived"), ("deferred", "stale")],
+    [("actioned", "archived"), ("deferred", "stale"), ("verified", "stale")],
 )
 def test_resolve_skill_observation_maps_resolution_to_status(
     resolution: str, expected_status: str
 ) -> None:
+    """Map each review disposition to its non-active memory status."""
     record = _observation(metadata={"review_status": "open", "source": "test"})
     repository = _MemoryRepository([record])
     context = _context(repository, "workspace-context")

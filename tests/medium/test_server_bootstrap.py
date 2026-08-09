@@ -34,6 +34,7 @@ async def test_call_memory_tool_returns_placeholder_payload() -> None:
 
 
 def test_get_memory_tools_returns_expected_names() -> None:
+    """Expose the verified disposition in the public observation schema."""
     tools = get_memory_tools()
     names = [tool.name for tool in tools]
 
@@ -58,6 +59,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
     assert resolution_tool.input_schema["properties"]["resolution"]["enum"] == [
         "actioned",
         "deferred",
+        "verified",
     ]
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
     assert search_tool.description is not None

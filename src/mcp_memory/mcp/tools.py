@@ -47,12 +47,12 @@ def get_memory_tools() -> list[Tool]:
         ),
         Tool(
             name="resolve_skill_observation",
-            description="Mark one skill observation as actioned or deferred with a concise resolution note.",
+            description="Mark one skill observation as actioned, deferred, or verified with a concise resolution note.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
-                    "resolution": {"type": "string", "enum": ["actioned", "deferred"]},
+                    "resolution": {"type": "string", "enum": ["actioned", "deferred", "verified"]},
                     "note": {"type": "string"},
                 },
                 "required": ["memory_id", "resolution", "note"],
