@@ -97,6 +97,29 @@ def test_postgres_skill_review_routes_through_context_and_records_evidence(postg
         manager.close()
 
 
+def test_postgres_skill_review_marks_bad_observation_stale(postgres_storage_config) -> None:
+    """Persist bad outcomes consistently with SQLite.
+
+    The evidence metadata must survive the backend-specific transaction path.
+    """
+    manager, repository, store = _database(postgres_storage_config)
+    try:
+        _observation(repository, "mem-1")
+
+        response = store.commit(_request("mem-1", outcome="bad"))
+
+        assert response.dispositions[0].outcome == "bad"
+        assert response.dispositions[0].status == "stale"
+        record = repository.get_memory("mem-1")
+        assert record is not None
+        assert record.status == "stale"
+        assert record.metadata["review_outcome"] == "bad"
+        evidence = cast(dict[str, object], record.metadata["review_evidence"])
+        assert evidence["ledger_snapshot_id"] == "c" * 64
+    finally:
+        manager.close()
+
+
 def test_postgres_skill_review_replays_identical_request_and_rejects_conflicts(postgres_storage_config) -> None:
     """Preserve idempotent replay and conflict detection in Postgres.
 

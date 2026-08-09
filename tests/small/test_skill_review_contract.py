@@ -77,6 +77,17 @@ def test_parse_skill_review_request_rejects_duplicate_dispositions() -> None:
         parse_skill_review_commit_request(_request(dispositions=[disposition, disposition]))
 
 
+def test_parse_skill_review_request_rejects_untouched_outcome() -> None:
+    """Keep untouched out of the writer contract.
+
+    The review agent omits untouched records instead of persisting them.
+    """
+    disposition = {"memory_id": "mem-123", "outcome": "untouched", "note": "Not reviewed."}
+
+    with pytest.raises(ValueError, match="outcome must be done or bad"):
+        parse_skill_review_commit_request(_request(dispositions=[disposition]))
+
+
 def test_parse_skill_review_ledger_request_accepts_bounded_cursor() -> None:
     """Parse a bounded ledger page and preserve its snapshot cursor."""
     request = parse_skill_review_ledger_request(

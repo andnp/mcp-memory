@@ -98,6 +98,27 @@ def test_commit_skill_review_updates_all_records_and_audits_evidence(tmp_path: P
     assert "deployment_receipt_hash" in audit["request_json"]
 
 
+def test_commit_skill_review_marks_bad_observation_stale_with_evidence(tmp_path: Path) -> None:
+    """Persist a bad terminal outcome without archiving the observation.
+
+    Review metadata and the ledger snapshot remain available for follow-up.
+    """
+    _manager, repository, store = _store(tmp_path)
+    _observation(repository, "mem-1")
+
+    response = store.commit(_request("mem-1", outcome="bad"))
+
+    assert response.dispositions[0].outcome == "bad"
+    assert response.dispositions[0].status == "stale"
+    record = repository.get_memory("mem-1")
+    assert record is not None
+    assert record.status == "stale"
+    assert record.metadata["review_status"] == "bad"
+    assert record.metadata["resolution_note"] == "Reviewed with deployed evidence."
+    evidence = cast(dict[str, object], record.metadata["review_evidence"])
+    assert evidence["ledger_snapshot_id"] == "c" * 64
+
+
 @pytest.mark.parametrize(
     ("override", "error"),
     [
