@@ -14,7 +14,10 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
-from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
+from mcp_memory.core.ports.ingress import (
+    IngressActionReceiptIdentityConflictError,
+    SourceCoverageAssignmentConflictError,
+)
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -177,6 +180,40 @@ class SQLiteSourceCoverageStore:
             )
         return coverage
 
+    def assign_terminal(self, coverage: SourceCoverage) -> SourceCoverage:
+        _validate_terminal_coverage(coverage)
+        conn = self._db.get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO ingress_source_coverage (entry_id, outcome, action_id, reason)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(entry_id) DO NOTHING
+                """,
+                (coverage.entry_id, coverage.outcome.value, coverage.action_id, coverage.reason),
+            )
+            row = conn.execute(
+                "SELECT * FROM ingress_source_coverage WHERE entry_id = ?",
+                (coverage.entry_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("source coverage assignment was not persisted")
+            stored = _coverage_from_row(row)
+            if (stored.action_id, stored.outcome) != (coverage.action_id, coverage.outcome):
+                raise SourceCoverageAssignmentConflictError(
+                    coverage.entry_id,
+                    stored.action_id,
+                    stored.outcome,
+                    coverage.action_id,
+                    coverage.outcome,
+                )
+            conn.commit()
+            return stored
+        except Exception:
+            conn.rollback()
+            raise
+
     def get(self, entry_id: str) -> SourceCoverage | None:
         row = self._db.get_connection().execute(
             "SELECT * FROM ingress_source_coverage WHERE entry_id = ?", (entry_id,)
@@ -309,3 +346,8 @@ def _coverage_from_row(row: sqlite3.Row) -> SourceCoverage:
         action_id=row["action_id"],
         reason=row["reason"],
     )
+
+
+def _validate_terminal_coverage(coverage: SourceCoverage) -> None:
+    if getattr(coverage.outcome, "value", coverage.outcome) == "released_unhandled":
+        raise ValueError("released_unhandled is not terminal source coverage")

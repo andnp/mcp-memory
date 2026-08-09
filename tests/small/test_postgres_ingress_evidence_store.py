@@ -14,7 +14,10 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
-from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
+from mcp_memory.core.ports.ingress import (
+    IngressActionReceiptIdentityConflictError,
+    SourceCoverageAssignmentConflictError,
+)
 from mcp_memory.storage.postgres_ingress_evidence_store import (
     PostgresIngressActionReceiptRepository,
     PostgresIngressBatchEvidenceRepository,
@@ -197,3 +200,32 @@ def test_postgres_source_coverage_lists_requested_entries_in_stable_order() -> N
         coverage,
     ]
     assert repository.list_for_entries(()) == []
+
+
+def test_postgres_source_coverage_assigns_terminal_with_conflict_safe_replay() -> None:
+    """Terminal coverage reads the committed winner before accepting replay."""
+    sessions = _Sessions()
+    repository = PostgresSourceCoverageRepository(cast(SessionManager[DbConnectionLike], sessions))
+    coverage = SourceCoverage("entry-1", SourceCoverageOutcome.CREATED, "action-1", "created")
+    stored_row = ("entry-1", "action-1", "created", "created")
+    sessions.connection.fetchone_result = stored_row
+
+    assert repository.assign_terminal(coverage) == coverage
+    assert "ON CONFLICT (entry_id) DO NOTHING" in sessions.connection.calls[0][0]
+    assert sessions.connection.commits == 1
+    assert repository.assign_terminal(replace(coverage, reason="replay detail")) == coverage
+
+    sessions.connection.fetchone_result = stored_row
+    with pytest.raises(SourceCoverageAssignmentConflictError):
+        repository.assign_terminal(SourceCoverage("entry-1", SourceCoverageOutcome.APPENDED, "action-2"))
+    assert sessions.connection.rollbacks == 1
+
+
+def test_postgres_source_coverage_rejects_released_unhandled_assignment() -> None:
+    """Journal release projection cannot be persisted as terminal coverage."""
+    sessions = _Sessions()
+    repository = PostgresSourceCoverageRepository(cast(SessionManager[DbConnectionLike], sessions))
+    released = SourceCoverage("entry-1", cast(SourceCoverageOutcome, "released_unhandled"), None)
+
+    with pytest.raises(ValueError, match="not terminal"):
+        repository.assign_terminal(released)

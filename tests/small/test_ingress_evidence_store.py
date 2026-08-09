@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -13,7 +14,10 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
-from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
+from mcp_memory.core.ports.ingress import (
+    IngressActionReceiptIdentityConflictError,
+    SourceCoverageAssignmentConflictError,
+)
 from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressActionReceiptStore,
     SQLiteIngressBatchEvidenceStore,
@@ -182,3 +186,26 @@ def test_coverage_store_preserves_requested_entry_order_and_updates_rows(
     assert store.get("entry-1") == updated
     assert store.list_for_entries(("entry-2", "missing", "entry-1")) == [second, updated]
     assert store.list_for_entries(()) == []
+
+
+def test_coverage_store_assigns_terminal_once_and_replays_exactly(db_manager: DatabaseManager) -> None:
+    """Terminal assignment preserves the winner and rejects a different action."""
+    store = SQLiteSourceCoverageStore(db_manager)
+    first = SourceCoverage("entry-1", SourceCoverageOutcome.CREATED, "action-1", "created")
+
+    assert store.assign_terminal(first) == first
+    assert store.assign_terminal(replace(first, reason="replay detail")) == first
+
+    with pytest.raises(SourceCoverageAssignmentConflictError):
+        store.assign_terminal(SourceCoverage("entry-1", SourceCoverageOutcome.APPENDED, "action-2"))
+
+    assert store.get("entry-1") == first
+
+
+def test_coverage_store_rejects_released_unhandled_assignment(db_manager: DatabaseManager) -> None:
+    """Journal release projection cannot be persisted as terminal coverage."""
+    store = SQLiteSourceCoverageStore(db_manager)
+    released = SourceCoverage("entry-1", cast(SourceCoverageOutcome, "released_unhandled"), None)
+
+    with pytest.raises(ValueError, match="not terminal"):
+        store.assign_terminal(released)

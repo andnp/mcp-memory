@@ -16,7 +16,10 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
-from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
+from mcp_memory.core.ports.ingress import (
+    IngressActionReceiptIdentityConflictError,
+    SourceCoverageAssignmentConflictError,
+)
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -182,6 +185,40 @@ class PostgresSourceCoverageRepository(_PostgresIngressEvidenceRepository):
             connection.commit()
         return coverage
 
+    def assign_terminal(self, coverage: SourceCoverage) -> SourceCoverage:
+        _validate_terminal_coverage(coverage)
+        with self._open_connection() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO ingress_source_coverage (entry_id, action_id, outcome, reason)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (entry_id) DO NOTHING
+                        """,
+                        (coverage.entry_id, coverage.action_id, coverage.outcome.value, coverage.reason),
+                    )
+                    cursor.execute(
+                        _COVERAGE_SELECT + " WHERE entry_id = %s", (coverage.entry_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise RuntimeError("source coverage assignment was not persisted")
+                    stored = _coverage_from_row(row)
+                    if (stored.action_id, stored.outcome) != (coverage.action_id, coverage.outcome):
+                        raise SourceCoverageAssignmentConflictError(
+                            coverage.entry_id,
+                            stored.action_id,
+                            stored.outcome,
+                            coverage.action_id,
+                            coverage.outcome,
+                        )
+                connection.commit()
+                return stored
+            except Exception:
+                connection.rollback()
+                raise
+
     def get(self, entry_id: str) -> SourceCoverage | None:
         return self._fetch(_COVERAGE_SELECT + " WHERE entry_id = %s", (entry_id,))
 
@@ -287,6 +324,11 @@ def _coverage_from_row(row: tuple[object, ...]) -> SourceCoverage:
         entry_id=cast(str, row[0]), action_id=cast(str | None, row[1]),
         outcome=SourceCoverageOutcome(cast(str, row[2])), reason=cast(str | None, row[3]),
     )
+
+
+def _validate_terminal_coverage(coverage: SourceCoverage) -> None:
+    if getattr(coverage.outcome, "value", coverage.outcome) == "released_unhandled":
+        raise ValueError("released_unhandled is not terminal source coverage")
 
 
 def _json_text(value: object) -> str:
