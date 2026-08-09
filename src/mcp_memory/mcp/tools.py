@@ -21,7 +21,7 @@ def allowed_memory_tool_names(tool_scope: str | None = None) -> frozenset[str] |
     return frozenset()
 
 
-def get_memory_tools(tool_scope: str | None = None) -> list[Tool]:
+def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: bool = False) -> list[Tool]:
     """Describe public memory tools, optionally restricted to a read-only scope."""
     tools = [
         Tool(
@@ -243,4 +243,6 @@ def get_memory_tools(tool_scope: str | None = None) -> list[Tool]:
         ),
     ]
     allowed = allowed_memory_tool_names(tool_scope)
+    if allowed is None and not include_writer_tools:
+        return [tool for tool in tools if tool.name not in SKILL_REVIEW_WRITER_TOOLS]
     return [tool for tool in tools if allowed is None or tool.name in allowed]

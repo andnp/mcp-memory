@@ -47,6 +47,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
+_REQUEST_TOOL_SCOPE_KEY = "__tool_scope"
 _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS = 60.0
 _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_POLL_SLICE_SECONDS = 0.1
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
@@ -347,6 +348,8 @@ class MCPServer:
             request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
         if self._session_id is not None:
             request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
+        if self._tool_scope is not None:
+            request_payload.setdefault(_REQUEST_TOOL_SCOPE_KEY, self._tool_scope)
         return request_payload or None
 
     def _request_json_with_recovery(

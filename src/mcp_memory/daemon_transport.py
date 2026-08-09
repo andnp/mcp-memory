@@ -550,7 +550,15 @@ class DaemonZmqServer:
             if normalized_path == "/internal/health":
                 return self._build_health_payload()
             if normalized_path == "/internal/tools":
-                return {"tools": [serialize_tool(tool) for tool in get_memory_tools()]}
+                tool_scope = request_payload.get("__tool_scope")
+                return {
+                    "tools": [
+                        serialize_tool(tool)
+                        for tool in get_memory_tools(
+                            include_writer_tools=tool_scope == "skill_review_writer"
+                        )
+                    ]
+                }
             if normalized_path == "/internal/maintenance/tools":
                 return {"tools": [serialize_tool(tool) for tool in get_internal_maintenance_tools()]}
             if normalized_path.startswith("/internal/tools/"):
