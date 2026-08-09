@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from hashlib import sha256
 from random import Random
 import re
 from typing import Any, Awaitable, Callable, cast
@@ -18,6 +19,9 @@ from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_touched_memory_ids as _recorded_ingest_touched_memory_ids,
     _reset_recorded_ingest_handled_entry_ids as _reset_recorded_ingest_handled_entry_ids,
 )
+from mcp_memory.core.ingress_evidence import IngressBatchEvidence, IngressSourceSnapshot
+from mcp_memory.core.ingress_identity import SourceEntryIdentity, batch_id, source_fingerprint
+from mcp_memory.core.ingress_source import normalize_source_snapshot
 from mcp_memory.core.ingest_provenance import build_ingest_appended_metadata, build_ingest_created_metadata
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
@@ -350,9 +354,19 @@ async def process_ingest_batch(
     grouping_strategy: str,
     analyze_ingest_actions,
     entries,
+    batch_sequence: int | None = None,
 ) -> dict[str, Any]:
     assert ctx.journal is not None
     claimed_ids = [entry.id for entry in entries]
+    _persist_ingress_batch_evidence(
+        ctx,
+        task,
+        provider,
+        workspace_id=workspace_id,
+        grouping_strategy=grouping_strategy,
+        entries=entries,
+        batch_sequence=batch_sequence,
+    )
     created_ids: list[str] = []
     handled_ids: list[int] = []
     meaningful_actions = 0
@@ -433,6 +447,90 @@ async def process_ingest_batch(
             semantic_entry_dispositions=semantic_entry_dispositions,
         )["entry_dispositions"],
     }
+
+
+def _persist_ingress_batch_evidence(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any,
+    *,
+    workspace_id: str,
+    grouping_strategy: str,
+    entries,
+    batch_sequence: int | None,
+) -> None:
+    mode = getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off")
+    if mode == "off":
+        return
+
+    sequence = batch_sequence if batch_sequence is not None else int(task.data.get("batch_sequence", 1))
+    if isinstance(sequence, bool) or sequence < 1:
+        raise ValueError("batch_sequence must be a positive integer")
+    source = normalize_source_snapshot(
+        [
+            {
+                "entry_id": str(entry.id),
+                "timestamp": datetime.fromtimestamp(entry.timestamp, tz=UTC).isoformat(),
+                "workspace_ids": (entry.workspace_id or workspace_id,),
+                "content_digest": sha256(entry.content.encode("utf-8")).hexdigest(),
+            }
+            for entry in entries
+        ]
+    )
+    entries_by_id = {str(item.id): item for item in entries}
+    source_entries = tuple(
+        IngressSourceSnapshot(
+            entry_id=str(entry["entry_id"]),
+            workspace_ids=tuple(cast(list[str], entry["workspace_ids"])),
+            timestamp=str(entry["timestamp"]),
+            content_digest=str(entry["content_digest"]),
+            snapshot={"content": entries_by_id[str(entry["entry_id"])].content},
+        )
+        for entry in cast(list[dict[str, object]], source["entries"])
+    )
+    source_identities = tuple(
+        SourceEntryIdentity(
+            entry_id=entry.entry_id,
+            timestamp=entry.timestamp,
+            workspace_ids=entry.workspace_ids,
+            content_digest=entry.content_digest,
+        )
+        for entry in source_entries
+    )
+    evidence = IngressBatchEvidence(
+        batch_id=batch_id([entry.entry_id for entry in source_entries], source_fingerprint(source_identities)),
+        task_id=task.id,
+        execution_epoch=task.execution_epoch,
+        batch_sequence=sequence,
+        claimed_entry_ids=tuple(entry.entry_id for entry in source_entries),
+        source_fingerprint=source_fingerprint(source_identities),
+        source_entries=source_entries,
+        grouping_strategy=grouping_strategy,
+        grouping_fallback_reason=task.data.get("grouping_fallback_reason"),
+        provider_route=_ingress_provider_route(provider),
+        execution_mode="provider_analysis" if provider is not None else "deterministic_fallback",
+        policy_version=str(task.data.get("policy_version", "ingress-v1")),
+        schema_version=str(task.data.get("schema_version", "1")),
+        claimed_at=datetime.now(UTC).isoformat(),
+    )
+    repository = getattr(ctx, "ingress_batch_evidence", None)
+    try:
+        if repository is None:
+            raise RuntimeError("ingress_evidence_unavailable")
+        repository.save(evidence)
+    except Exception:
+        if mode == "enforce":
+            ctx.journal.move_claims_to_recoverable(task.id)
+            raise
+
+
+def _ingress_provider_route(provider: Any) -> str:
+    if provider is None:
+        return "none"
+    route = getattr(provider, "_budget_key", None) or getattr(provider, "_provider_key", None)
+    if isinstance(route, str) and route.strip():
+        return route.strip()
+    return type(provider).__name__
 
 
 def build_ingest_groups(
@@ -1270,6 +1368,7 @@ async def handle_ingest_system1_task(
                 grouping_strategy=preflight.grouping_strategy_used,
                 analyze_ingest_actions=_analyze_ingest_actions,
                 entries=entries,
+                batch_sequence=run_state.batches_processed + 1,
             )
             run_state.absorb_batch_result(batch_result)
             pending_remaining = journal.count_by_status(workspace_id=preflight.journal_workspace_id).get("pending", 0)
