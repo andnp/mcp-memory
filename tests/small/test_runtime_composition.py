@@ -88,6 +88,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     ingress_batch_evidence = object()
     ingress_action_receipts = object()
     source_coverage = object()
+    ingress_mutation_transaction = object()
     storage = StorageBackendResources(
         backend="sqlite",
         db_manager=object(),
@@ -107,6 +108,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
         ingress_batch_evidence=ingress_batch_evidence,
         ingress_action_receipts=ingress_action_receipts,
         source_coverage=source_coverage,
+        ingress_mutation_transaction=ingress_mutation_transaction,
     )
 
     monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda config: embedder)
@@ -136,6 +138,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     assert composition.context.ingress_batch_evidence is ingress_batch_evidence
     assert composition.context.ingress_action_receipts is ingress_action_receipts
     assert composition.context.source_coverage is source_coverage
+    assert composition.context.ingress_mutation_transaction is ingress_mutation_transaction
     assert isinstance(composition.context.curation_quality, SQLiteCurationQualityStore)
     assert resources.embedder is embedder
     assert resources.provider_registry is provider_registry
@@ -219,6 +222,7 @@ def test_runtime_composition_closes_lazy_telemetry_and_wraps_legacy_context() ->
         ingress_batch_evidence=object(),
         ingress_action_receipts=object(),
         source_coverage=object(),
+        ingress_mutation_transaction=object(),
     )
     composition = RuntimeComposition(context=context, capabilities=_empty_capabilities())
 
@@ -227,6 +231,7 @@ def test_runtime_composition_closes_lazy_telemetry_and_wraps_legacy_context() ->
     assert resources.storage.ingress_batch_evidence is context.ingress_batch_evidence
     assert resources.storage.ingress_action_receipts is context.ingress_action_receipts
     assert resources.storage.source_coverage is context.source_coverage
+    assert resources.storage.ingress_mutation_transaction is context.ingress_mutation_transaction
 
     context.close = lambda: pytest.fail("composition must not delegate to ApplicationContext.close")
     composition.close()

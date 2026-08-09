@@ -232,4 +232,5 @@ def build_postgres_runtime_components(
         ingress_batch_evidence=PostgresIngressBatchEvidenceRepository(connection_manager),
         ingress_action_receipts=PostgresIngressActionReceiptRepository(connection_manager),
         source_coverage=PostgresSourceCoverageRepository(connection_manager),
+        ingress_mutation_transaction=None,
     )

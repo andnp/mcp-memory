@@ -28,6 +28,7 @@ from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressBatchEvidenceStore,
     SQLiteSourceCoverageStore,
 )
+from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 
 
@@ -199,6 +200,7 @@ def test_storage_factory_accepts_minimal_storage_bootstrap_spec(
     assert isinstance(storage.ingress_batch_evidence, SQLiteIngressBatchEvidenceStore)
     assert isinstance(storage.ingress_action_receipts, SQLiteIngressActionReceiptStore)
     assert isinstance(storage.source_coverage, SQLiteSourceCoverageStore)
+    assert isinstance(storage.ingress_mutation_transaction, SQLiteIngressMutationStore)
     storage.db_manager.close()
 
 

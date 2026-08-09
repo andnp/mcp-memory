@@ -25,6 +25,7 @@ from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressBatchEvidenceStore,
     SQLiteSourceCoverageStore,
 )
+from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager
@@ -99,4 +100,5 @@ def build_sqlite_runtime_components(
         ingress_batch_evidence=SQLiteIngressBatchEvidenceStore(db_manager),
         ingress_action_receipts=SQLiteIngressActionReceiptStore(db_manager),
         source_coverage=SQLiteSourceCoverageStore(db_manager),
+        ingress_mutation_transaction=SQLiteIngressMutationStore(db_manager),
     )
