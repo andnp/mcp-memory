@@ -46,6 +46,7 @@ When a non-active spec conflicts with an active spec, the active spec wins.
 - `specs/11-e2e-user-flows.md` — end-to-end product flows
 - `specs/19-curation-quality-and-family-ownership.md` — proposed curation quality, coverage, routing, and convergence policy
 - `specs/20-memory-mutation-history-and-restore.md` — proposed reversible history, protection, and restore model
+- `specs/22-skill-review-ledger-and-outcome-protocol.md` — authoritative skill-review ledger and terminal outcome wire contracts
 
 ## UI and operator surfaces
 
