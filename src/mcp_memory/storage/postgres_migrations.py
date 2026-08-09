@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 32
+POSTGRES_SCHEMA_VERSION = 33
 
 
 @dataclass(frozen=True)
@@ -945,6 +945,58 @@ POSTGRES_MIGRATIONS = (
         statements=(
             "ALTER TABLE curation_runs ADD COLUMN IF NOT EXISTS execution_epoch INTEGER",
             "CREATE INDEX IF NOT EXISTS idx_curation_runs_execution_identity ON curation_runs(task_id, execution_epoch, created_at DESC, run_id DESC)",
+        ),
+    ),
+    PostgresMigration(
+        version=33,
+        name="add_ingress_evidence",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS ingress_batch_evidence (
+                batch_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                execution_epoch INTEGER NOT NULL,
+                batch_sequence INTEGER NOT NULL,
+                claimed_entry_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                source_fingerprint TEXT NOT NULL,
+                source_entries_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                provider_route TEXT NOT NULL,
+                execution_mode TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                claimed_at TEXT NOT NULL,
+                finalized_at TEXT,
+                grouping_strategy TEXT,
+                grouping_fallback_reason TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ingress_action_receipts (
+                action_id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL REFERENCES ingress_batch_evidence(batch_id) ON DELETE CASCADE,
+                operation TEXT NOT NULL,
+                entry_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                target_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                canonical_payload_digest TEXT NOT NULL,
+                status TEXT NOT NULL,
+                mutation_evidence_id TEXT,
+                created_at TEXT NOT NULL,
+                terminalized_at TEXT,
+                error_code TEXT,
+                before_revision_tokens_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                after_revision_tokens_json JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ingress_source_coverage (
+                entry_id TEXT PRIMARY KEY,
+                action_id TEXT REFERENCES ingress_action_receipts(action_id) ON DELETE SET NULL,
+                outcome TEXT NOT NULL,
+                reason TEXT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ingress_batch_evidence_execution ON ingress_batch_evidence(task_id, execution_epoch, batch_sequence)",
+            "CREATE INDEX IF NOT EXISTS idx_ingress_action_receipts_batch ON ingress_action_receipts(batch_id, action_id)",
         ),
     ),
 )

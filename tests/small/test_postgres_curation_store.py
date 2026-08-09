@@ -109,12 +109,28 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 32
+    assert POSTGRES_SCHEMA_VERSION == 33
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"
     assert any("CREATE TABLE IF NOT EXISTS curation_runs" in statement for statement in migration.statements)
     assert any("PRIMARY KEY (run_id, action_id)" in statement for statement in migration.statements)
+
+
+def test_postgres_migration_adds_ingress_evidence_tables() -> None:
+    """The ingress evidence migration preserves identities and lookup paths."""
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 33)
+
+    assert migration.name == "add_ingress_evidence"
+    statements = " ".join(migration.statements)
+    assert "CREATE TABLE IF NOT EXISTS ingress_batch_evidence" in statements
+    assert "CREATE TABLE IF NOT EXISTS ingress_action_receipts" in statements
+    assert "CREATE TABLE IF NOT EXISTS ingress_source_coverage" in statements
+    assert "batch_id TEXT PRIMARY KEY" in statements
+    assert "action_id TEXT PRIMARY KEY" in statements
+    assert "entry_id TEXT PRIMARY KEY" in statements
+    assert "idx_ingress_batch_evidence_execution" in statements
+    assert "idx_ingress_action_receipts_batch" in statements
 
 
 def test_postgres_migration_adds_quality_acceptance_evidence() -> None:
