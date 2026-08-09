@@ -20,6 +20,11 @@ from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 from mcp_memory.storage.direct_mutation_evidence_store import SQLiteDirectMutationEvidenceStore
+from mcp_memory.storage.ingress_evidence_store import (
+    SQLiteIngressActionReceiptStore,
+    SQLiteIngressBatchEvidenceStore,
+    SQLiteSourceCoverageStore,
+)
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager
@@ -91,4 +96,7 @@ def build_sqlite_runtime_components(
         curation=SQLiteCurationStore(db_manager),
         curation_action_store=SQLiteCurationActionStore(db_manager),
         direct_mutation_evidence=SQLiteDirectMutationEvidenceStore(db_manager),
+        ingress_batch_evidence=SQLiteIngressBatchEvidenceStore(db_manager),
+        ingress_action_receipts=SQLiteIngressActionReceiptStore(db_manager),
+        source_coverage=SQLiteSourceCoverageStore(db_manager),
     )

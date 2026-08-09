@@ -18,6 +18,16 @@ from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
+from mcp_memory.storage.postgres_ingress_evidence_store import (
+    PostgresIngressActionReceiptRepository,
+    PostgresIngressBatchEvidenceRepository,
+    PostgresSourceCoverageRepository,
+)
+from mcp_memory.storage.ingress_evidence_store import (
+    SQLiteIngressActionReceiptStore,
+    SQLiteIngressBatchEvidenceStore,
+    SQLiteSourceCoverageStore,
+)
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 
 
@@ -62,6 +72,9 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
     assert isinstance(storage.task_execution_attempts, PostgresTaskExecutionAttemptRepository)
     assert storage.relational_search.get_health().available is False
     assert storage.read_cache is None
+    assert isinstance(storage.ingress_batch_evidence, PostgresIngressBatchEvidenceRepository)
+    assert isinstance(storage.ingress_action_receipts, PostgresIngressActionReceiptRepository)
+    assert isinstance(storage.source_coverage, PostgresSourceCoverageRepository)
 
 
 def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_readonly_mode(
@@ -183,6 +196,9 @@ def test_storage_factory_accepts_minimal_storage_bootstrap_spec(
     assert storage.provider_usage is not None
     assert storage.runtime_logs is not None
     assert storage.task_execution_attempts is not None
+    assert isinstance(storage.ingress_batch_evidence, SQLiteIngressBatchEvidenceStore)
+    assert isinstance(storage.ingress_action_receipts, SQLiteIngressActionReceiptStore)
+    assert isinstance(storage.source_coverage, SQLiteSourceCoverageStore)
     storage.db_manager.close()
 
 

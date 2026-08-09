@@ -33,6 +33,9 @@ class StorageBackendResources:
     curation: Any = None
     curation_action_store: Any = None
     direct_mutation_evidence: Any = None
+    ingress_batch_evidence: Any = None
+    ingress_action_receipts: Any = None
+    source_coverage: Any = None
     embedding_maintenance: Any = None
 
 
