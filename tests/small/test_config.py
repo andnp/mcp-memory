@@ -6,6 +6,7 @@ import pytest
 from mcp_memory.config import (
     AIConfig,
     BackupsConfig,
+    Config,
     DaemonConfig,
     MaintenanceConfig,
     MemoryConfig,
@@ -82,6 +83,51 @@ def test_maintenance_config_rejects_invalid_values(field: str, value: object, me
 def test_searchkernel_defaults_to_lenient_failure_mode() -> None:
     config = SearchKernelConfig()
     assert config.failure_mode == "lenient"
+
+
+def test_config_preserves_legacy_ingress_rollout_defaults() -> None:
+    """New rollout controls preserve the pre-rollout ingress behavior."""
+    config = Config()
+
+    assert config.ingress_evidence_mode == "off"
+    assert config.ingress_replay_policy == "legacy"
+    assert config.ingress_quality_admission == "disabled"
+
+
+def test_load_config_reads_ingress_rollout_controls(tmp_path: Path) -> None:
+    """Configured ingress rollout controls load from top-level TOML keys."""
+    config_path = tmp_path / "ingress-rollout-config.toml"
+    config_path.write_text(
+        '''
+ingress_evidence_mode = "shadow"
+ingress_replay_policy = "detect"
+ingress_quality_admission = "canary"
+''',
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.ingress_evidence_mode == "shadow"
+    assert loaded.ingress_replay_policy == "detect"
+    assert loaded.ingress_quality_admission == "canary"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("ingress_evidence_mode", "observe", "ingress_evidence_mode"),
+        ("ingress_replay_policy", "always", "ingress_replay_policy"),
+        ("ingress_quality_admission", "automatic", "ingress_quality_admission"),
+    ],
+)
+def test_config_rejects_invalid_ingress_rollout_controls(
+    field: str, value: object, message: str
+) -> None:
+    """Invalid rollout control values fail configuration validation."""
+    with pytest.raises(ValueError, match=message):
+        invalid_config: dict[str, Any] = {field: value}
+        Config(**invalid_config)
 
 
 def test_searchkernel_rejects_invalid_failure_mode() -> None:

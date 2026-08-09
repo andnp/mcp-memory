@@ -21,6 +21,9 @@ GLOBAL_DAEMON_IDENTITY = "global"
 StorageBackendKind = Literal["sqlite", "postgres"]
 StorageCacheMode = Literal["readonly", "writeback"]
 MemoryGCMode = Literal["report-only", "delete"]
+IngressEvidenceMode = Literal["off", "shadow", "enforce"]
+IngressReplayPolicy = Literal["legacy", "detect", "enforce"]
+IngressQualityAdmission = Literal["disabled", "manual", "canary"]
 
 
 @dataclass
@@ -429,8 +432,19 @@ class Config:
     provider_routing: ProviderRoutingConfig = field(default_factory=ProviderRoutingConfig)
     ingest_suppression: IngestSuppressionConfig = field(default_factory=IngestSuppressionConfig)
     ingest_escalation: IngestEscalationConfig = field(default_factory=IngestEscalationConfig)
+    ingress_evidence_mode: IngressEvidenceMode = "off"
+    ingress_replay_policy: IngressReplayPolicy = "legacy"
+    ingress_quality_admission: IngressQualityAdmission = "disabled"
     curation: CurationConfig = field(default_factory=CurationConfig)
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
+
+    def __post_init__(self) -> None:
+        if self.ingress_evidence_mode not in {"off", "shadow", "enforce"}:
+            raise ValueError("ingress_evidence_mode must be 'off', 'shadow', or 'enforce'")
+        if self.ingress_replay_policy not in {"legacy", "detect", "enforce"}:
+            raise ValueError("ingress_replay_policy must be 'legacy', 'detect', or 'enforce'")
+        if self.ingress_quality_admission not in {"disabled", "manual", "canary"}:
+            raise ValueError("ingress_quality_admission must be 'disabled', 'manual', or 'canary'")
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -761,6 +775,9 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "novelty_threshold": 0.6,
         "preview_entry_limit": 8,
     }
+    document["ingress_evidence_mode"] = "off"
+    document["ingress_replay_policy"] = "legacy"
+    document["ingress_quality_admission"] = "disabled"
     memory_table = tomlkit.table()
     memory_table.update({
         "enabled": True,
@@ -813,6 +830,9 @@ def load_config(config_path: Path | None = None) -> Config:
         provider_routing=_load_provider_routing_config(_provider_routing_data_for_config(raw)),
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
         ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),
+        ingress_evidence_mode=cast(IngressEvidenceMode, raw.get("ingress_evidence_mode", "off")),
+        ingress_replay_policy=cast(IngressReplayPolicy, raw.get("ingress_replay_policy", "legacy")),
+        ingress_quality_admission=cast(IngressQualityAdmission, raw.get("ingress_quality_admission", "disabled")),
         curation=_load_dataclass_from_dict(CurationConfig, raw.get("curation", {})),
         maintenance=_load_dataclass_from_dict(MaintenanceConfig, raw.get("maintenance", {})),
     )
