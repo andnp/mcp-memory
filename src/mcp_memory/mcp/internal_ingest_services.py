@@ -364,6 +364,7 @@ def _execute_atomic_append(
             target_ids=[memory_id],
             payload=request_payload,
             apply=apply,
+            journal_task_id=task_id,
         )
     except _AtomicIngressServiceError as exc:
         payload: dict[str, object] = {"status": "error", "error": exc.error}
@@ -478,6 +479,7 @@ def _execute_atomic_create(
             target_ids=[],
             payload=request_payload,
             apply=apply,
+            journal_task_id=task_id,
         )
     except IngressActionReceiptIdentityConflictError as exc:
         return {"status": "error", "error": "ingress_action_identity_collision", "detail": str(exc)}

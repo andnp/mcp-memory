@@ -17,6 +17,18 @@ from mcp_memory.utils.db import DatabaseManager
 pytestmark = pytest.mark.small
 
 
+def _seed_claimed_journal_entry(db_manager: DatabaseManager, entry_id: int, task_id: str) -> None:
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO system1_journal (id, content, timestamp, status, claim_task_id, claimed_at)
+        VALUES (?, ?, ?, 'claimed', ?, ?)
+        """,
+        (entry_id, f"journal-{entry_id}", float(entry_id), task_id, float(entry_id)),
+    )
+    connection.commit()
+
+
 def test_create_commits_memory_receipt_coverage_history_and_repair_intent(
     db_manager: DatabaseManager,
 ) -> None:
@@ -203,3 +215,130 @@ def test_append_commits_terminal_appended_coverage(db_manager: DatabaseManager) 
         ("entry-1",),
     ).fetchone()
     assert tuple(coverage) == ("appended", receipt.action_id)
+
+
+def test_journal_reconciliation_moves_only_owned_claims(db_manager: DatabaseManager) -> None:
+    """A successful mutation releases only its task's claimed journal entries."""
+    _seed_claimed_journal_entry(db_manager, 101, "task-a")
+    _seed_claimed_journal_entry(db_manager, 102, "task-a")
+    _seed_claimed_journal_entry(db_manager, 103, "task-b")
+
+    SQLiteIngressMutationStore(db_manager).execute(
+        batch_id="batch-1",
+        operation="create",
+        entry_ids=["101", "102", "103"],
+        target_ids=[],
+        payload={"content": "journal-backed"},
+        journal_task_id="task-a",
+        apply=lambda transaction: IngressMutationResult(
+            "create",
+            [transaction.create_memory(title="Journal-backed", content="journal-backed", workspace_ids=["workspace"]).id],
+        ),
+    )
+
+    rows = db_manager.get_connection().execute(
+        "SELECT id, status, claim_task_id FROM system1_journal ORDER BY id"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (101, "recoverable", None),
+        (102, "recoverable", None),
+        (103, "claimed", "task-b"),
+    ]
+
+
+@pytest.mark.parametrize("entry_ids", [[], ["0"], ["-1"], ["not-an-id"]])
+def test_journal_reconciliation_rejects_invalid_entry_ids(
+    db_manager: DatabaseManager,
+    entry_ids: list[str],
+) -> None:
+    """Invalid journal IDs fail before the mutation callback can write."""
+    called = False
+
+    def apply(transaction):
+        nonlocal called
+        called = True
+        raise AssertionError("invalid journal IDs must fail before domain mutation")
+
+    with pytest.raises(ValueError, match="positive integer IDs"):
+        SQLiteIngressMutationStore(db_manager).execute(
+            batch_id="batch-1",
+            operation="create",
+            entry_ids=entry_ids,
+            target_ids=[],
+            payload={"content": "invalid journal ID"},
+            journal_task_id="task-a",
+            apply=apply,
+        )
+    assert not called
+
+
+def test_journal_reconciliation_rolls_back_with_the_mutation(db_manager: DatabaseManager) -> None:
+    """A fault after reconciliation rolls back both journal and ingress writes."""
+    _seed_claimed_journal_entry(db_manager, 104, "task-a")
+    memory_id = str(uuid4())
+
+    with pytest.raises(IngressMutationInjectedFailure):
+        SQLiteIngressMutationStore(db_manager, fault_stage="journal_reconcile").execute(
+            batch_id="batch-1",
+            operation="create",
+            entry_ids=["104"],
+            target_ids=[],
+            payload={"content": "rolled back journal"},
+            journal_task_id="task-a",
+            apply=lambda transaction: IngressMutationResult(
+                "create",
+                [transaction.create_memory(
+                    memory_id=memory_id,
+                    title="Rolled back journal",
+                    content="rolled back journal",
+                    workspace_ids=["workspace"],
+                ).id],
+            ),
+        )
+
+    connection = db_manager.get_connection()
+    journal = connection.execute(
+        "SELECT status, claim_task_id FROM system1_journal WHERE id = ?", (104,)
+    ).fetchone()
+    assert journal is not None
+    assert tuple(journal) == ("claimed", "task-a")
+    assert connection.execute("SELECT COUNT(*) FROM memories WHERE id = ?", (memory_id,)).fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM ingress_action_receipts").fetchone()[0] == 0
+
+
+def test_journal_reconciliation_replay_does_not_reapply_claim_transition(
+    db_manager: DatabaseManager,
+) -> None:
+    """An exact replay returns the receipt without invoking the mutation callback."""
+    _seed_claimed_journal_entry(db_manager, 105, "task-a")
+    store = SQLiteIngressMutationStore(db_manager)
+    arguments = {
+        "batch_id": "batch-1",
+        "operation": "create",
+        "entry_ids": ["105"],
+        "target_ids": [],
+        "payload": {"content": "replay journal"},
+        "journal_task_id": "task-a",
+        "apply": lambda transaction: IngressMutationResult(
+            "create",
+            [transaction.create_memory(title="Replay journal", content="replay journal", workspace_ids=["workspace"]).id],
+        ),
+    }
+    first = store.execute(**arguments)
+
+    def unexpected_apply(transaction):
+        raise AssertionError("replay callback must not run")
+
+    replay = store.execute(
+        **{
+            **arguments,
+            "apply": unexpected_apply,
+        }
+    )
+
+    assert replay == first
+    journal = db_manager.get_connection().execute(
+        "SELECT status, claim_task_id FROM system1_journal WHERE id = ?", (105,)
+    ).fetchone()
+    assert journal is not None
+    assert tuple(journal) == ("recoverable", None)

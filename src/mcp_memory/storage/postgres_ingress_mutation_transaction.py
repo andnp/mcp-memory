@@ -18,6 +18,7 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverageOutcome,
 )
 from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
+from mcp_memory.core.journal import RECOVERABLE_RETENTION_SECONDS
 from mcp_memory.core.ports.ingress import (
     IngressActionReceiptIdentityConflictError,
     SourceCoverageAssignmentConflictError,
@@ -89,6 +90,7 @@ class PostgresIngressMutationStore:
         apply: Callable[[IngressDomainTransaction], IngressMutationResult],
         source_coverage: Sequence[SourceCoverage] | None = None,
         mutation_evidence_id: str | None = None,
+        journal_task_id: str | None = None,
     ) -> IngressActionReceipt:
         normalized_batch = _identifier(batch_id, "batch_id")
         normalized_operation = _identifier(operation, "operation")
@@ -96,6 +98,12 @@ class PostgresIngressMutationStore:
             raise ValueError("ingress operation must be create or append")
         identity = action_identity(normalized_operation, entry_ids, target_ids)
         digest = canonical_payload_digest(payload)
+        normalized_journal_task = (
+            None if journal_task_id is None else _identifier(journal_task_id, "journal_task_id")
+        )
+        journal_entry_ids = (
+            () if normalized_journal_task is None else _journal_entry_ids(identity.entry_ids)
+        )
         normalized_coverage = _coverage_for_action(
             source_coverage,
             entry_ids=identity.entry_ids,
@@ -188,6 +196,13 @@ class PostgresIngressMutationStore:
                     )
                     for coverage in normalized_coverage:
                         _assign_coverage(cursor, coverage)
+                    if normalized_journal_task is not None:
+                        _move_claimed_journal_entries(
+                            cursor,
+                            journal_entry_ids,
+                            task_id=normalized_journal_task,
+                        )
+                        self._fail_stage("journal_reconcile")
                 connection.commit()
                 return receipt
             except Exception:
@@ -279,6 +294,7 @@ class PostgresIngressMutationStore:
             "repair_intent": {"repair", "repair_intent"},
             "history": {"history"},
             "before_receipt_coverage_commit": {"receipt", "coverage", "before_receipt_coverage_commit"},
+            "journal_reconcile": {"journal", "journal_reconcile"},
         }
         if normalized in aliases.get(stage, {stage}):
             raise IngressMutationInjectedFailure(f"injected ingress transaction failure at {stage}")
@@ -485,6 +501,26 @@ def _assign_coverage(cursor: CursorLike, coverage: SourceCoverage) -> None:
         )
 
 
+def _move_claimed_journal_entries(
+    cursor: CursorLike,
+    entry_ids: Sequence[int],
+    *,
+    task_id: str,
+) -> None:
+    if not entry_ids:
+        return
+    placeholders = ",".join("%s" for _ in entry_ids)
+    cursor.execute(
+        f"""
+        UPDATE system1_journal
+        SET status = %s, claim_task_id = NULL, claimed_at = NULL,
+            recoverable_until = %s
+        WHERE id IN ({placeholders}) AND status = %s AND claim_task_id = %s
+        """,
+        ("recoverable", time.time() + RECOVERABLE_RETENTION_SECONDS, *entry_ids, "claimed", task_id),
+    )
+
+
 def _receipt_for_action(cursor: CursorLike, action_id: str, *, lock: bool = False) -> IngressActionReceipt | None:
     query = _RECEIPT_SELECT + " WHERE action_id = %s"
     if lock:
@@ -599,6 +635,18 @@ def _hydrate_record(cursor: CursorLike, row: tuple[object, ...]) -> MemoryRecord
 def _canonical_ids(values: Sequence[str]) -> tuple[str, ...]:
     normalized = {_identifier(value, "identity") for value in values}
     return tuple(sorted(normalized, key=lambda value: value.encode("utf-8")))
+
+
+def _journal_entry_ids(values: Sequence[str]) -> tuple[int, ...]:
+    if not values:
+        raise ValueError("journal entry IDs must contain only positive integer IDs")
+    result: list[int] = []
+    for value in values:
+        normalized = str(value).strip()
+        if not normalized.isdigit() or int(normalized) <= 0:
+            raise ValueError("journal entry IDs must be positive integer IDs")
+        result.append(int(normalized))
+    return tuple(result)
 
 
 def _identifier(value: object, name: str) -> str:

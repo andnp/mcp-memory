@@ -229,13 +229,19 @@ def test_internal_ingest_create_enforce_uses_atomic_boundary_and_preserves_side_
     cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
     cast(Any, ctx).ingress_mutation_transaction = SQLiteIngressMutationStore(db_manager)
     _start_running_ingest_task(ctx, "ingest-atomic-create")
+    assert ctx.journal is not None
+    ctx.journal.record("Atomic create journal one", workspace_id=ctx.workspace_id)
+    ctx.journal.record("Atomic create journal two", workspace_id=ctx.workspace_id)
+    claimed = ctx.journal.claim_pending(task_id="ingest-atomic-create", limit=2)
+    claimed_entry_ids = [entry.id for entry in claimed]
+    assert len(claimed_entry_ids) == 2
 
     payload = internal_tool_services()["internal_ingest_create_memory"](
         ctx,
         {
             "task_id": "ingest-atomic-create",
             "batch_id": "batch-atomic-create",
-            "entry_ids": [61, 62],
+            "entry_ids": claimed_entry_ids,
             "title": "Atomic create",
             "content": "The service commits domain and ingress evidence together.",
             "tags": ["atomic"],
@@ -243,7 +249,7 @@ def test_internal_ingest_create_enforce_uses_atomic_boundary_and_preserves_side_
     )
 
     assert payload["status"] == "ok"
-    assert payload["handled_entry_ids"] == [61, 62]
+    assert payload["handled_entry_ids"] == claimed_entry_ids
     assert payload["ingress_action_id"]
     assert payload["ingress_payload_digest"]
     assert ctx.repository is not None
@@ -251,6 +257,11 @@ def test_internal_ingest_create_enforce_uses_atomic_boundary_and_preserves_side_
     connection = db_manager.get_connection()
     assert connection.execute("SELECT COUNT(*) FROM ingress_source_coverage").fetchone()[0] == 2
     assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
+    journal_rows = connection.execute(
+        "SELECT status, claim_task_id FROM system1_journal WHERE id IN (?, ?) ORDER BY id",
+        tuple(claimed_entry_ids),
+    ).fetchall()
+    assert [tuple(row) for row in journal_rows] == [("recoverable", None), ("recoverable", None)]
 
 
 def test_internal_ingest_append_enforce_uses_atomic_boundary(db_manager) -> None:
@@ -259,6 +270,11 @@ def test_internal_ingest_append_enforce_uses_atomic_boundary(db_manager) -> None
     cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
     cast(Any, ctx).ingress_mutation_transaction = SQLiteIngressMutationStore(db_manager)
     _start_running_ingest_task(ctx, "ingest-atomic-append")
+    assert ctx.journal is not None
+    ctx.journal.record("Atomic append journal", workspace_id=ctx.workspace_id)
+    claimed = ctx.journal.claim_pending(task_id="ingest-atomic-append", limit=1)
+    assert len(claimed) == 1
+    claimed_entry_id = claimed[0].id
     assert ctx.repository is not None
     target = ctx.repository.create_memory(
         title="Atomic append target",
@@ -275,18 +291,23 @@ def test_internal_ingest_append_enforce_uses_atomic_boundary(db_manager) -> None
             "content": "After",
             "task_id": "ingest-atomic-append",
             "batch_id": "batch-atomic-append",
-            "entry_ids": [63],
+            "entry_ids": [claimed_entry_id],
             "tags": ["new_tag"],
         },
     )
 
     assert payload["status"] == "ok"
-    assert payload["handled_entry_ids"] == [63]
+    assert payload["handled_entry_ids"] == [claimed_entry_id]
     updated = ctx.repository.get_memory(target.id)
     assert updated is not None
     assert updated.content == "Before\n\nAfter"
     assert updated.metadata["appended_via_ingest"] is True
     assert updated.tags == ["existing", "new-tag"]
+    journal = db_manager.get_connection().execute(
+        "SELECT status, claim_task_id FROM system1_journal WHERE id = ?", (claimed_entry_id,)
+    ).fetchone()
+    assert journal is not None
+    assert tuple(journal) == ("recoverable", None)
 
 
 class _CountingIngressMutationTransaction:

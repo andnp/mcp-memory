@@ -80,6 +80,12 @@ class _Connection:
         self._database.executescript(
             """
             CREATE TABLE ingress_batch_evidence (batch_id TEXT PRIMARY KEY);
+            CREATE TABLE system1_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
+                workspace_id TEXT, author TEXT, timestamp REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending', claim_task_id TEXT,
+                claimed_at REAL, recoverable_until REAL
+            );
             CREATE TABLE memories (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
                 summary TEXT, type TEXT NOT NULL, status TEXT NOT NULL,
@@ -219,6 +225,17 @@ def _seed_memory(sessions: _Sessions, memory_id: str) -> None:
     )
     sessions.connection._database.execute(
         "INSERT INTO memory_workspaces (memory_id, workspace_id) VALUES (?, ?)", (memory_id, "workspace")
+    )
+    sessions.connection.commit()
+
+
+def _seed_claimed_journal_entry(sessions: _Sessions, entry_id: int, task_id: str) -> None:
+    sessions.connection._database.execute(
+        """
+        INSERT INTO system1_journal (id, content, timestamp, status, claim_task_id, claimed_at)
+        VALUES (?, ?, ?, 'claimed', ?, ?)
+        """,
+        (entry_id, f"journal-{entry_id}", float(entry_id), task_id, float(entry_id)),
     )
     sessions.connection.commit()
 
@@ -403,3 +420,88 @@ def test_append_updates_memory_and_assigns_appended_coverage_atomically() -> Non
     assert coverage is not None
     assert tuple(coverage) == ("appended", receipt.action_id)
     assert _count(sessions, "memory_record_revisions") == 1
+
+
+def test_journal_reconciliation_moves_only_owned_claims() -> None:
+    """The fake Postgres transaction updates only claims owned by its task."""
+    sessions = _Sessions()
+    _seed_batch(sessions)
+    _seed_claimed_journal_entry(sessions, 101, "task-a")
+    _seed_claimed_journal_entry(sessions, 102, "task-b")
+
+    _store(sessions).execute(
+        batch_id="batch-1",
+        operation="create",
+        entry_ids=["101", "102"],
+        target_ids=[],
+        payload={"content": "journal-backed"},
+        journal_task_id="task-a",
+        apply=lambda transaction: IngressMutationResult(
+            "create",
+            [transaction.create_memory(title="Journal-backed", content="journal-backed", workspace_ids=["workspace"]).id],
+        ),
+    )
+
+    rows = sessions.connection._database.execute(
+        "SELECT id, status, claim_task_id FROM system1_journal ORDER BY id"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (101, "recoverable", None),
+        (102, "claimed", "task-b"),
+    ]
+
+
+@pytest.mark.parametrize("entry_ids", [[], ["0"], ["-1"], ["not-an-id"]])
+def test_journal_reconciliation_rejects_invalid_entry_ids(entry_ids: list[str]) -> None:
+    """Invalid journal IDs fail before the fake Postgres callback runs."""
+    sessions = _Sessions()
+    _seed_batch(sessions)
+    called = False
+
+    def apply(transaction: Any) -> IngressMutationResult:
+        nonlocal called
+        called = True
+        raise AssertionError("invalid journal IDs must fail before domain mutation")
+
+    with pytest.raises(ValueError, match="positive integer IDs"):
+        _store(sessions).execute(
+            batch_id="batch-1",
+            operation="create",
+            entry_ids=entry_ids,
+            target_ids=[],
+            payload={"content": "invalid journal ID"},
+            journal_task_id="task-a",
+            apply=apply,
+        )
+    assert not called
+    assert _count(sessions, "memories") == 0
+
+
+def test_journal_reconciliation_rolls_back_with_the_mutation() -> None:
+    """A fault after reconciliation rolls back fake Postgres journal writes."""
+    sessions = _Sessions()
+    _seed_batch(sessions)
+    _seed_claimed_journal_entry(sessions, 103, "task-a")
+    store = _store(sessions, fault_stage="journal_reconcile")
+
+    with pytest.raises(IngressMutationInjectedFailure):
+        store.execute(
+            batch_id="batch-1",
+            operation="create",
+            entry_ids=["103"],
+            target_ids=[],
+            payload={"content": "rolled back journal"},
+            journal_task_id="task-a",
+            apply=lambda transaction: IngressMutationResult(
+                "create",
+                [transaction.create_memory(title="Rolled back", content="rolled back journal", workspace_ids=["workspace"]).id],
+            ),
+        )
+
+    journal = sessions.connection._database.execute(
+        "SELECT status, claim_task_id FROM system1_journal WHERE id = ?", (103,)
+    ).fetchone()
+    assert journal is not None
+    assert tuple(journal) == ("claimed", "task-a")
+    assert _count(sessions, "memories") == 0
+    assert _count(sessions, "ingress_action_receipts") == 0
