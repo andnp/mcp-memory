@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from mcp_memory.context import ApplicationContext, TaskQueueContext
+from mcp_memory.core.ingress_evidence import (
+    IngressActionReceipt,
+    IngressBatchEvidence,
+    IngressReceiptStatus,
+    SourceCoverageOutcome,
+)
 from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
@@ -276,10 +282,91 @@ def _finalize_claimed_ingest_entries(
     claimed_ids = ctx.journal.get_claimed_entry_ids(task_id)
     claimed_entry_id_set = set(claimed_ids)
     handled_claimed_entry_ids = [entry_id for entry_id in handled_entry_ids if entry_id in claimed_entry_id_set]
+    already_finalized_ids = _authoritative_finalized_ingest_entry_ids(
+        ctx,
+        task_id=task_id,
+        handled_entry_ids=handled_entry_ids,
+        claimed_entry_id_set=claimed_entry_id_set,
+    )
     recoverable_ids = ctx.journal.move_claimed_entry_ids_to_recoverable(task_id, handled_claimed_entry_ids)
+    recoverable_ids = _ordered_unique([*already_finalized_ids, *recoverable_ids])
     recoverable_entry_id_set = set(recoverable_ids)
     released_ids = ctx.journal.release_claimed_entry_ids(
         task_id,
         [entry_id for entry_id in claimed_ids if entry_id not in recoverable_entry_id_set],
     )
-    return claimed_ids, recoverable_ids, released_ids
+    return _ordered_unique([*claimed_ids, *already_finalized_ids]), recoverable_ids, released_ids
+
+
+def _authoritative_finalized_ingest_entry_ids(
+    ctx: ApplicationContext,
+    *,
+    task_id: str,
+    handled_entry_ids: list[int],
+    claimed_entry_id_set: set[int],
+) -> list[int]:
+    """Recover atomic finalizations from terminal source coverage evidence."""
+    source_coverage = getattr(ctx, "source_coverage", None)
+    list_for_entries = getattr(source_coverage, "list_for_entries", None)
+    if not callable(list_for_entries):
+        return []
+
+    candidate_ids = _ordered_unique(
+        [entry_id for entry_id in handled_entry_ids if entry_id not in claimed_entry_id_set]
+    )
+    if not candidate_ids:
+        return []
+    receipt_store = getattr(ctx, "ingress_action_receipts", None)
+    batch_store = getattr(ctx, "ingress_batch_evidence", None)
+    get_receipt = getattr(receipt_store, "get", None)
+    get_batch = getattr(batch_store, "get", None)
+    if not callable(get_receipt) or not callable(get_batch):
+        return []
+    try:
+        coverage_records = list_for_entries(tuple(str(entry_id) for entry_id in candidate_ids))
+    except Exception:
+        return []
+    if not isinstance(coverage_records, list):
+        return []
+
+    coverage_by_entry_id = {
+        int(record.entry_id): record
+        for record in coverage_records
+        if isinstance(getattr(record, "entry_id", None), str)
+        and record.entry_id.isdigit()
+        and int(record.entry_id) > 0
+    }
+    finalized: list[int] = []
+    for entry_id in candidate_ids:
+        coverage = coverage_by_entry_id.get(entry_id)
+        if coverage is None:
+            continue
+        if coverage.entry_id != str(entry_id) or not isinstance(coverage.action_id, str) or not coverage.action_id.strip():
+            continue
+        if coverage.outcome not in {
+            SourceCoverageOutcome.CREATED,
+            SourceCoverageOutcome.APPENDED,
+            SourceCoverageOutcome.MATCHED_EXISTING,
+            SourceCoverageOutcome.IGNORED,
+            SourceCoverageOutcome.NO_MUTATION,
+        }:
+            continue
+        try:
+            receipt = get_receipt(coverage.action_id)
+            batch = None if not isinstance(receipt, IngressActionReceipt) else get_batch(receipt.batch_id)
+        except Exception:
+            continue
+        if not isinstance(receipt, IngressActionReceipt) or not isinstance(batch, IngressBatchEvidence):
+            continue
+        if receipt.status is not IngressReceiptStatus.APPLIED_UNVERIFIED:
+            continue
+        if str(entry_id) not in {str(value) for value in receipt.entry_ids}:
+            continue
+        if batch.task_id != task_id:
+            continue
+        finalized.append(entry_id)
+    return finalized
+
+
+def _ordered_unique(entry_ids: list[int]) -> list[int]:
+    return list(dict.fromkeys(entry_ids))
