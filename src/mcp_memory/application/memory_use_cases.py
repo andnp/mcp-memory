@@ -49,6 +49,7 @@ from mcp_memory.relational.search import (
     build_search_scope_diagnostics,
 )
 from mcp_memory.storage.skill_review import (
+    PostgresSkillReviewCommitStore,
     SQLiteSkillReviewCommitStore,
     SkillReviewCommitConflict,
     SkillReviewCommitRejected,
@@ -663,7 +664,12 @@ class CommitSkillReviewUseCase:
         if repository is None or db_manager is None:
             return {"status": "error", "error": "repository_not_initialized"}
         try:
-            response = SQLiteSkillReviewCommitStore(db_manager, repository).commit(request)
+            store = (
+                PostgresSkillReviewCommitStore(db_manager, repository)
+                if getattr(self._ctx, "storage_backend", None) == "postgres"
+                else SQLiteSkillReviewCommitStore(db_manager, repository)
+            )
+            response = store.commit(request)
         except SkillReviewCommitConflict as error:
             return {"status": "error", "error": str(error)}
         except SkillReviewCommitRejected as error:
