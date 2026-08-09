@@ -5,6 +5,7 @@ import json
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.direct_mutation_evidence import DirectMutationEvidence, reconcile_direct_mutation_evidence
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.mcp import transport
 
@@ -153,6 +154,33 @@ async def test_internal_dispatch_assigns_scoped_call_identity() -> None:
     assert first.execution_epoch == second.execution_epoch == 3
 
 
+def test_direct_mutation_evidence_rejects_late_execution_epoch() -> None:
+    evidence = DirectMutationEvidence.start(
+        task_id="task-1",
+        execution_epoch=3,
+        session_id="session-123",
+        call_id="call-1",
+        sequence=1,
+        tool_name="internal_update_memory_record",
+        arguments={"task_id": "task-1", "memory_id": "memory-1"},
+    )
+
+    reconciled = reconcile_direct_mutation_evidence(
+        evidence,
+        ledger_entry={
+            "status": "success",
+            "tool_name": "internal_update_memory_record",
+            "task_id": "task-1",
+            "execution_epoch": 2,
+            "call_id": "call-1",
+        },
+        payload={"status": "ok"},
+    )
+
+    assert reconciled.outcome == "ledger_invalid"
+    assert reconciled.error_code == "ledger_missing_or_mismatched"
+
+
 @pytest.mark.asyncio
 async def test_internal_dispatch_unknown_tool_does_not_record_tracker_counts() -> None:
     tracker = InternalToolCallTracker()
@@ -235,8 +263,10 @@ async def test_internal_mutation_dispatch_persists_independent_evidence() -> Non
     assert payload["record"]["id"] == "memory-1"
     assert len(store.items) == 1
     assert store.items[0].outcome == "applied_verified"
+    assert store.items[0].execution_epoch == 3
     snapshot = tracker.snapshot_task("task-1")
     assert snapshot is not None and snapshot.mutating_calls == 1
+    assert snapshot.tool_call_ledger[0]["execution_epoch"] == 3
 
 
 @pytest.mark.asyncio

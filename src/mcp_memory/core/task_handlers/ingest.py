@@ -1061,7 +1061,7 @@ async def run_agentic_ingest_pass(
     pending_count_before_run: int,
 ) -> dict[str, Any] | None:
     _reset_recorded_ingest_handled_entry_ids(ctx, task.id)
-    reset_agentic_tool_tracking(ctx, task.id)
+    reset_agentic_tool_tracking(ctx, task.id, execution_epoch=task.execution_epoch)
     try:
         agentic_result = await run_agent(
             build_ingest_agent_prompt(
