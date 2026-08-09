@@ -27,6 +27,7 @@ def test_fresh_schema_contains_ingress_evidence_records_and_indexes(tmp_path: Pa
             "ingress_batch_evidence",
             "ingress_action_receipts",
             "ingress_source_coverage",
+            "ingress_quality_evidence",
         } <= tables
         assert {
             row[1] for row in connection.execute("PRAGMA table_info(ingress_batch_evidence)")
@@ -53,6 +54,9 @@ def test_fresh_schema_contains_ingress_evidence_records_and_indexes(tmp_path: Pa
             row[1] for row in connection.execute("PRAGMA table_info(ingress_source_coverage)")
         } >= {"entry_id", "outcome", "action_id", "reason"}
         assert {
+            row[1] for row in connection.execute("PRAGMA table_info(ingress_quality_evidence)")
+        } >= {"action_id", "disposition", "reason", "evaluated_at", "evaluator", "query_provenance_json"}
+        assert {
             row[1] for row in connection.execute("PRAGMA index_list(ingress_batch_evidence)")
         } >= {"idx_ingress_batch_evidence_execution", "idx_ingress_batch_evidence_claimed_at"}
         assert {
@@ -64,6 +68,9 @@ def test_fresh_schema_contains_ingress_evidence_records_and_indexes(tmp_path: Pa
         assert {
             row[1] for row in connection.execute("PRAGMA index_list(ingress_source_coverage)")
         } >= {"idx_ingress_source_coverage_action", "idx_ingress_source_coverage_outcome"}
+        assert {
+            row[1] for row in connection.execute("PRAGMA index_list(ingress_quality_evidence)")
+        } >= {"idx_ingress_quality_evidence_disposition", "idx_ingress_quality_evidence_evaluated_at"}
     finally:
         connection.close()
 
@@ -109,6 +116,7 @@ def test_legacy_migration_recreates_ingress_evidence_tables(tmp_path: Path) -> N
             DROP TABLE ingress_source_coverage;
             DROP TABLE ingress_action_receipts;
             DROP TABLE ingress_batch_evidence;
+            DROP TABLE ingress_quality_evidence;
             """
         )
         apply_legacy_additive_migrations(connection)

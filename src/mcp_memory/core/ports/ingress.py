@@ -7,6 +7,7 @@ from typing import Protocol
 from mcp_memory.core.ingress_evidence import (
     IngressActionReceipt,
     IngressBatchEvidence,
+    IngressQualityEvidence,
     SourceCoverage,
     SourceCoverageOutcome,
 )
@@ -48,6 +49,16 @@ class SourceCoverageAssignmentConflictError(ValueError):
         )
 
 
+class IngressQualityEvidenceConflictError(ValueError):
+    """Raised when an action ID is reused with different quality evidence."""
+
+    def __init__(self, action_id: str, stored: IngressQualityEvidence, requested: IngressQualityEvidence) -> None:
+        self.action_id = action_id
+        self.stored = stored
+        self.requested = requested
+        super().__init__(f"ingress quality evidence conflict for {action_id!r}")
+
+
 class IngressBatchEvidenceRepository(Protocol):
     def save(self, evidence: IngressBatchEvidence) -> IngressBatchEvidence: ...
 
@@ -74,3 +85,9 @@ class SourceCoverageRepository(Protocol):
     def get(self, entry_id: str) -> SourceCoverage | None: ...
 
     def list_for_entries(self, entry_ids: tuple[str, ...]) -> list[SourceCoverage]: ...
+
+
+class IngressQualityEvidenceRepository(Protocol):
+    def save(self, evidence: IngressQualityEvidence) -> IngressQualityEvidence: ...
+
+    def get(self, action_id: str) -> IngressQualityEvidence | None: ...

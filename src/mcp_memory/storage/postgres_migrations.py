@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 33
+POSTGRES_SCHEMA_VERSION = 34
 
 
 @dataclass(frozen=True)
@@ -997,6 +997,24 @@ POSTGRES_MIGRATIONS = (
             """,
             "CREATE INDEX IF NOT EXISTS idx_ingress_batch_evidence_execution ON ingress_batch_evidence(task_id, execution_epoch, batch_sequence)",
             "CREATE INDEX IF NOT EXISTS idx_ingress_action_receipts_batch ON ingress_action_receipts(batch_id, action_id)",
+        ),
+    ),
+    PostgresMigration(
+        version=34,
+        name="add_ingress_quality_evidence",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS ingress_quality_evidence (
+                action_id TEXT PRIMARY KEY,
+                disposition TEXT NOT NULL,
+                reason TEXT,
+                evaluated_at TEXT NOT NULL,
+                evaluator TEXT,
+                query_provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ingress_quality_evidence_disposition ON ingress_quality_evidence(disposition, evaluated_at DESC, action_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ingress_quality_evidence_evaluated_at ON ingress_quality_evidence(evaluated_at DESC, action_id)",
         ),
     ),
 )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -756,7 +756,7 @@ def create_direct_mutation_evidence_schema(conn: sqlite3.Connection) -> None:
 
 
 def create_ingress_evidence_schema(conn: sqlite3.Connection) -> None:
-    """Create additive evidence tables for ingress replay and coverage."""
+    """Create additive evidence tables for ingress replay, quality, and coverage."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS ingress_batch_evidence (
@@ -798,6 +798,15 @@ def create_ingress_evidence_schema(conn: sqlite3.Connection) -> None:
             outcome TEXT NOT NULL,
             action_id TEXT,
             reason TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS ingress_quality_evidence (
+            action_id TEXT PRIMARY KEY,
+            disposition TEXT NOT NULL,
+            reason TEXT,
+            evaluated_at TEXT NOT NULL,
+            evaluator TEXT,
+            query_provenance_json TEXT NOT NULL DEFAULT '{}'
         );
         """
     )
@@ -1040,6 +1049,10 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
              ON ingress_source_coverage(action_id, entry_id);
          CREATE INDEX IF NOT EXISTS idx_ingress_source_coverage_outcome
              ON ingress_source_coverage(outcome, entry_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_quality_evidence_disposition
+             ON ingress_quality_evidence(disposition, evaluated_at DESC, action_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_quality_evidence_evaluated_at
+             ON ingress_quality_evidence(evaluated_at DESC, action_id);
          """
     )
     conn.execute(

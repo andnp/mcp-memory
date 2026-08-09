@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from mcp_memory.core.curation_quality_policy import QualityOutcome
+
 
 class IngressReceiptStatus(StrEnum):
     """Terminal state of an ingress mutation receipt."""
@@ -26,6 +28,22 @@ class SourceCoverageOutcome(StrEnum):
     IGNORED = "ignored"
     NO_MUTATION = "no_mutation"
     UNOBSERVED = "unobserved"
+
+
+@dataclass(frozen=True, slots=True)
+class IngressQualityEvidence:
+    """Observed quality disposition for one stable ingress action."""
+
+    action_id: str
+    disposition: QualityOutcome
+    evaluated_at: str
+    reason: str | None = None
+    evaluator: str | None = None
+    query_provenance: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.disposition in {QualityOutcome.UNOBSERVED, QualityOutcome.UNVERIFIED} and not self.reason:
+            raise ValueError(f"{self.disposition.value} quality evidence requires a reason")
 
 
 @dataclass(frozen=True, slots=True)

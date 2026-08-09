@@ -109,7 +109,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 33
+    assert POSTGRES_SCHEMA_VERSION == 34
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"
@@ -131,6 +131,17 @@ def test_postgres_migration_adds_ingress_evidence_tables() -> None:
     assert "entry_id TEXT PRIMARY KEY" in statements
     assert "idx_ingress_batch_evidence_execution" in statements
     assert "idx_ingress_action_receipts_batch" in statements
+
+
+def test_postgres_migration_adds_ingress_quality_evidence() -> None:
+    """The quality evidence table is additive and action-identity keyed."""
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 34)
+
+    assert migration.name == "add_ingress_quality_evidence"
+    statements = " ".join(migration.statements)
+    assert "action_id TEXT PRIMARY KEY" in statements
+    assert "disposition TEXT NOT NULL" in statements
+    assert "query_provenance_json JSONB" in statements
 
 
 def test_postgres_migration_adds_quality_acceptance_evidence() -> None:

@@ -8,6 +8,7 @@ from mcp_memory.core.ingress_evidence import (
     IngressActionReceipt,
     IngressBatchEvidence,
     IngressReceiptStatus,
+    IngressQualityEvidence,
     IngressSourceSnapshot,
     SourceCoverage,
     SourceCoverageOutcome,
@@ -16,7 +17,9 @@ from mcp_memory.core.ports.ingress import (
     IngressActionReceiptRepository,
     IngressBatchEvidenceRepository,
     SourceCoverageRepository,
+    IngressQualityEvidenceRepository,
 )
+from mcp_memory.core.curation_quality_policy import QualityOutcome
 
 pytestmark = pytest.mark.small
 
@@ -90,3 +93,11 @@ def test_ports_expose_typed_record_contracts() -> None:
     assert get_type_hints(IngressBatchEvidenceRepository.save)["evidence"] is IngressBatchEvidence
     assert get_type_hints(IngressActionReceiptRepository.save)["receipt"] is IngressActionReceipt
     assert get_type_hints(SourceCoverageRepository.save)["coverage"] is SourceCoverage
+    assert get_type_hints(IngressQualityEvidenceRepository.save)["evidence"] is IngressQualityEvidence
+
+
+@pytest.mark.parametrize("disposition", [QualityOutcome.UNOBSERVED, QualityOutcome.UNVERIFIED])
+def test_quality_evidence_requires_reason_for_unobserved_or_unverified(disposition: QualityOutcome) -> None:
+    """Missing reasons cannot make an absent quality observation look meaningful."""
+    with pytest.raises(ValueError, match="requires a reason"):
+        IngressQualityEvidence("action-1", disposition, "2026-08-08T12:00:00+00:00")
