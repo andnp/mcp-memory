@@ -461,10 +461,10 @@ def _persist_ingress_batch_evidence(
     provider_route: str | None = None,
     execution_mode: str | None = None,
     grouping_fallback_reason: str | None = None,
-) -> None:
+) -> str | None:
     mode = getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off")
     if mode == "off":
-        return
+        return None
 
     sequence = batch_sequence if batch_sequence is not None else int(task.data.get("batch_sequence", 1))
     if isinstance(sequence, bool) or sequence < 1:
@@ -527,12 +527,14 @@ def _persist_ingress_batch_evidence(
             raise RuntimeError("ingress_evidence_unavailable")
         existing = repository.get(evidence.batch_id)
         if existing is not None:
-            return
+            return evidence.batch_id
         repository.save(evidence)
+        return evidence.batch_id
     except Exception:
         if mode == "enforce":
             ctx.journal.move_claims_to_recoverable(task.id)
             raise
+    return None
 
 
 def _ingress_provider_route(provider: Any) -> str:
@@ -935,6 +937,7 @@ def build_next_ingest_batch_payload(ctx: ApplicationContext, arguments: dict[str
         limit=batch_size,
         workspace_id=journal_workspace_id,
     )
+    persisted_batch_id = None
     if getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off") != "off":
         task = None
         try:
@@ -950,7 +953,7 @@ def build_next_ingest_batch_payload(ctx: ApplicationContext, arguments: dict[str
                 batch_sequence = len(repository.list_for_execution(task.id, task.execution_epoch)) + 1
             else:
                 batch_sequence = None
-            _persist_ingress_batch_evidence(
+            persisted_batch_id = _persist_ingress_batch_evidence(
                 ctx,
                 task,
                 None,
@@ -981,7 +984,7 @@ def build_next_ingest_batch_payload(ctx: ApplicationContext, arguments: dict[str
         tool_name="internal_get_next_ingest_batch",
         mutation=False,
     )
-    return {
+    payload = {
         "status": "ok",
         "task_id": task_id,
         "requested_grouping_strategy": grouping_strategy_requested,
@@ -999,6 +1002,9 @@ def build_next_ingest_batch_payload(ctx: ApplicationContext, arguments: dict[str
             for index, group in enumerate(groups)
         ],
     }
+    if persisted_batch_id is not None:
+        payload["batch_id"] = persisted_batch_id
+    return payload
 
 # ---------------------------------------------------------------------------
 # ingest_run_support: run accumulator
@@ -1307,6 +1313,7 @@ def build_ingest_agent_prompt(
         "Treat one claimed batch as a small maintenance campaign, not a one-thought-to-one-memory conveyor belt. Multiple claimed thoughts may belong in one focused memory, and one thought may justify refactoring an existing cluster before the best durable landing spot is clear.\n"
         "Only process journal entries claimed for this task.\n"
         "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
+        "Copy the batch_id from each internal_get_next_ingest_batch response into every internal_ingest_append_memory or internal_ingest_create_memory mutation for that batch.\n"
         f"Tool mapping: prefer {INGEST_APPEND_TOOL_NAME} and {INGEST_CREATE_TOOL_NAME} whenever a mutation should consume claimed entry_ids directly. Use internal_update_memory_record for title/summary/content cleanup on touched memories, internal_split_memory_record for decompositions, internal_merge_memory_into_canonical for canonicalization, internal_archive_memory_record for safe cleanup, and internal_create_memory_link or internal_delete_memory_link when structural edge cleanup clearly improves retrieval. Include task_id='{task.id}' on those adjacent cleanup mutations so the run's telemetry stays attributable to the current ingest task.\n"
         f"When a thought clearly belongs in an existing canonical memory, prefer {INGEST_APPEND_TOOL_NAME} with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, the content to append, and a concise summary when you already understand the updated memory.\n"
         f"When a new memory is warranted, use {INGEST_CREATE_TOOL_NAME} with task_id='{task.id}', the claimed entry_ids, a focused title/content payload, 3-6 concrete tags when they are obvious, relevant workspace_ids, and a concise summary when you can provide one cheaply.\n"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -26,6 +28,7 @@ from mcp_memory.mcp.internal_ingest_services import (
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.transport import internal_tool_services
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.storage.ingress_evidence_store import SQLiteIngressActionReceiptStore
 
 
 pytestmark = pytest.mark.small
@@ -166,6 +169,57 @@ def test_internal_ingest_create_normalizes_mixed_duplicate_entry_ids_and_records
     summary_task = ctx.task_queue.find_open_task(SUMMARIZE_MEMORY_TASK_NAME, ctx.workspace_id)
     assert summary_task is None
     assert record.summary
+
+
+def test_internal_ingest_create_persists_shadow_action_receipt(db_manager) -> None:
+    """Shadow mode returns stable action metadata after a successful create."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="shadow")
+    ctx.ingress_action_receipts = SQLiteIngressActionReceiptStore(db_manager)
+    _start_running_ingest_task(ctx, "ingest-receipt-task")
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-receipt-task",
+            "batch_id": "batch-stable",
+            "entry_ids": [31, 32],
+            "title": "Receipt-backed ingest",
+            "content": "The successful mutation emits stable ingress receipt metadata.",
+        },
+    )
+
+    assert payload["ingress_action_id"]
+    assert payload["ingress_payload_digest"]
+    receipt = ctx.ingress_action_receipts.get(payload["ingress_action_id"])
+    assert receipt is not None
+    assert receipt.batch_id == "batch-stable"
+    assert receipt.status.value == "applied_unverified"
+    assert receipt.canonical_payload_digest == payload["ingress_payload_digest"]
+
+
+def test_internal_ingest_create_enforce_rejects_before_domain_write(db_manager) -> None:
+    """Enforce mode rejects before creating a memory without atomic coordination."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    ctx.ingress_action_receipts = SQLiteIngressActionReceiptStore(db_manager)
+    _start_running_ingest_task(ctx, "ingest-enforce-task")
+    assert ctx.repository is not None
+    before = ctx.repository.list_memory_ids()
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-enforce-task",
+            "batch_id": "batch-enforce",
+            "entry_ids": [41],
+            "title": "Rejected enforce mutation",
+            "content": "This must not be written before atomic coordination exists.",
+        },
+    )
+
+    assert payload == {"status": "error", "error": "atomic_boundary_required"}
+    assert ctx.repository.list_memory_ids() == before
 
 
 def test_enqueue_summary_task_coalesces_open_work_and_can_requeue_after_completion(db_manager) -> None:

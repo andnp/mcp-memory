@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ingress_evidence import IngressActionReceipt, IngressReceiptStatus
+from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
 from mcp_memory.core.ingest_claim_lifecycle import (
     _normalize_ingest_entry_ids,
     _record_ingest_tool_invocation,
@@ -56,10 +60,13 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
         memory_id = require_string(arguments, "memory_id")
         content = require_string(arguments, "content")
         task_id = require_string(arguments, "task_id")
+        batch_id = optional_string(arguments, "batch_id")
         entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
         validate_ingest_mutation_payload(entry_ids=entry_ids, content=content)
     except (TypeError, ValueError) as exc:
         return {"status": "error", "error": "invalid_ingest_payload", "detail": str(exc)}
+    if _ingress_requires_atomic_boundary(ctx):
+        return {"status": "error", "error": "atomic_boundary_required"}
     record = ctx.repository.get_memory(memory_id)
     if record is None:
         return {"status": "error", "error": "memory_not_found"}
@@ -126,7 +133,22 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
         mutation=True,
     )
     _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=[updated.id])
+    ingress_metadata = _persist_ingress_action_receipt(
+        ctx,
+        batch_id=batch_id,
+        operation="append",
+        entry_ids=entry_ids,
+        target_ids=[updated.id],
+        payload={
+            "content": content,
+            "metadata": metadata_override,
+            "summary": summary,
+            "tags": merged_tags,
+            "workspace_ids": sorted({*record.workspace_ids, *workspace_ids}),
+        },
+    )
     payload: dict[str, object] = {"status": "ok", "record": internal_mutation_record_payload(updated), "handled_entry_ids": entry_ids}
+    payload.update(ingress_metadata)
     if warnings:
         payload["warnings"] = warnings
     return payload
@@ -138,12 +160,15 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
 
     try:
         task_id = require_string(arguments, "task_id")
+        batch_id = optional_string(arguments, "batch_id")
         entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
         title = require_string(arguments, "title")
         content = require_string(arguments, "content")
         validate_ingest_mutation_payload(entry_ids=entry_ids, content=content, title=title)
     except (TypeError, ValueError) as exc:
         return {"status": "error", "error": "invalid_ingest_payload", "detail": str(exc)}
+    if _ingress_requires_atomic_boundary(ctx):
+        return {"status": "error", "error": "atomic_boundary_required"}
     workspace_ids = string_list(arguments, "workspace_ids") or ([ctx.workspace_id] if ctx.workspace_id is not None else ["workspace-unknown"])
     metadata_override = optional_object(arguments, "metadata") or {}
     summary = optional_string(arguments, "summary")
@@ -189,7 +214,62 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         mutation=True,
     )
     _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=[record.id])
+    ingress_metadata = _persist_ingress_action_receipt(
+        ctx,
+        batch_id=batch_id,
+        operation="create",
+        entry_ids=entry_ids,
+        target_ids=[],
+        payload={
+            "content": content,
+            "metadata": metadata_override,
+            "memory_type": memory_type,
+            "status": optional_string(arguments, "status") or "active",
+            "summary": summary,
+            "tags": tags,
+            "title": title,
+            "workspace_ids": workspace_ids,
+        },
+    )
     payload: dict[str, object] = {"status": "ok", "record": internal_mutation_record_payload(record), "handled_entry_ids": entry_ids}
+    payload.update(ingress_metadata)
     if warnings:
         payload["warnings"] = warnings
     return payload
+
+
+def _persist_ingress_action_receipt(
+    ctx: ApplicationContext,
+    *,
+    batch_id: str | None,
+    operation: str,
+    entry_ids: list[int],
+    target_ids: list[str],
+    payload: dict[str, object],
+) -> dict[str, str]:
+    mode = getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off")
+    repository = getattr(ctx, "ingress_action_receipts", None)
+    if batch_id is None or repository is None or mode not in {"shadow", "detect"}:
+        return {}
+    identity = action_identity(operation, [str(entry_id) for entry_id in entry_ids], target_ids)
+    digest = canonical_payload_digest(payload)
+    receipt = IngressActionReceipt(
+        action_id=identity.action_id,
+        batch_id=batch_id,
+        operation=operation,
+        entry_ids=identity.entry_ids,
+        target_ids=identity.target_ids,
+        canonical_payload_digest=digest,
+        status=IngressReceiptStatus.APPLIED_UNVERIFIED,
+        mutation_evidence_id=None,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    try:
+        repository.save(receipt)
+    except Exception:
+        return {}
+    return {"ingress_action_id": identity.action_id, "ingress_payload_digest": digest}
+
+
+def _ingress_requires_atomic_boundary(ctx: ApplicationContext) -> bool:
+    return getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off") == "enforce"
