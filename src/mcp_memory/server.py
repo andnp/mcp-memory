@@ -19,6 +19,7 @@ from mcp_memory.client_clock import (
     suspend_aware_now,
 )
 from mcp_memory.config import resolve_workspace_root
+from mcp_memory.mcp.tools import allowed_memory_tool_names
 
 
 def request_daemon_json(*args, **kwargs):
@@ -71,6 +72,7 @@ class MCPServer:
         *,
         server_name: str = "mcp-memory",
         tool_path_prefix: str = "/internal/tools",
+        tool_scope: str | None = None,
     ):
         self.workspace_root = workspace_root or str(resolve_workspace_root())
         self.server = Server(
@@ -81,6 +83,9 @@ class MCPServer:
         self._daemon: object | None = None
         self._daemon_recovery_task: asyncio.Task[None] | None = None
         self._tool_path_prefix = tool_path_prefix
+        self._tool_scope = tool_scope or os.environ.get("MCP_MEMORY_TOOL_SCOPE")
+        allowed = allowed_memory_tool_names(self._tool_scope)
+        self._allowed_tool_names = allowed
         self._session_id: str | None = None
         self._session_started = False
         self._suspend_monitor_task: asyncio.Task[None] | None = None
@@ -105,6 +110,7 @@ class MCPServer:
                 )
                 for tool in tools
                 if isinstance(tool, dict)
+                and (self._allowed_tool_names is None or tool.get("name") in self._allowed_tool_names)
             ]
         )
 
@@ -114,6 +120,8 @@ class MCPServer:
         params: CallToolRequestParams,
     ) -> CallToolResult:
         try:
+            if self._allowed_tool_names is not None and params.name not in self._allowed_tool_names:
+                raise ValueError(f"memory_tool_not_allowed: {params.name}")
             payload = await self._request_daemon_json_with_client_timeout(
                 f"{self._tool_path_prefix}/{params.name}",
                 params.arguments or {},

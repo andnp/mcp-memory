@@ -14,7 +14,11 @@ from mcp_memory.cli import main
 from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
-from mcp_memory.mcp.tools import get_memory_tools
+from mcp_memory.mcp.tools import (
+    SKILL_REVIEW_READ_ONLY_SCOPE,
+    allowed_memory_tool_names,
+    get_memory_tools,
+)
 from mcp_memory.server import MCPServer
 from tests.sdk.mcp import FakeAsyncContextManager
 
@@ -61,6 +65,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
         "deferred",
         "verified",
     ]
+
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
     assert search_tool.description is not None
     assert "read_memory_record" in search_tool.description
@@ -99,6 +104,20 @@ def test_get_memory_tools_returns_expected_names() -> None:
             },
         "required": ["memory_id"],
     }
+
+
+def test_skill_review_scope_advertises_only_read_tools() -> None:
+    """Expose only memory search and read tools to isolated skill reviews."""
+    names = [tool.name for tool in get_memory_tools(SKILL_REVIEW_READ_ONLY_SCOPE)]
+
+    assert names == ["search_memory_records", "read_memory_records", "read_memory_record"]
+    assert allowed_memory_tool_names(SKILL_REVIEW_READ_ONLY_SCOPE) == frozenset(names)
+
+
+def test_unknown_memory_tool_scope_is_rejected() -> None:
+    """Reject unrecognized scopes instead of silently widening permissions."""
+    with pytest.raises(ValueError, match="unknown_memory_tool_scope"):
+        get_memory_tools("untrusted")
 
 
 def test_get_internal_maintenance_tools_returns_expected_names() -> None:

@@ -1,8 +1,23 @@
 from mcp.types import Tool
 
+SKILL_REVIEW_READ_ONLY_SCOPE = "skill_review_read_only"
+SKILL_REVIEW_READ_ONLY_TOOLS = frozenset(
+    {"search_memory_records", "read_memory_records", "read_memory_record"}
+)
 
-def get_memory_tools() -> list[Tool]:
-    return [
+
+def allowed_memory_tool_names(tool_scope: str | None = None) -> frozenset[str] | None:
+    """Return the tool names permitted by an optional stdio scope."""
+    if tool_scope is None:
+        return None
+    if tool_scope != SKILL_REVIEW_READ_ONLY_SCOPE:
+        raise ValueError(f"unknown_memory_tool_scope: {tool_scope}")
+    return SKILL_REVIEW_READ_ONLY_TOOLS
+
+
+def get_memory_tools(tool_scope: str | None = None) -> list[Tool]:
+    """Describe public memory tools, optionally restricted to a read-only scope."""
+    tools = [
         Tool(
             name="record_thought",
             description=(
@@ -171,3 +186,5 @@ def get_memory_tools() -> list[Tool]:
             },
         ),
     ]
+    allowed = allowed_memory_tool_names(tool_scope)
+    return [tool for tool in tools if allowed is None or tool.name in allowed]
