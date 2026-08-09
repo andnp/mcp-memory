@@ -29,6 +29,7 @@ from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.transport import internal_tool_services
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.storage.ingress_evidence_store import SQLiteIngressActionReceiptStore
+from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
 
 
 pytestmark = pytest.mark.small
@@ -215,6 +216,187 @@ def test_internal_ingest_create_enforce_rejects_before_domain_write(db_manager) 
             "entry_ids": [41],
             "title": "Rejected enforce mutation",
             "content": "This must not be written before atomic coordination exists.",
+        },
+    )
+
+    assert payload == {"status": "error", "error": "atomic_boundary_required"}
+    assert ctx.repository.list_memory_ids() == before
+
+
+def test_internal_ingest_create_enforce_uses_atomic_boundary_and_preserves_side_effects(db_manager) -> None:
+    """Enforce create commits the memory and returns the atomic receipt metadata."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    cast(Any, ctx).ingress_mutation_transaction = SQLiteIngressMutationStore(db_manager)
+    _start_running_ingest_task(ctx, "ingest-atomic-create")
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-atomic-create",
+            "batch_id": "batch-atomic-create",
+            "entry_ids": [61, 62],
+            "title": "Atomic create",
+            "content": "The service commits domain and ingress evidence together.",
+            "tags": ["atomic"],
+        },
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["handled_entry_ids"] == [61, 62]
+    assert payload["ingress_action_id"]
+    assert payload["ingress_payload_digest"]
+    assert ctx.repository is not None
+    assert ctx.repository.get_memory(payload["record"]["id"]) is not None
+    connection = db_manager.get_connection()
+    assert connection.execute("SELECT COUNT(*) FROM ingress_source_coverage").fetchone()[0] == 2
+    assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
+
+
+def test_internal_ingest_append_enforce_uses_atomic_boundary(db_manager) -> None:
+    """Enforce append uses the transaction domain surface for its mutation."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    cast(Any, ctx).ingress_mutation_transaction = SQLiteIngressMutationStore(db_manager)
+    _start_running_ingest_task(ctx, "ingest-atomic-append")
+    assert ctx.repository is not None
+    target = ctx.repository.create_memory(
+        title="Atomic append target",
+        content="Before",
+        workspace_ids=[ctx.workspace_id or "workspace-a"],
+        tags=["existing"],
+    )
+    assert target is not None
+
+    payload = internal_tool_services()["internal_ingest_append_memory"](
+        ctx,
+        {
+            "memory_id": target.id,
+            "content": "After",
+            "task_id": "ingest-atomic-append",
+            "batch_id": "batch-atomic-append",
+            "entry_ids": [63],
+            "tags": ["new_tag"],
+        },
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["handled_entry_ids"] == [63]
+    updated = ctx.repository.get_memory(target.id)
+    assert updated is not None
+    assert updated.content == "Before\n\nAfter"
+    assert updated.metadata["appended_via_ingest"] is True
+    assert updated.tags == ["existing", "new-tag"]
+
+
+class _CountingIngressMutationTransaction:
+    def __init__(self, store: SQLiteIngressMutationStore) -> None:
+        self.store = store
+        self.callback_calls = 0
+
+    def execute(self, **kwargs: Any) -> Any:
+        apply = kwargs["apply"]
+
+        def counted_apply(domain: Any) -> Any:
+            self.callback_calls += 1
+            return apply(domain)
+
+        return self.store.execute(**{**kwargs, "apply": counted_apply})
+
+
+def test_internal_ingest_enforce_exact_replay_skips_domain_callback(db_manager) -> None:
+    """An exact enforce replay returns the same response without reapplying."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    boundary = _CountingIngressMutationTransaction(SQLiteIngressMutationStore(db_manager))
+    cast(Any, ctx).ingress_mutation_transaction = boundary
+    _start_running_ingest_task(ctx, "ingest-atomic-replay")
+    arguments = {
+        "task_id": "ingest-atomic-replay",
+        "batch_id": "batch-atomic-replay",
+        "entry_ids": [64],
+        "title": "Replayable atomic create",
+        "content": "Only one domain callback should run.",
+    }
+
+    first = internal_tool_services()["internal_ingest_create_memory"](ctx, arguments)
+    replay = internal_tool_services()["internal_ingest_create_memory"](ctx, arguments)
+
+    assert first == replay
+    assert boundary.callback_calls == 1
+
+
+def test_internal_ingest_enforce_divergent_replay_fails_closed(db_manager) -> None:
+    """A divergent enforce replay returns a collision without another memory."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    boundary = _CountingIngressMutationTransaction(SQLiteIngressMutationStore(db_manager))
+    cast(Any, ctx).ingress_mutation_transaction = boundary
+    _start_running_ingest_task(ctx, "ingest-atomic-collision")
+    base_arguments = {
+        "task_id": "ingest-atomic-collision",
+        "batch_id": "batch-atomic-collision",
+        "entry_ids": [65],
+        "title": "Collision original",
+        "content": "Original payload.",
+    }
+    first = internal_tool_services()["internal_ingest_create_memory"](ctx, base_arguments)
+    assert first["status"] == "ok"
+    assert ctx.repository is not None
+    before_ids = ctx.repository.list_memory_ids()
+
+    collision = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {**base_arguments, "content": "Divergent payload."},
+    )
+
+    assert collision["status"] == "error"
+    assert collision["error"] == "ingress_action_identity_collision"
+    assert ctx.repository.list_memory_ids() == before_ids
+    assert boundary.callback_calls == 1
+
+
+def test_internal_ingest_enforce_requires_batch_id_even_with_transaction_boundary(db_manager) -> None:
+    """Enforce mode rejects a mutation without a batch identity."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    boundary = _CountingIngressMutationTransaction(SQLiteIngressMutationStore(db_manager))
+    cast(Any, ctx).ingress_mutation_transaction = boundary
+    _start_running_ingest_task(ctx, "ingest-missing-batch")
+    assert ctx.repository is not None
+    before = ctx.repository.list_memory_ids()
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-missing-batch",
+            "entry_ids": [66],
+            "title": "Missing batch",
+            "content": "This must not mutate.",
+        },
+    )
+
+    assert payload == {"status": "error", "error": "atomic_boundary_required"}
+    assert ctx.repository.list_memory_ids() == before
+    assert boundary.callback_calls == 0
+
+
+def test_internal_ingest_enforce_requires_transaction_boundary(db_manager) -> None:
+    """Enforce mode rejects a mutation without a transaction resource."""
+    ctx = _build_ctx(db_manager)
+    cast(Any, ctx).config = SimpleNamespace(ingress_evidence_mode="enforce")
+    _start_running_ingest_task(ctx, "ingest-missing-transaction")
+    assert ctx.repository is not None
+    before = ctx.repository.list_memory_ids()
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-missing-transaction",
+            "batch_id": "batch-missing-transaction",
+            "entry_ids": [67],
+            "title": "Missing transaction",
+            "content": "This must not mutate.",
         },
     )
 
