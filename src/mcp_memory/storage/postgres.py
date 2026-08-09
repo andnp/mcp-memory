@@ -34,6 +34,7 @@ from mcp_memory.storage.postgres_ingress_evidence_store import (
     PostgresSourceCoverageRepository,
 )
 from mcp_memory.storage.postgres_ingress_mutation_transaction import PostgresIngressMutationStore
+from mcp_memory.storage.postgres_ingress_quality_store import PostgresIngressQualityEvidenceStore
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
@@ -233,5 +234,6 @@ def build_postgres_runtime_components(
         ingress_batch_evidence=PostgresIngressBatchEvidenceRepository(connection_manager),
         ingress_action_receipts=PostgresIngressActionReceiptRepository(connection_manager),
         source_coverage=PostgresSourceCoverageRepository(connection_manager),
+        ingress_quality_evidence=PostgresIngressQualityEvidenceStore(connection_manager),
         ingress_mutation_transaction=PostgresIngressMutationStore(connection_manager),
     )

@@ -36,6 +36,7 @@ class StorageBackendResources:
     ingress_batch_evidence: Any = None
     ingress_action_receipts: Any = None
     source_coverage: Any = None
+    ingress_quality_evidence: Any = None
     ingress_mutation_transaction: Any = None
     embedding_maintenance: Any = None
 

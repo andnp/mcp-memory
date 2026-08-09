@@ -29,6 +29,8 @@ from mcp_memory.storage.ingress_evidence_store import (
     SQLiteSourceCoverageStore,
 )
 from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
+from mcp_memory.storage.ingress_quality_store import SQLiteIngressQualityEvidenceStore
+from mcp_memory.storage.postgres_ingress_quality_store import PostgresIngressQualityEvidenceStore
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 
 
@@ -76,6 +78,7 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
     assert isinstance(storage.ingress_batch_evidence, PostgresIngressBatchEvidenceRepository)
     assert isinstance(storage.ingress_action_receipts, PostgresIngressActionReceiptRepository)
     assert isinstance(storage.source_coverage, PostgresSourceCoverageRepository)
+    assert isinstance(storage.ingress_quality_evidence, PostgresIngressQualityEvidenceStore)
 
 
 def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_readonly_mode(
@@ -200,6 +203,7 @@ def test_storage_factory_accepts_minimal_storage_bootstrap_spec(
     assert isinstance(storage.ingress_batch_evidence, SQLiteIngressBatchEvidenceStore)
     assert isinstance(storage.ingress_action_receipts, SQLiteIngressActionReceiptStore)
     assert isinstance(storage.source_coverage, SQLiteSourceCoverageStore)
+    assert isinstance(storage.ingress_quality_evidence, SQLiteIngressQualityEvidenceStore)
     assert isinstance(storage.ingress_mutation_transaction, SQLiteIngressMutationStore)
     storage.db_manager.close()
 

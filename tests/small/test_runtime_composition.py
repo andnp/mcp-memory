@@ -88,6 +88,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     ingress_batch_evidence = object()
     ingress_action_receipts = object()
     source_coverage = object()
+    ingress_quality_evidence = object()
     ingress_mutation_transaction = object()
     storage = StorageBackendResources(
         backend="sqlite",
@@ -108,6 +109,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
         ingress_batch_evidence=ingress_batch_evidence,
         ingress_action_receipts=ingress_action_receipts,
         source_coverage=source_coverage,
+        ingress_quality_evidence=ingress_quality_evidence,
         ingress_mutation_transaction=ingress_mutation_transaction,
     )
 
@@ -138,6 +140,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     assert composition.context.ingress_batch_evidence is ingress_batch_evidence
     assert composition.context.ingress_action_receipts is ingress_action_receipts
     assert composition.context.source_coverage is source_coverage
+    assert composition.context.ingress_quality_evidence is ingress_quality_evidence
     assert composition.context.ingress_mutation_transaction is ingress_mutation_transaction
     assert isinstance(composition.context.curation_quality, SQLiteCurationQualityStore)
     assert resources.embedder is embedder

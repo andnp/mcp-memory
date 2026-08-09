@@ -421,6 +421,7 @@ class ApplicationContext:
     ingress_batch_evidence: Any = None
     ingress_action_receipts: Any = None
     source_coverage: Any = None
+    ingress_quality_evidence: Any = None
     ingress_mutation_transaction: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
