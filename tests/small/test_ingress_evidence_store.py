@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -12,6 +13,7 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
+from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
 from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressActionReceiptStore,
     SQLiteIngressBatchEvidenceStore,
@@ -110,6 +112,59 @@ def test_receipt_store_round_trips_enum_mappings_and_nulls(db_manager: DatabaseM
     assert row["before_revision_tokens_json"] == '{"memory-1":"before"}'
     assert row["terminalized_at"] is None
     assert row["error_code"] is None
+
+
+def test_receipt_store_reserves_replays_and_rejects_payload_collisions(
+    db_manager: DatabaseManager,
+) -> None:
+    """Reservation preserves the first receipt and fails closed on digest drift.
+
+    A matching digest reuses the stored row, while a divergent digest does not
+    replace it or create a second action receipt.
+    """
+    store = SQLiteIngressActionReceiptStore(db_manager)
+    receipt = _receipt("action-1")
+
+    assert store.reserve(receipt) == receipt
+    replay = replace(receipt, status=IngressReceiptStatus.FAILED, error_code="late")
+    assert store.reserve(replay) == receipt
+
+    collision = replace(receipt, canonical_payload_digest="different-payload")
+    with pytest.raises(IngressActionReceiptIdentityConflictError):
+        store.reserve(collision)
+
+    assert store.get("action-1") == receipt
+    assert db_manager.get_connection().execute(
+        "SELECT COUNT(*) FROM ingress_action_receipts WHERE action_id = ?", ("action-1",)
+    ).fetchone()[0] == 1
+
+
+def test_receipt_store_concurrent_reservations_converge_on_one_row(
+    db_manager: DatabaseManager,
+) -> None:
+    """Concurrent duplicate reservations converge on one committed receipt.
+
+    The real SQLite connections exercise the write-lock boundary used by
+    independent worker threads.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    store = SQLiteIngressActionReceiptStore(db_manager)
+    receipt = _receipt("action-1")
+    barrier = Barrier(2)
+
+    def reserve_after_barrier() -> IngressActionReceipt:
+        barrier.wait()
+        return store.reserve(receipt)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: reserve_after_barrier(), range(2)))
+
+    assert results == [receipt, receipt]
+    assert db_manager.get_connection().execute(
+        "SELECT COUNT(*) FROM ingress_action_receipts WHERE action_id = ?", ("action-1",)
+    ).fetchone()[0] == 1
 
 
 def test_coverage_store_preserves_requested_entry_order_and_updates_rows(

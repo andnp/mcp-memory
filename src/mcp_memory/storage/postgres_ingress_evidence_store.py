@@ -16,6 +16,7 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
+from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -84,6 +85,41 @@ class PostgresIngressBatchEvidenceRepository(_PostgresIngressEvidenceRepository)
 
 
 class PostgresIngressActionReceiptRepository(_PostgresIngressEvidenceRepository):
+    def reserve(self, receipt: IngressActionReceipt) -> IngressActionReceipt:
+        with self._open_connection() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO ingress_action_receipts (
+                            action_id, batch_id, operation, entry_ids_json, target_ids_json,
+                            canonical_payload_digest, status, mutation_evidence_id, created_at,
+                            terminalized_at, error_code, before_revision_tokens_json,
+                            after_revision_tokens_json
+                        ) VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                        ON CONFLICT (action_id) DO NOTHING
+                        """,
+                        _receipt_values(receipt),
+                    )
+                    cursor.execute(
+                        _RECEIPT_SELECT + " WHERE action_id = %s", (receipt.action_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise RuntimeError("ingress action receipt insert was not persisted")
+                    stored = _receipt_from_row(row)
+                    if stored.canonical_payload_digest != receipt.canonical_payload_digest:
+                        raise IngressActionReceiptIdentityConflictError(
+                            receipt.action_id,
+                            stored.canonical_payload_digest,
+                            receipt.canonical_payload_digest,
+                        )
+                connection.commit()
+                return stored
+            except Exception:
+                connection.rollback()
+                raise
+
     def save(self, receipt: IngressActionReceipt) -> IngressActionReceipt:
         with self._open_connection() as connection:
             with connection.cursor() as cursor:

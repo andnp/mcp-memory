@@ -11,6 +11,19 @@ from mcp_memory.core.ingress_evidence import (
 )
 
 
+class IngressActionReceiptIdentityConflictError(ValueError):
+    """Raised when an action ID is reused with a different payload digest."""
+
+    def __init__(self, action_id: str, stored_digest: str, requested_digest: str) -> None:
+        self.action_id = action_id
+        self.stored_digest = stored_digest
+        self.requested_digest = requested_digest
+        super().__init__(
+            f"ingress action receipt payload collision for {action_id!r}: "
+            f"stored digest {stored_digest!r}, requested digest {requested_digest!r}"
+        )
+
+
 class IngressBatchEvidenceRepository(Protocol):
     def save(self, evidence: IngressBatchEvidence) -> IngressBatchEvidence: ...
 
@@ -20,6 +33,8 @@ class IngressBatchEvidenceRepository(Protocol):
 
 
 class IngressActionReceiptRepository(Protocol):
+    def reserve(self, receipt: IngressActionReceipt) -> IngressActionReceipt: ...
+
     def save(self, receipt: IngressActionReceipt) -> IngressActionReceipt: ...
 
     def get(self, action_id: str) -> IngressActionReceipt | None: ...

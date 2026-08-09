@@ -14,6 +14,7 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
+from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -73,6 +74,41 @@ class SQLiteIngressBatchEvidenceStore:
 class SQLiteIngressActionReceiptStore:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
+
+    def reserve(self, receipt: IngressActionReceipt) -> IngressActionReceipt:
+        conn = self._db.get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO ingress_action_receipts (
+                    action_id, batch_id, operation, entry_ids_json, target_ids_json,
+                    canonical_payload_digest, status, mutation_evidence_id,
+                    before_revision_tokens_json, after_revision_tokens_json,
+                    created_at, terminalized_at, error_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(action_id) DO NOTHING
+                """,
+                _receipt_values(receipt),
+            )
+            row = conn.execute(
+                "SELECT * FROM ingress_action_receipts WHERE action_id = ?",
+                (receipt.action_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("ingress action receipt insert was not persisted")
+            stored = _receipt_from_row(row)
+            if stored.canonical_payload_digest != receipt.canonical_payload_digest:
+                raise IngressActionReceiptIdentityConflictError(
+                    receipt.action_id,
+                    stored.canonical_payload_digest,
+                    receipt.canonical_payload_digest,
+                )
+            conn.commit()
+            return stored
+        except Exception:
+            conn.rollback()
+            raise
 
     def save(self, receipt: IngressActionReceipt) -> IngressActionReceipt:
         conn = self._db.get_connection()

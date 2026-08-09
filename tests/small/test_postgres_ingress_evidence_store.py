@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, cast
+
+import pytest
 
 from mcp_memory.core.ingress_evidence import (
     IngressActionReceipt,
@@ -11,6 +14,7 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
+from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
 from mcp_memory.storage.postgres_ingress_evidence_store import (
     PostgresIngressActionReceiptRepository,
     PostgresIngressBatchEvidenceRepository,
@@ -43,6 +47,7 @@ class _Connection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...] | None]] = []
         self.commits = 0
+        self.rollbacks = 0
         self.fetchone_result: tuple[object, ...] | None = None
         self.fetchall_result: list[tuple[object, ...]] = []
 
@@ -53,7 +58,7 @@ class _Connection:
         self.commits += 1
 
     def rollback(self) -> None:
-        pass
+        self.rollbacks += 1
 
 
 class _Lease:
@@ -136,6 +141,41 @@ def test_postgres_action_receipt_preserves_enum_nulls_and_revision_tokens() -> N
         "created", None, "stale", {"entry-1": "before"}, {"entry-1": "after"},
     )
     assert repository.get("action-1") == receipt
+
+
+def test_postgres_action_receipt_reservation_replays_and_rejects_collision() -> None:
+    """Postgres reservation retrieves the winner before deciding replay safety.
+
+    The fake connection verifies conflict-safe insertion, same-transaction
+    retrieval, commit on admission, and rollback on a digest collision.
+    """
+    receipt = IngressActionReceipt(
+        action_id="action-1", batch_id="batch-1", operation="append", entry_ids=("entry-1",),
+        target_ids=(), canonical_payload_digest="payload", status=IngressReceiptStatus.STALE,
+        mutation_evidence_id=None, created_at="created", terminalized_at=None, error_code="stale",
+        before_revision_tokens={"entry-1": "before"}, after_revision_tokens={"entry-1": "after"},
+    )
+    stored_row = (
+        "action-1", "batch-1", "append", ["entry-1"], [], "payload", "stale", None,
+        "created", None, "stale", {"entry-1": "before"}, {"entry-1": "after"},
+    )
+    sessions = _Sessions()
+    sessions.connection.fetchone_result = stored_row
+    repository = PostgresIngressActionReceiptRepository(cast(SessionManager[DbConnectionLike], sessions))
+
+    assert repository.reserve(receipt) == receipt
+    assert "ON CONFLICT (action_id) DO NOTHING" in sessions.connection.calls[0][0]
+    assert "FROM ingress_action_receipts WHERE action_id = %s" in sessions.connection.calls[1][0]
+    assert sessions.connection.commits == 1
+
+    replay = replace(receipt, status=IngressReceiptStatus.FAILED)
+    assert repository.reserve(replay) == receipt
+    assert sessions.connection.commits == 2
+
+    sessions.connection.fetchone_result = (*stored_row[:5], "different-payload", *stored_row[6:])
+    with pytest.raises(IngressActionReceiptIdentityConflictError):
+        repository.reserve(receipt)
+    assert sessions.connection.rollbacks == 1
 
 
 def test_postgres_source_coverage_lists_requested_entries_in_stable_order() -> None:
