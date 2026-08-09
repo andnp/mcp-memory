@@ -418,6 +418,9 @@ class ApplicationContext:
     curation_action_store: Any = None
     curation_quality: Any = None
     direct_mutation_evidence: Any = None
+    ingress_batch_evidence: Any = None
+    ingress_action_receipts: Any = None
+    source_coverage: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
     _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)

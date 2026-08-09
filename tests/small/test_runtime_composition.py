@@ -85,6 +85,9 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     embedder = object()
     provider_registry = {"test": {"json": object()}}
     search_port = _MemorySearchPort()
+    ingress_batch_evidence = object()
+    ingress_action_receipts = object()
+    source_coverage = object()
     storage = StorageBackendResources(
         backend="sqlite",
         db_manager=object(),
@@ -101,6 +104,9 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
         work_items=object(),
         embedding_repair_queue=object(),
         vector_store=object(),
+        ingress_batch_evidence=ingress_batch_evidence,
+        ingress_action_receipts=ingress_action_receipts,
+        source_coverage=source_coverage,
     )
 
     monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda config: embedder)
@@ -127,6 +133,9 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     assert resources is not None
     assert resources.storage is storage
     assert composition.context.relational_search is search_port
+    assert composition.context.ingress_batch_evidence is ingress_batch_evidence
+    assert composition.context.ingress_action_receipts is ingress_action_receipts
+    assert composition.context.source_coverage is source_coverage
     assert isinstance(composition.context.curation_quality, SQLiteCurationQualityStore)
     assert resources.embedder is embedder
     assert resources.provider_registry is provider_registry
@@ -207,8 +216,17 @@ def test_runtime_composition_closes_lazy_telemetry_and_wraps_legacy_context() ->
         retrieval_telemetry=_Closeable("telemetry", calls),
         embedding_integrity_events=_Closeable("integrity", calls),
         repository=_Closeable("repository", calls),
+        ingress_batch_evidence=object(),
+        ingress_action_receipts=object(),
+        source_coverage=object(),
     )
     composition = RuntimeComposition(context=context, capabilities=_empty_capabilities())
+
+    resources = composition.resources
+    assert resources is not None
+    assert resources.storage.ingress_batch_evidence is context.ingress_batch_evidence
+    assert resources.storage.ingress_action_receipts is context.ingress_action_receipts
+    assert resources.storage.source_coverage is context.source_coverage
 
     context.close = lambda: pytest.fail("composition must not delegate to ApplicationContext.close")
     composition.close()
