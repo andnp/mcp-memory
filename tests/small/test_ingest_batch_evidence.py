@@ -224,3 +224,29 @@ def test_agentic_claim_retry_does_not_save_duplicate_evidence(monkeypatch) -> No
         ingest_module.build_next_ingest_batch_payload(cast(ApplicationContext, ctx), {"task_id": "task-1"})
 
     assert len(store.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_deterministic_enforce_mode_blocks_before_mutation() -> None:
+    """Deterministic ingress stays blocked until atomic mutation coordination exists."""
+    store = _EvidenceStore()
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(ingress_evidence_mode="enforce"),
+        ingress_batch_evidence=store,
+        journal=_Journal(),
+        embedder=None,
+        vector_store=None,
+    )
+
+    with pytest.raises(RuntimeError, match="atomic_boundary_required"):
+        await process_ingest_batch(
+            cast(ApplicationContext, ctx),
+            cast(TaskRecord, _task()),
+            None,
+            workspace_id="workspace-a",
+            grouping_strategy="fifo",
+            analyze_ingest_actions=pytest.fail,
+            entries=_entries(),
+        )
+
+    assert ctx.journal.recovered == ["task-1"]

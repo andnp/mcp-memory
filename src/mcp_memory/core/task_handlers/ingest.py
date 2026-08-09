@@ -367,6 +367,9 @@ async def process_ingest_batch(
         entries=entries,
         batch_sequence=batch_sequence,
     )
+    if getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off") == "enforce":
+        ctx.journal.move_claims_to_recoverable(task.id)
+        raise RuntimeError("atomic_boundary_required")
     created_ids: list[str] = []
     handled_ids: list[int] = []
     meaningful_actions = 0
