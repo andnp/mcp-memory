@@ -81,6 +81,24 @@ class SkillReviewCommitDisposition:
         }
 
 
+@dataclass(frozen=True)
+class SkillReviewCommitResponse:
+    dispositions: tuple[SkillReviewCommitDisposition, ...]
+    review_run_id: str
+    idempotent: bool
+    protocol_version: int = PROTOCOL_VERSION
+    status: Literal["committed"] = "committed"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "protocol_version": self.protocol_version,
+            "status": self.status,
+            "review_run_id": self.review_run_id,
+            "idempotent": self.idempotent,
+            "dispositions": [item.as_dict() for item in self.dispositions],
+        }
+
+
 def parse_skill_review_commit_request(arguments: Mapping[str, object]) -> SkillReviewCommitRequest:
     """Validate one protocol request before any storage mutation is attempted."""
     version = arguments.get("protocol_version")
@@ -160,6 +178,7 @@ __all__ = [
     "Resolution",
     "SkillReviewCommitDisposition",
     "SkillReviewCommitRequest",
+    "SkillReviewCommitResponse",
     "SkillReviewDisposition",
     "SkillReviewEvidence",
     "parse_skill_review_commit_request",

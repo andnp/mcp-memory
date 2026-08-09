@@ -8,6 +8,10 @@ from mcp_memory.mcp.validation import (
     require_string,
     string_list,
 )
+from mcp_memory.application.skill_review_contract import (
+    SkillReviewCommitRequest,
+    parse_skill_review_commit_request,
+)
 
 
 def parse_record_thought_arguments(arguments: dict) -> str:
@@ -35,6 +39,11 @@ def parse_resolve_skill_observation_arguments(arguments: dict) -> dict[str, obje
         "resolution": resolution,
         "note": require_string(arguments, "note"),
     }
+
+
+def parse_commit_skill_review_arguments(arguments: dict) -> SkillReviewCommitRequest:
+    """Parse the versioned batch disposition request at the MCP boundary."""
+    return parse_skill_review_commit_request(arguments)
 
 
 def parse_search_arguments(arguments: dict) -> dict:

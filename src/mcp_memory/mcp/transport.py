@@ -186,6 +186,7 @@ async def _dispatch_tool(
 
 def tool_services() -> dict[str, ToolService]:
     from mcp_memory.mcp.services import (
+        commit_skill_review_service,
         read_memory_record_service,
         read_memory_records_service,
         record_skill_observation_service,
@@ -198,6 +199,7 @@ def tool_services() -> dict[str, ToolService]:
         "record_thought": record_thought_service,
         "record_skill_observation": record_skill_observation_service,
         "resolve_skill_observation": resolve_skill_observation_service,
+        "commit_skill_review": commit_skill_review_service,
         "search_memory_records": search_memory_records_async_service,
         "read_memory_record": read_memory_record_service,
         "read_memory_records": read_memory_records_service,

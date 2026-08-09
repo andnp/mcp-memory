@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -68,6 +68,14 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS schema_metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS skill_review_commits (
+            review_run_id TEXT PRIMARY KEY,
+            request_digest TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS memories (

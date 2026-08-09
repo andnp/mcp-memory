@@ -39,6 +39,7 @@ from mcp_memory.application.payloads import (
     build_read_payload,
     build_search_result_payloads,
 )
+from mcp_memory.application.skill_review_contract import SkillReviewCommitRequest
 from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
     SearchMemoryRecordsOperation,
@@ -46,6 +47,11 @@ from mcp_memory.relational.operations import (
 from mcp_memory.relational.search import (
     _to_relational_search_result,
     build_search_scope_diagnostics,
+)
+from mcp_memory.storage.skill_review import (
+    SQLiteSkillReviewCommitStore,
+    SkillReviewCommitConflict,
+    SkillReviewCommitRejected,
 )
 
 logger = logging.getLogger(__name__)
@@ -645,6 +651,24 @@ class ResolveSkillObservationUseCase:
 
     def execute(self, arguments: dict) -> dict:
         return _resolve_skill_observation(self._ctx, arguments)
+
+
+class CommitSkillReviewUseCase:
+    def __init__(self, ctx: MemoryMutationDependencies) -> None:
+        self._ctx = ctx
+
+    def execute(self, request: SkillReviewCommitRequest) -> dict[str, object]:
+        repository = getattr(self._ctx, "repository", None)
+        db_manager = getattr(self._ctx, "db_manager", None)
+        if repository is None or db_manager is None:
+            return {"status": "error", "error": "repository_not_initialized"}
+        try:
+            response = SQLiteSkillReviewCommitStore(db_manager, repository).commit(request)
+        except SkillReviewCommitConflict as error:
+            return {"status": "error", "error": str(error)}
+        except SkillReviewCommitRejected as error:
+            return {"status": "error", "error": error.code}
+        return response.as_dict()
 
 
 class SearchMemoryRecordsUseCase:

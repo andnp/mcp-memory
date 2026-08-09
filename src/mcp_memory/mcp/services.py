@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Mapping
 
 from mcp_memory.application.memory_use_cases import (
+    CommitSkillReviewUseCase,
     ReadMemoryRecordUseCase,
     RecordSkillObservationUseCase,
     RecordThoughtUseCase,
@@ -21,6 +22,7 @@ from mcp_memory.application.ports import MemoryReadContext, MemoryReadDependenci
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.adapters import (
     parse_batch_read_arguments,
+    parse_commit_skill_review_arguments,
     parse_read_arguments,
     parse_record_thought_arguments,
     parse_resolve_skill_observation_arguments,
@@ -115,6 +117,10 @@ def resolve_skill_observation_service(ctx: ApplicationContext, arguments: dict) 
     return ResolveSkillObservationUseCase(ctx).execute(parse_resolve_skill_observation_arguments(arguments))
 
 
+def commit_skill_review_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    return CommitSkillReviewUseCase(ctx).execute(parse_commit_skill_review_arguments(arguments))
+
+
 def search_memory_records_service(
     ctx: MemoryReadContext,
     arguments: dict,
@@ -201,6 +207,7 @@ __all__ = [
     "record_thought_service",
     "record_skill_observation_service",
     "resolve_skill_observation_service",
+    "commit_skill_review_service",
     "search_memory_records_service",
     "search_memory_records_async_service",
     "read_memory_record_service",
