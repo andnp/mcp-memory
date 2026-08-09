@@ -11,13 +11,14 @@ from typing import Literal, Mapping
 from uuid import UUID
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 LEDGER_PROTOCOL_VERSION = 1
 LEDGER_ID = "skill-observation-ledger-v1"
 LEDGER_PAGE_SIZE_MAX = 100
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _LEDGER_TOKEN = re.compile(r"^([0-9a-f]{64}):(0|[1-9][0-9]*)$")
 Resolution = Literal["actioned", "verified", "deferred"]
+ReviewOutcome = Literal["done", "bad"]
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class SkillReviewEvidence:
     source_hashes: Mapping[str, str]
     deployment_status: Literal["passed"]
     deployment_receipt_hash: str
+    ledger_snapshot_id: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -33,19 +35,20 @@ class SkillReviewEvidence:
             "source_hashes": dict(sorted(self.source_hashes.items())),
             "deployment_status": self.deployment_status,
             "deployment_receipt_hash": self.deployment_receipt_hash,
+            "ledger_snapshot_id": self.ledger_snapshot_id,
         }
 
 
 @dataclass(frozen=True)
 class SkillReviewDisposition:
     memory_id: str
-    resolution: Resolution
+    outcome: ReviewOutcome
     note: str
 
     def as_dict(self) -> dict[str, str]:
         return {
             "memory_id": self.memory_id,
-            "resolution": self.resolution,
+            "outcome": self.outcome,
             "note": self.note,
         }
 
@@ -75,13 +78,13 @@ class SkillReviewCommitRequest:
 @dataclass(frozen=True)
 class SkillReviewCommitDisposition:
     memory_id: str
-    resolution: Resolution
+    outcome: ReviewOutcome
     status: str
 
     def as_dict(self) -> dict[str, str]:
         return {
             "memory_id": self.memory_id,
-            "resolution": self.resolution,
+            "outcome": self.outcome,
             "status": self.status,
         }
 
@@ -209,11 +212,15 @@ def _parse_evidence(value: Mapping[str, object]) -> SkillReviewEvidence:
     deployment_receipt_hash = _required_text(value, "deployment_receipt_hash")
     if not _SHA256.fullmatch(deployment_receipt_hash):
         raise ValueError("evidence.deployment_receipt_hash must be a sha256 hash")
+    ledger_snapshot_id = _required_text(value, "ledger_snapshot_id")
+    if not _SHA256.fullmatch(ledger_snapshot_id):
+        raise ValueError("evidence.ledger_snapshot_id must be a sha256 hash")
     return SkillReviewEvidence(
         skills=skills,
         source_hashes=source_hashes,
         deployment_status="passed",
         deployment_receipt_hash=deployment_receipt_hash,
+        ledger_snapshot_id=ledger_snapshot_id,
     )
 
 
@@ -221,10 +228,10 @@ def _parse_disposition(value: object) -> SkillReviewDisposition:
     if not isinstance(value, Mapping):
         raise ValueError("each disposition must be an object")
     memory_id = _required_text(value, "memory_id")
-    resolution = value.get("resolution")
-    if resolution not in {"actioned", "verified", "deferred"}:
-        raise ValueError("resolution must be actioned, verified, or deferred")
-    return SkillReviewDisposition(memory_id, resolution, _required_text(value, "note"))
+    outcome = value.get("outcome")
+    if outcome not in {"done", "bad"}:
+        raise ValueError("outcome must be done or bad")
+    return SkillReviewDisposition(memory_id, outcome, _required_text(value, "note"))
 
 
 def _required_text(value: Mapping[str, object], key: str) -> str:
@@ -239,6 +246,7 @@ __all__ = [
     "LEDGER_PAGE_SIZE_MAX",
     "LEDGER_PROTOCOL_VERSION",
     "PROTOCOL_VERSION",
+    "ReviewOutcome",
     "Resolution",
     "SkillReviewCommitDisposition",
     "SkillReviewCommitRequest",

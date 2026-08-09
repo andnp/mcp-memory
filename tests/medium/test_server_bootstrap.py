@@ -47,6 +47,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
         "record_thought",
         "record_skill_observation",
         "resolve_skill_observation",
+        "get_skill_review_ledger",
         "search_memory_records",
         "read_memory_records",
         "read_memory_record",
@@ -133,7 +134,7 @@ def test_skill_review_writer_scope_advertises_only_batch_commit() -> None:
     assert names == ["commit_skill_review"]
     assert allowed_memory_tool_names(SKILL_REVIEW_WRITER_SCOPE) == frozenset(names)
     tool = get_memory_tools(SKILL_REVIEW_WRITER_SCOPE)[0]
-    assert tool.input_schema["properties"]["protocol_version"] == {"type": "integer", "const": 1}
+    assert tool.input_schema["properties"]["protocol_version"] == {"type": "integer", "const": 2}
 
 
 def test_default_tools_do_not_advertise_the_writer() -> None:

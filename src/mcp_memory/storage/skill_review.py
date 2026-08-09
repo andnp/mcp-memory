@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from mcp_memory.application.skill_review_contract import (
     SkillReviewCommitDisposition,
     SkillReviewCommitRequest,
     SkillReviewCommitResponse,
-    Resolution,
 )
 from mcp_memory.core.ports.memory import MemoryRecord
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
@@ -56,14 +55,15 @@ class SQLiteSkillReviewCommitStore:
 
             records = [_eligible_record(self._repository, request, item.memory_id) for item in request.dispositions]
             outcomes = tuple(
-                SkillReviewCommitDisposition(item.memory_id, item.resolution, _status_for(item.resolution))
+                SkillReviewCommitDisposition(item.memory_id, item.outcome, _status_for(item.outcome))
                 for item in request.dispositions
             )
             for item, record in zip(request.dispositions, records, strict=True):
                 metadata = dict(record.metadata)
                 metadata.update(
                     {
-                        "review_status": item.resolution,
+                        "review_status": item.outcome,
+                        "review_outcome": item.outcome,
                         "resolution_note": item.note,
                         "review_run_id": request.review_run_id,
                         "review_evidence": request.evidence.as_dict(),
@@ -72,8 +72,8 @@ class SQLiteSkillReviewCommitStore:
                 conn.execute(
                     "UPDATE memories SET status = ?, archived_at = ?, updated_at = ?, metadata = ? WHERE id = ? AND status = 'active'",
                     (
-                        _status_for(item.resolution),
-                        _archived_at(item.resolution),
+                        _status_for(item.outcome),
+                        _archived_at(item.outcome),
                         _now(),
                         json.dumps(metadata, sort_keys=True),
                         record.id,
@@ -120,7 +120,7 @@ class PostgresSkillReviewCommitStore:
                         for item in request.dispositions
                     ]
                     outcomes = tuple(
-                        SkillReviewCommitDisposition(item.memory_id, item.resolution, _status_for(item.resolution))
+                        SkillReviewCommitDisposition(item.memory_id, item.outcome, _status_for(item.outcome))
                         for item in request.dispositions
                     )
                     for item, record in zip(request.dispositions, records, strict=True):
@@ -133,7 +133,8 @@ class PostgresSkillReviewCommitStore:
                         metadata = dict(record.metadata)
                         metadata.update(
                             {
-                                "review_status": item.resolution,
+                                "review_status": item.outcome,
+                                "review_outcome": item.outcome,
                                 "resolution_note": item.note,
                                 "review_run_id": request.review_run_id,
                                 "review_evidence": request.evidence.as_dict(),
@@ -142,8 +143,8 @@ class PostgresSkillReviewCommitStore:
                         cursor.execute(
                             "UPDATE memories SET status = %s, archived_at = %s, updated_at = %s, metadata = %s::jsonb WHERE id = %s AND status = 'active'",
                             (
-                                _status_for(item.resolution),
-                                _archived_at(item.resolution),
+                                _status_for(item.outcome),
+                                _archived_at(item.outcome),
                                 _now(),
                                 json.dumps(metadata, sort_keys=True),
                                 record.id,
@@ -186,12 +187,12 @@ def _eligible_record(
     return record
 
 
-def _status_for(resolution: str) -> str:
-    return "archived" if resolution == "actioned" else "stale"
+def _status_for(outcome: str) -> str:
+    return "archived" if outcome == "done" else "stale"
 
 
-def _archived_at(resolution: str) -> str | None:
-    return _now() if resolution == "actioned" else None
+def _archived_at(outcome: str) -> str | None:
+    return _now() if outcome == "done" else None
 
 
 def _now() -> str:
@@ -207,7 +208,7 @@ def _response_from_dict(value: object, *, idempotent: bool) -> SkillReviewCommit
     dispositions = tuple(
         SkillReviewCommitDisposition(
             str(item["memory_id"]),
-            cast(Resolution, str(item["resolution"])),
+            cast(Literal["done", "bad"], str(item["outcome"])),
             str(item["status"]),
         )
         for item in raw_dispositions

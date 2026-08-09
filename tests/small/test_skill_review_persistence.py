@@ -9,7 +9,7 @@ from mcp_memory.application.skill_review_contract import (
     SkillReviewCommitRequest,
     SkillReviewDisposition,
     SkillReviewEvidence,
-    Resolution,
+    ReviewOutcome,
 )
 from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.storage.skill_review import (
@@ -23,7 +23,7 @@ from mcp_memory.utils.db import DatabaseManager
 pytestmark = pytest.mark.small
 
 
-def _request(*memory_ids: str, resolution: Resolution = "verified") -> SkillReviewCommitRequest:
+def _request(*memory_ids: str, outcome: ReviewOutcome = "done") -> SkillReviewCommitRequest:
     """Build a valid batch for the selected skill observations."""
     return SkillReviewCommitRequest(
         review_run_id=str(uuid4()),
@@ -33,9 +33,10 @@ def _request(*memory_ids: str, resolution: Resolution = "verified") -> SkillRevi
             source_hashes={"delegate-code-review": "a" * 64},
             deployment_status="passed",
             deployment_receipt_hash="b" * 64,
+            ledger_snapshot_id="c" * 64,
         ),
         dispositions=tuple(
-            SkillReviewDisposition(memory_id, resolution, "Reviewed with deployed evidence.")
+            SkillReviewDisposition(memory_id, outcome, "Reviewed with deployed evidence.")
             for memory_id in memory_ids
         ),
     )
@@ -71,7 +72,7 @@ def _observation(repository: SQLiteRelationalMemoryRepository, memory_id: str, *
 
 
 def test_commit_skill_review_updates_all_records_and_audits_evidence(tmp_path: Path) -> None:
-    """Commit a valid batch and retain resolution plus deployment evidence."""
+    """Commit a valid batch and retain outcome plus deployment evidence."""
     manager, repository, store = _store(tmp_path)
     _observation(repository, "mem-1")
     _observation(repository, "mem-2")
@@ -79,12 +80,13 @@ def test_commit_skill_review_updates_all_records_and_audits_evidence(tmp_path: P
     response = store.commit(_request("mem-1", "mem-2"))
 
     assert response.as_dict()["status"] == "committed"
-    assert [item.status for item in response.dispositions] == ["stale", "stale"]
+    assert [item.status for item in response.dispositions] == ["archived", "archived"]
     for memory_id in ("mem-1", "mem-2"):
         record = repository.get_memory(memory_id)
         assert record is not None
-        assert record.status == "stale"
-        assert record.metadata["review_status"] == "verified"
+        assert record.status == "archived"
+        assert record.metadata["review_status"] == "done"
+        assert record.metadata["review_outcome"] == "done"
         evidence = cast(dict[str, object], record.metadata["review_evidence"])
         assert evidence["deployment_status"] == "passed"
     audit = cast(sqlite3.Row | None, manager.get_connection().execute(
@@ -174,7 +176,7 @@ def test_commit_skill_review_rejects_conflicting_review_run_reuse(tmp_path: Path
         review_run_id=request.review_run_id,
         workspace_id=request.workspace_id,
         evidence=request.evidence,
-        dispositions=(SkillReviewDisposition("mem-2", "verified", "Different content."),),
+        dispositions=(SkillReviewDisposition("mem-2", "bad", "Different content."),),
     )
 
     store.commit(request)

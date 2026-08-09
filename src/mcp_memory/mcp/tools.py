@@ -107,7 +107,7 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
             input_schema={
                 "type": "object",
                 "properties": {
-                    "protocol_version": {"type": "integer", "const": 1},
+                    "protocol_version": {"type": "integer", "const": 2},
                     "review_run_id": {"type": "string"},
                     "workspace_id": {"type": "string"},
                     "evidence": {
@@ -117,12 +117,14 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
                             "source_hashes": {"type": "object"},
                             "deployment_status": {"type": "string", "const": "passed"},
                             "deployment_receipt_hash": {"type": "string"},
+                            "ledger_snapshot_id": {"type": "string"},
                         },
                         "required": [
                             "skills",
                             "source_hashes",
                             "deployment_status",
                             "deployment_receipt_hash",
+                            "ledger_snapshot_id",
                         ],
                     },
                     "dispositions": {
@@ -132,13 +134,13 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
                             "type": "object",
                             "properties": {
                                 "memory_id": {"type": "string"},
-                                "resolution": {
+                                "outcome": {
                                     "type": "string",
-                                    "enum": ["actioned", "verified", "deferred"],
+                                    "enum": ["done", "bad"],
                                 },
                                 "note": {"type": "string"},
                             },
-                            "required": ["memory_id", "resolution", "note"],
+                            "required": ["memory_id", "outcome", "note"],
                         },
                     },
                 },

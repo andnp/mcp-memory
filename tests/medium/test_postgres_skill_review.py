@@ -11,7 +11,7 @@ from mcp_memory.application.skill_review_contract import (
     SkillReviewCommitRequest,
     SkillReviewDisposition,
     SkillReviewEvidence,
-    Resolution,
+    ReviewOutcome,
 )
 from mcp_memory.context import ApplicationContext
 from mcp_memory.storage.postgres import ensure_postgres_schema
@@ -27,7 +27,7 @@ from mcp_memory.storage.skill_review import (
 pytestmark = pytest.mark.medium
 
 
-def _request(*memory_ids: str, resolution: Resolution = "verified") -> SkillReviewCommitRequest:
+def _request(*memory_ids: str, outcome: ReviewOutcome = "done") -> SkillReviewCommitRequest:
     """Build one valid review batch for Postgres contract tests."""
     return SkillReviewCommitRequest(
         review_run_id=str(uuid4()),
@@ -37,9 +37,10 @@ def _request(*memory_ids: str, resolution: Resolution = "verified") -> SkillRevi
             source_hashes={"delegate-code-review": "a" * 64},
             deployment_status="passed",
             deployment_receipt_hash="b" * 64,
+            ledger_snapshot_id="c" * 64,
         ),
         dispositions=tuple(
-            SkillReviewDisposition(memory_id, resolution, "Reviewed with deployed evidence.")
+            SkillReviewDisposition(memory_id, outcome, "Reviewed with deployed evidence.")
             for memory_id in memory_ids
         ),
     )
@@ -88,8 +89,8 @@ def test_postgres_skill_review_routes_through_context_and_records_evidence(postg
         assert response["status"] == "committed"
         record = repository.get_memory("mem-1")
         assert record is not None
-        assert record.status == "stale"
-        assert record.metadata["review_status"] == "verified"
+        assert record.status == "archived"
+        assert record.metadata["review_status"] == "done"
         evidence = cast(dict[str, object], record.metadata["review_evidence"])
         assert evidence["deployment_status"] == "passed"
     finally:
@@ -113,7 +114,7 @@ def test_postgres_skill_review_replays_identical_request_and_rejects_conflicts(p
             review_run_id=request.review_run_id,
             workspace_id=request.workspace_id,
             evidence=request.evidence,
-            dispositions=(SkillReviewDisposition("mem-2", "verified", "Different content."),),
+            dispositions=(SkillReviewDisposition("mem-2", "bad", "Different content."),),
         )
 
         assert first.idempotent is False

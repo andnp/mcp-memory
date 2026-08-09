@@ -31,8 +31,9 @@ def _request() -> SkillReviewCommitRequest:
             source_hashes={"delegate-code-review": "a" * 64},
             deployment_status="passed",
             deployment_receipt_hash="b" * 64,
+            ledger_snapshot_id="c" * 64,
         ),
-        dispositions=(SkillReviewDisposition("mem-123", "verified", "Checked."),),
+        dispositions=(SkillReviewDisposition("mem-123", "bad", "Checked."),),
     )
 
 
@@ -69,9 +70,9 @@ async def test_commit_skill_review_serializes_a_committed_response(tmp_path: Pat
     assert isinstance(contents[0], TextContent)
     payload = json.loads(contents[0].text)
     assert payload == {
-        "dispositions": [{"memory_id": "mem-123", "resolution": "verified", "status": "stale"}],
+        "dispositions": [{"memory_id": "mem-123", "outcome": "bad", "status": "stale"}],
         "idempotent": False,
-        "protocol_version": 1,
+        "protocol_version": 2,
         "review_run_id": request.review_run_id,
         "status": "committed",
     }
@@ -82,7 +83,7 @@ async def test_commit_skill_review_serializes_invalid_input_without_mutation(tmp
     """Return a protocol error for invalid input before any record is changed."""
     context = _context(tmp_path)
     request = _request().as_dict()
-    request["protocol_version"] = 2
+    request["protocol_version"] = 1
 
     contents = await call_memory_tool(context, "commit_skill_review", request)
 
