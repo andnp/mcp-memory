@@ -4,15 +4,21 @@ SKILL_REVIEW_READ_ONLY_SCOPE = "skill_review_read_only"
 SKILL_REVIEW_READ_ONLY_TOOLS = frozenset(
     {"search_memory_records", "read_memory_records", "read_memory_record"}
 )
+SKILL_REVIEW_WRITER_SCOPE = "skill_review_writer"
+SKILL_REVIEW_WRITER_TOOLS = frozenset({"commit_skill_review"})
 
 
 def allowed_memory_tool_names(tool_scope: str | None = None) -> frozenset[str] | None:
     """Return the tool names permitted by an optional stdio scope."""
     if tool_scope is None:
         return None
-    if tool_scope != SKILL_REVIEW_READ_ONLY_SCOPE:
+    if tool_scope == SKILL_REVIEW_READ_ONLY_SCOPE:
+        return SKILL_REVIEW_READ_ONLY_TOOLS
+    if tool_scope == SKILL_REVIEW_WRITER_SCOPE:
+        return SKILL_REVIEW_WRITER_TOOLS
+    if tool_scope not in {SKILL_REVIEW_READ_ONLY_SCOPE, SKILL_REVIEW_WRITER_SCOPE}:
         raise ValueError(f"unknown_memory_tool_scope: {tool_scope}")
-    return SKILL_REVIEW_READ_ONLY_TOOLS
+    return frozenset()
 
 
 def get_memory_tools(tool_scope: str | None = None) -> list[Tool]:
@@ -71,6 +77,56 @@ def get_memory_tools(tool_scope: str | None = None) -> list[Tool]:
                     "note": {"type": "string"},
                 },
                 "required": ["memory_id", "resolution", "note"],
+            },
+        ),
+        Tool(
+            name="commit_skill_review",
+            description="Commit an evidence-backed batch of skill observation dispositions atomically.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "protocol_version": {"type": "integer", "const": 1},
+                    "review_run_id": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                    "evidence": {
+                        "type": "object",
+                        "properties": {
+                            "skills": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                            "source_hashes": {"type": "object"},
+                            "deployment_status": {"type": "string", "const": "passed"},
+                            "deployment_receipt_hash": {"type": "string"},
+                        },
+                        "required": [
+                            "skills",
+                            "source_hashes",
+                            "deployment_status",
+                            "deployment_receipt_hash",
+                        ],
+                    },
+                    "dispositions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "memory_id": {"type": "string"},
+                                "resolution": {
+                                    "type": "string",
+                                    "enum": ["actioned", "verified", "deferred"],
+                                },
+                                "note": {"type": "string"},
+                            },
+                            "required": ["memory_id", "resolution", "note"],
+                        },
+                    },
+                },
+                "required": [
+                    "protocol_version",
+                    "review_run_id",
+                    "workspace_id",
+                    "evidence",
+                    "dispositions",
+                ],
             },
         ),
         Tool(

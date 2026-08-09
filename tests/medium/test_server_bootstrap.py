@@ -16,6 +16,7 @@ from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.tools import (
     SKILL_REVIEW_READ_ONLY_SCOPE,
+    SKILL_REVIEW_WRITER_SCOPE,
     allowed_memory_tool_names,
     get_memory_tools,
 )
@@ -46,6 +47,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
         "record_thought",
         "record_skill_observation",
         "resolve_skill_observation",
+        "commit_skill_review",
         "search_memory_records",
         "read_memory_records",
         "read_memory_record",
@@ -118,6 +120,16 @@ def test_unknown_memory_tool_scope_is_rejected() -> None:
     """Reject unrecognized scopes instead of silently widening permissions."""
     with pytest.raises(ValueError, match="unknown_memory_tool_scope"):
         get_memory_tools("untrusted")
+
+
+def test_skill_review_writer_scope_advertises_only_batch_commit() -> None:
+    """Expose only the atomic disposition writer to the separate writer session."""
+    names = [tool.name for tool in get_memory_tools(SKILL_REVIEW_WRITER_SCOPE)]
+
+    assert names == ["commit_skill_review"]
+    assert allowed_memory_tool_names(SKILL_REVIEW_WRITER_SCOPE) == frozenset(names)
+    tool = get_memory_tools(SKILL_REVIEW_WRITER_SCOPE)[0]
+    assert tool.input_schema["properties"]["protocol_version"] == {"type": "integer", "const": 1}
 
 
 def test_get_internal_maintenance_tools_returns_expected_names() -> None:
