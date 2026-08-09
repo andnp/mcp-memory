@@ -90,3 +90,167 @@ async def test_commit_skill_review_serializes_invalid_input_without_mutation(tmp
     record = context.repository.get_memory("mem-123")
     assert record is not None
     assert record.status == "active"
+
+
+def _create_ledger_record(
+    context: ApplicationContext,
+    *,
+    memory_id: str,
+    workspace_id: str,
+    memory_type: str = "observation",
+    status: str = "active",
+    tags: list[str] | None = None,
+    updated_at: str,
+) -> None:
+    """Insert one explicit record for ledger predicate and ordering tests."""
+    context.repository.create_memory(
+        memory_id=memory_id,
+        title=memory_id,
+        content=f"content for {memory_id}",
+        summary=f"summary for {memory_id}",
+        workspace_ids=[workspace_id],
+        tags=tags or ["skill-observation"],
+        memory_type=memory_type,
+        status=status,
+        metadata={"skill": "task-observer"},
+        created_at=updated_at,
+        updated_at=updated_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_skill_review_ledger_filters_and_orders_authoritative_records(tmp_path: Path) -> None:
+    """Return only active observations carrying the required tag and workspace."""
+    context = _context(tmp_path)
+    _create_ledger_record(
+        context,
+        memory_id="valid-late",
+        workspace_id="skill-manager-workspace",
+        updated_at="2026-08-08T12:00:02+00:00",
+    )
+    _create_ledger_record(
+        context,
+        memory_id="valid-early",
+        workspace_id="skill-manager-workspace",
+        updated_at="2026-08-08T12:00:01+00:00",
+    )
+    _create_ledger_record(
+        context,
+        memory_id="wrong-status",
+        workspace_id="skill-manager-workspace",
+        status="stale",
+        updated_at="2026-08-08T12:00:00+00:00",
+    )
+    _create_ledger_record(
+        context,
+        memory_id="wrong-type",
+        workspace_id="skill-manager-workspace",
+        memory_type="fact",
+        updated_at="2026-08-08T12:00:00+00:00",
+    )
+    _create_ledger_record(
+        context,
+        memory_id="wrong-tag",
+        workspace_id="skill-manager-workspace",
+        tags=["other"],
+        updated_at="2026-08-08T12:00:00+00:00",
+    )
+    _create_ledger_record(
+        context,
+        memory_id="wrong-workspace",
+        workspace_id="other-workspace",
+        updated_at="2026-08-08T12:00:00+00:00",
+    )
+
+    contents = await call_memory_tool(
+        context,
+        "get_skill_review_ledger",
+        {"protocol_version": 1, "workspace_id": "skill-manager-workspace", "page_size": 10},
+    )
+    payload = json.loads(contents[0].text)
+
+    assert [record["memory_id"] for record in payload["records"]] == [
+        "valid-early",
+        "valid-late",
+        "mem-123",
+    ]
+    assert all("content" not in record for record in payload["records"])
+    assert payload["total_count"] == 3
+    assert payload["next_page_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_skill_review_ledger_paginates_every_record_with_one_snapshot(tmp_path: Path) -> None:
+    """Traverse all pages while retaining one deterministic ledger identity."""
+    context = _context(tmp_path)
+    for index in range(3):
+        _create_ledger_record(
+            context,
+            memory_id=f"page-{index}",
+            workspace_id="skill-manager-workspace",
+            updated_at=f"2026-08-08T12:00:0{index}+00:00",
+        )
+
+    records: list[str] = []
+    page_token = None
+    snapshot_id = None
+    while True:
+        arguments: dict[str, object] = {
+            "protocol_version": 1,
+            "workspace_id": "skill-manager-workspace",
+            "page_size": 1,
+        }
+        if page_token is not None:
+            arguments["page_token"] = page_token
+        payload = json.loads(
+            (await call_memory_tool(context, "get_skill_review_ledger", arguments))[0].text,
+        )
+        records.extend(record["memory_id"] for record in payload["records"])
+        snapshot_id = snapshot_id or payload["snapshot_id"]
+        assert payload["snapshot_id"] == snapshot_id
+        page_token = payload["next_page_token"]
+        if page_token is None:
+            break
+
+    assert records == ["page-0", "page-1", "page-2", "mem-123"]
+
+
+@pytest.mark.asyncio
+async def test_skill_review_ledger_rejects_a_changed_snapshot_cursor(tmp_path: Path) -> None:
+    """Fail closed when a record changes after the first ledger page."""
+    context = _context(tmp_path)
+    _create_ledger_record(
+        context,
+        memory_id="page-1",
+        workspace_id="skill-manager-workspace",
+        updated_at="2026-08-08T12:00:01+00:00",
+    )
+    first = json.loads(
+        (
+            await call_memory_tool(
+                context,
+                "get_skill_review_ledger",
+                {"protocol_version": 1, "workspace_id": "skill-manager-workspace", "page_size": 1},
+            )
+        )[0].text,
+    )
+    record = context.repository.get_memory("mem-123")
+    assert record is not None
+    context.repository.update_memory(record.id, summary="changed")
+
+    second = json.loads(
+        (
+            await call_memory_tool(
+                context,
+                "get_skill_review_ledger",
+                {
+                    "protocol_version": 1,
+                    "workspace_id": "skill-manager-workspace",
+                    "page_size": 1,
+                    "page_token": first["next_page_token"],
+                },
+            )
+        )[0].text,
+    )
+
+    assert second["error"] == "ledger_snapshot_changed"

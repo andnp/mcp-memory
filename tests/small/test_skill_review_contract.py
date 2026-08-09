@@ -3,7 +3,11 @@ from typing import cast
 
 import pytest
 
-from mcp_memory.application.skill_review_contract import parse_skill_review_commit_request
+from mcp_memory.application.skill_review_contract import (
+    ledger_token_parts,
+    parse_skill_review_commit_request,
+    parse_skill_review_ledger_request,
+)
 
 
 pytestmark = pytest.mark.small
@@ -70,3 +74,30 @@ def test_parse_skill_review_request_rejects_duplicate_dispositions() -> None:
 
     with pytest.raises(ValueError, match="duplicate"):
         parse_skill_review_commit_request(_request(dispositions=[disposition, disposition]))
+
+
+def test_parse_skill_review_ledger_request_accepts_bounded_cursor() -> None:
+    """Parse a bounded ledger page and preserve its snapshot cursor."""
+    request = parse_skill_review_ledger_request(
+        {
+            "protocol_version": 1,
+            "workspace_id": "skill-manager-workspace",
+            "page_size": 4,
+            "page_token": f"{'a' * 64}:4",
+        },
+    )
+
+    assert request.page_size == 4
+    assert ledger_token_parts(request.page_token) == ("a" * 64, 4)
+
+
+def test_parse_skill_review_ledger_request_rejects_unbounded_cursor() -> None:
+    """Reject malformed cursors before any repository read occurs."""
+    with pytest.raises(ValueError, match="page_token"):
+        parse_skill_review_ledger_request(
+            {
+                "protocol_version": 1,
+                "workspace_id": "skill-manager-workspace",
+                "page_token": "not-a-cursor",
+            },
+        )
