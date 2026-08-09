@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 34
+POSTGRES_SCHEMA_VERSION = 35
 
 
 @dataclass(frozen=True)
@@ -1015,6 +1015,21 @@ POSTGRES_MIGRATIONS = (
             """,
             "CREATE INDEX IF NOT EXISTS idx_ingress_quality_evidence_disposition ON ingress_quality_evidence(disposition, evaluated_at DESC, action_id)",
             "CREATE INDEX IF NOT EXISTS idx_ingress_quality_evidence_evaluated_at ON ingress_quality_evidence(evaluated_at DESC, action_id)",
+        ),
+    ),
+    PostgresMigration(
+        version=35,
+        name="add_skill_review_commits",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS skill_review_commits (
+                review_run_id TEXT PRIMARY KEY,
+                request_digest TEXT NOT NULL,
+                request_json JSONB NOT NULL,
+                response_json JSONB NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
         ),
     ),
 )
