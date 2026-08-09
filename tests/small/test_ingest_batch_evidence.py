@@ -24,6 +24,16 @@ class _EvidenceStore:
         if self.events is not None:
             self.events.append("evidence")
 
+    def get(self, batch_id: str):
+        return next((item for item in self.saved if item.batch_id == batch_id), None)
+
+    def list_for_execution(self, task_id: str, execution_epoch: int):
+        return [
+            item
+            for item in self.saved
+            if item.task_id == task_id and item.execution_epoch == execution_epoch
+        ]
+
 
 class _Journal:
     def __init__(self, events: list[str] | None = None) -> None:
@@ -152,3 +162,65 @@ def test_enforce_ingress_evidence_failure_recovers_claims_and_raises() -> None:
         )
 
     assert ctx.journal.recovered == ["task-1"]
+
+
+def test_agentic_claim_persists_evidence_with_claim_metadata(monkeypatch) -> None:
+    """Agentic claims store the normalized batch snapshot and execution metadata."""
+    store = _EvidenceStore()
+    task = _task()
+    task.data = {"batch_sequence": 3, "policy_version": "policy-2", "schema_version": "schema-4"}
+    journal = SimpleNamespace(
+        claim_pending=lambda **kwargs: _entries(),
+        count_by_status=lambda **kwargs: {"pending": 0},
+    )
+    queue = SimpleNamespace(get_task=lambda task_id: task)
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(ingress_evidence_mode="shadow"),
+        ingress_batch_evidence=store,
+        journal=journal,
+        task_queue=queue,
+        workspace_id="workspace-a",
+        embedder=None,
+        vector_store=None,
+    )
+    monkeypatch.setattr(ingest_module, "build_ingest_groups", lambda *args, **kwargs: [])
+    monkeypatch.setattr(ingest_module, "_record_ingest_tool_invocation", lambda *args, **kwargs: None)
+
+    payload = ingest_module.build_next_ingest_batch_payload(cast(ApplicationContext, ctx), {"task_id": "task-1"})
+
+    evidence = store.saved[0]
+    assert payload["claimed_entry_ids"] == [2, 1]
+    assert evidence.execution_epoch == 4
+    assert evidence.batch_sequence == 3
+    assert evidence.grouping_strategy == "lexical-seeded"
+    assert evidence.grouping_fallback_reason is None
+    assert evidence.provider_route == "agentic_mcp"
+    assert evidence.execution_mode == "agentic_mcp"
+    assert evidence.policy_version == "policy-2"
+    assert evidence.schema_version == "schema-4"
+
+
+def test_agentic_claim_retry_does_not_save_duplicate_evidence(monkeypatch) -> None:
+    """Retrying an identical claim reuses the stable batch evidence identity."""
+    store = _EvidenceStore()
+    task = _task()
+    journal = SimpleNamespace(
+        claim_pending=lambda **kwargs: _entries(),
+        count_by_status=lambda **kwargs: {"pending": 0},
+    )
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(ingress_evidence_mode="shadow"),
+        ingress_batch_evidence=store,
+        journal=journal,
+        task_queue=SimpleNamespace(get_task=lambda task_id: task),
+        workspace_id="workspace-a",
+        embedder=None,
+        vector_store=None,
+    )
+    monkeypatch.setattr(ingest_module, "build_ingest_groups", lambda *args, **kwargs: [])
+    monkeypatch.setattr(ingest_module, "_record_ingest_tool_invocation", lambda *args, **kwargs: None)
+
+    for _ in range(2):
+        ingest_module.build_next_ingest_batch_payload(cast(ApplicationContext, ctx), {"task_id": "task-1"})
+
+    assert len(store.saved) == 1

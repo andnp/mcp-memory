@@ -458,6 +458,9 @@ def _persist_ingress_batch_evidence(
     grouping_strategy: str,
     entries,
     batch_sequence: int | None,
+    provider_route: str | None = None,
+    execution_mode: str | None = None,
+    grouping_fallback_reason: str | None = None,
 ) -> None:
     mode = getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off")
     if mode == "off":
@@ -466,57 +469,65 @@ def _persist_ingress_batch_evidence(
     sequence = batch_sequence if batch_sequence is not None else int(task.data.get("batch_sequence", 1))
     if isinstance(sequence, bool) or sequence < 1:
         raise ValueError("batch_sequence must be a positive integer")
-    source = normalize_source_snapshot(
-        [
-            {
-                "entry_id": str(entry.id),
-                "timestamp": datetime.fromtimestamp(entry.timestamp, tz=UTC).isoformat(),
-                "workspace_ids": (entry.workspace_id or workspace_id,),
-                "content_digest": sha256(entry.content.encode("utf-8")).hexdigest(),
-            }
-            for entry in entries
-        ]
-    )
-    entries_by_id = {str(item.id): item for item in entries}
-    source_entries = tuple(
-        IngressSourceSnapshot(
-            entry_id=str(entry["entry_id"]),
-            workspace_ids=tuple(cast(list[str], entry["workspace_ids"])),
-            timestamp=str(entry["timestamp"]),
-            content_digest=str(entry["content_digest"]),
-            snapshot={"content": entries_by_id[str(entry["entry_id"])].content},
-        )
-        for entry in cast(list[dict[str, object]], source["entries"])
-    )
-    source_identities = tuple(
-        SourceEntryIdentity(
-            entry_id=entry.entry_id,
-            timestamp=entry.timestamp,
-            workspace_ids=entry.workspace_ids,
-            content_digest=entry.content_digest,
-        )
-        for entry in source_entries
-    )
-    evidence = IngressBatchEvidence(
-        batch_id=batch_id([entry.entry_id for entry in source_entries], source_fingerprint(source_identities)),
-        task_id=task.id,
-        execution_epoch=task.execution_epoch,
-        batch_sequence=sequence,
-        claimed_entry_ids=tuple(entry.entry_id for entry in source_entries),
-        source_fingerprint=source_fingerprint(source_identities),
-        source_entries=source_entries,
-        grouping_strategy=grouping_strategy,
-        grouping_fallback_reason=task.data.get("grouping_fallback_reason"),
-        provider_route=_ingress_provider_route(provider),
-        execution_mode="provider_analysis" if provider is not None else "deterministic_fallback",
-        policy_version=str(task.data.get("policy_version", "ingress-v1")),
-        schema_version=str(task.data.get("schema_version", "1")),
-        claimed_at=datetime.now(UTC).isoformat(),
-    )
     repository = getattr(ctx, "ingress_batch_evidence", None)
     try:
+        source = normalize_source_snapshot(
+            [
+                {
+                    "entry_id": str(entry.id),
+                    "timestamp": datetime.fromtimestamp(entry.timestamp, tz=UTC).isoformat(),
+                    "workspace_ids": (entry.workspace_id or workspace_id,),
+                    "content_digest": sha256(entry.content.encode("utf-8")).hexdigest(),
+                }
+                for entry in entries
+            ]
+        )
+        entries_by_id = {str(item.id): item for item in entries}
+        source_entries = tuple(
+            IngressSourceSnapshot(
+                entry_id=str(entry["entry_id"]),
+                workspace_ids=tuple(cast(list[str], entry["workspace_ids"])),
+                timestamp=str(entry["timestamp"]),
+                content_digest=str(entry["content_digest"]),
+                snapshot={"content": entries_by_id[str(entry["entry_id"])].content},
+            )
+            for entry in cast(list[dict[str, object]], source["entries"])
+        )
+        source_identities = tuple(
+            SourceEntryIdentity(
+                entry_id=entry.entry_id,
+                timestamp=entry.timestamp,
+                workspace_ids=entry.workspace_ids,
+                content_digest=entry.content_digest,
+            )
+            for entry in source_entries
+        )
+        fingerprint = source_fingerprint(source_identities)
+        evidence = IngressBatchEvidence(
+            batch_id=batch_id([entry.entry_id for entry in source_entries], fingerprint),
+            task_id=task.id,
+            execution_epoch=task.execution_epoch,
+            batch_sequence=sequence,
+            claimed_entry_ids=tuple(entry.entry_id for entry in source_entries),
+            source_fingerprint=fingerprint,
+            source_entries=source_entries,
+            grouping_strategy=grouping_strategy,
+            grouping_fallback_reason=(
+                grouping_fallback_reason
+                if grouping_fallback_reason is not None
+                else task.data.get("grouping_fallback_reason")
+            ),
+            provider_route=provider_route or _ingress_provider_route(provider),
+            execution_mode=execution_mode or ("provider_analysis" if provider is not None else "deterministic_fallback"),
+            policy_version=str(task.data.get("policy_version", "ingress-v1")),
+            schema_version=str(task.data.get("schema_version", "1")),
+            claimed_at=datetime.now(UTC).isoformat(),
+        )
         if repository is None:
             raise RuntimeError("ingress_evidence_unavailable")
+        existing = repository.get(evidence.batch_id)
+        if existing is not None:
+            return
         repository.save(evidence)
     except Exception:
         if mode == "enforce":
@@ -924,6 +935,38 @@ def build_next_ingest_batch_payload(ctx: ApplicationContext, arguments: dict[str
         limit=batch_size,
         workspace_id=journal_workspace_id,
     )
+    if getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off") != "off":
+        task = None
+        try:
+            task_queue = getattr(ctx, "task_queue", None)
+            if task_queue is None:
+                raise RuntimeError("task_queue_unavailable")
+            task = task_queue.get_task(task_id)
+            repository = getattr(ctx, "ingress_batch_evidence", None)
+            configured_sequence = task.data.get("batch_sequence")
+            if configured_sequence is None:
+                if repository is None:
+                    raise RuntimeError("ingress_evidence_unavailable")
+                batch_sequence = len(repository.list_for_execution(task.id, task.execution_epoch)) + 1
+            else:
+                batch_sequence = None
+            _persist_ingress_batch_evidence(
+                ctx,
+                task,
+                None,
+                workspace_id=workspace_id,
+                grouping_strategy=grouping_strategy_used,
+                grouping_fallback_reason=grouping_fallback_reason,
+                entries=entries,
+                batch_sequence=batch_sequence,
+                provider_route="agentic_mcp",
+                execution_mode="agentic_mcp",
+            )
+        except Exception:
+            if getattr(getattr(ctx, "config", None), "ingress_evidence_mode", "off") == "enforce":
+                if task is None:
+                    ctx.journal.move_claims_to_recoverable(task_id)
+                raise
     groups = build_ingest_groups(
         ctx,
         entries,
