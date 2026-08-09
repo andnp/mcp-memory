@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -345,6 +345,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
     create_mutation_history_schema(conn)
     create_curation_ledger_schema(conn)
     create_direct_mutation_evidence_schema(conn)
+    create_ingress_evidence_schema(conn)
 
 
 def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
@@ -593,6 +594,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     )
     create_mutation_history_schema(conn)
     create_curation_ledger_schema(conn)
+    create_ingress_evidence_schema(conn)
     ensure_column(conn, "curation_action_receipts", "intent_hash", "TEXT")
     ensure_column(conn, "curation_action_receipts", "verification_descriptor_json", "TEXT")
     ensure_column(conn, "curation_candidate_state", "last_considered_at", "TEXT")
@@ -751,6 +753,54 @@ def create_direct_mutation_evidence_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "curation_quality_evidence", "engagement_utility_delta", "REAL")
     ensure_column(conn, "curation_quality_evidence", "engagement_evidence_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "curation_quality_evidence", "evidence_id", "TEXT")
+
+
+def create_ingress_evidence_schema(conn: sqlite3.Connection) -> None:
+    """Create additive evidence tables for ingress replay and coverage."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ingress_batch_evidence (
+            batch_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            execution_epoch INTEGER NOT NULL,
+            batch_sequence INTEGER NOT NULL,
+            claimed_entry_ids_json TEXT NOT NULL DEFAULT '[]',
+            source_fingerprint TEXT NOT NULL,
+            source_entries_json TEXT NOT NULL DEFAULT '[]',
+            grouping_strategy TEXT,
+            grouping_fallback_reason TEXT,
+            provider_route TEXT NOT NULL,
+            execution_mode TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            claimed_at TEXT NOT NULL,
+            finalized_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS ingress_action_receipts (
+            action_id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            entry_ids_json TEXT NOT NULL DEFAULT '[]',
+            target_ids_json TEXT NOT NULL DEFAULT '[]',
+            canonical_payload_digest TEXT NOT NULL,
+            status TEXT NOT NULL,
+            mutation_evidence_id TEXT,
+            before_revision_tokens_json TEXT NOT NULL DEFAULT '{}',
+            after_revision_tokens_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            terminalized_at TEXT,
+            error_code TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS ingress_source_coverage (
+            entry_id TEXT PRIMARY KEY,
+            outcome TEXT NOT NULL,
+            action_id TEXT,
+            reason TEXT
+        );
+        """
+    )
 
 
 def create_mutation_history_schema(conn: sqlite3.Connection) -> None:
@@ -978,6 +1028,18 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
              ON curation_quality_evidence(created_at DESC, run_id, action_id);
          CREATE INDEX IF NOT EXISTS idx_curation_candidate_state_cooldown
              ON curation_candidate_state(cooldown_until, disposition, memory_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_batch_evidence_execution
+             ON ingress_batch_evidence(task_id, execution_epoch, batch_sequence);
+         CREATE INDEX IF NOT EXISTS idx_ingress_batch_evidence_claimed_at
+             ON ingress_batch_evidence(claimed_at DESC, batch_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_action_receipts_batch_status
+             ON ingress_action_receipts(batch_id, status, action_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_action_receipts_mutation_evidence
+             ON ingress_action_receipts(mutation_evidence_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_source_coverage_action
+             ON ingress_source_coverage(action_id, entry_id);
+         CREATE INDEX IF NOT EXISTS idx_ingress_source_coverage_outcome
+             ON ingress_source_coverage(outcome, entry_id);
          """
     )
     conn.execute(
