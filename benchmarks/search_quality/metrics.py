@@ -17,6 +17,7 @@ class SearchObservation:
     result_labels: tuple[str, ...]
     latency_ms: float | None = None
     semantic_abstained: bool | None = None
+    diagnostics: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

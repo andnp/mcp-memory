@@ -97,6 +97,29 @@ def test_search_quality_metrics_require_every_corpus_observation() -> None:
         evaluate_corpus(corpus, {})
 
 
+def test_search_observation_diagnostics_are_optional_and_preserved() -> None:
+    """Keep diagnostic payloads available without changing scored metrics."""
+    corpus = SearchQualityCorpus(version="test", entries=(_case("diagnostic"),))
+    diagnostics = {"candidate_counts": {"keyword": 2}, "degraded": False}
+    observation = SearchObservation(("target",), diagnostics=diagnostics)
+
+    metrics = evaluate_corpus(corpus, {"diagnostic": observation})
+
+    assert observation.diagnostics == diagnostics
+    assert metrics.cases[0].hit_at_1
+    serialized_cases = metrics.to_mapping()["cases"]
+    assert isinstance(serialized_cases, list)
+    assert serialized_cases[0] == {
+        "evaluation_label": "diagnostic",
+        "query_class": "exact",
+        "hit_at_1": True,
+        "hit_at_5": True,
+        "reciprocal_rank": 1.0,
+        "latency_ms": None,
+        "semantic_abstained": None,
+    }
+
+
 def test_search_quality_runner_evaluates_cases_in_corpus_order() -> None:
     """Keep runner invocation order aligned with the versioned corpus."""
     corpus = SearchQualityCorpus(

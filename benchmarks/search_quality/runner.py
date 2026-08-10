@@ -512,6 +512,7 @@ def _local_policy_builder(
                 ),
                 latency_ms=(time.perf_counter() - started) * 1000.0,
                 semantic_abstained=diagnostics.semantic_abstained,
+                diagnostics=diagnostics.to_payload(),
             )
             return SearchPolicyObservation(observation, diagnostics.degraded)
 
@@ -606,6 +607,7 @@ def run_live_daemon(
                 result_labels=result_labels,
                 latency_ms=elapsed_ms,
                 semantic_abstained=_semantic_abstention(diagnostics),
+                diagnostics=dict(diagnostics),
             )
             degraded = diagnostics.get("degraded") is True
             case_results.append(
