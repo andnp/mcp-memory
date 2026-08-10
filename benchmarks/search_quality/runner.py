@@ -899,6 +899,18 @@ def seed_search_quality_records(
             "daemon runtime worker",
         ),
         (
+            "daemon-runtime-history",
+            "Previous daemon runtime evidence",
+            "Historical daemon runtime evidence: the previous worker shutdown followed a stalled background task.",
+            "daemon runtime history worker",
+        ),
+        (
+            "daemon-current-health",
+            "Current daemon health",
+            "Current daemon health: the background worker is running normally.",
+            "daemon runtime health worker",
+        ),
+        (
             "graph-authority-links",
             "Graph authority links",
             "Relationship links provide authority support for graph-aware ranking.",

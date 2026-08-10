@@ -52,6 +52,16 @@
       "acceptable_top_k": 5
     },
     {
+      "id": "daemon-runtime-history",
+      "evaluation_label": "daemon-runtime-history",
+      "query": "what happened during the previous daemon runtime",
+      "query_class": "historical",
+      "intent": "retrieve historical daemon runtime evidence",
+      "workspace": "workspace",
+      "expected_labels": ["daemon-runtime-history"],
+      "acceptable_top_k": 5
+    },
+    {
       "id": "graph-authority-links",
       "evaluation_label": "graph-authority-links",
       "query": "relationship authority support",
