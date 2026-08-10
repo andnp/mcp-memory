@@ -3,7 +3,7 @@ from __future__ import annotations
 import gc
 from pathlib import Path
 import sqlite3
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import cast
 import warnings
@@ -1913,13 +1913,19 @@ def test_search_memory_records_service_coalesces_concurrent_identical_external_r
     ctx = _build_context(read_cache=cache, relational_search=search_service)
     responses: list[dict[str, object] | None] = [None, None, None]
     failures: list[BaseException] = []
-    follower_joined = Event()
+    followers_joined = Event()
+    follower_lock = Lock()
+    follower_count = 0
     original_begin_inflight_search = cache.begin_inflight_search
 
     def _begin_inflight_search(request: SharedReadCacheSearchRequest):
+        nonlocal follower_count
         entry = original_begin_inflight_search(request)
         if not entry.is_leader:
-            follower_joined.set()
+            with follower_lock:
+                follower_count += 1
+                if follower_count == 2:
+                    followers_joined.set()
         return entry
 
     cache.begin_inflight_search = _begin_inflight_search
@@ -1934,7 +1940,7 @@ def test_search_memory_records_service_coalesces_concurrent_identical_external_r
     for thread in threads:
         thread.start()
     assert search_service.started.wait(timeout=5.0)
-    assert follower_joined.wait(timeout=5.0)
+    assert followers_joined.wait(timeout=5.0)
     search_service.release.set()
     for thread in threads:
         thread.join(timeout=5.0)
