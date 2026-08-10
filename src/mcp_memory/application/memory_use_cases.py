@@ -278,6 +278,11 @@ def _search_memory_records(
         ctx,
         execution_arguments,
         policy_version=MEMORY_SEARCH_POLICY_VERSION,
+        feature_fingerprint=(
+            None
+            if ctx.config is None
+            else ctx.config.searchkernel.active_feature_fingerprint()
+        ),
     )
     _increment_shared_read_cache_metric(
         ctx,
