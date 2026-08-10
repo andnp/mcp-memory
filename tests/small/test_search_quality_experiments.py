@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 import pytest
 
+from mcp_memory.config import Config, SearchKernelConfig
+from mcp_memory.embeddings import SQLiteVectorStore
+from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.utils.db import DatabaseManager
 from benchmarks.search_quality import (
     QueryClass,
     SearchObservation,
     SearchPolicyObservation,
     SearchQualityCase,
     SearchQualityCorpus,
+    build_local_policy_builders,
     run_policy_comparison,
+    seed_search_quality_records,
 )
 
 
@@ -176,3 +185,103 @@ def test_policy_comparison_reports_missing_optional_builders() -> None:
     assert comparison.by_policy["calibrated_fusion"].skip_reason == "builder_not_supplied"
     assert comparison.by_policy["query_expansion"].skip_reason == "builder_not_supplied"
     assert comparison.by_policy["reranking"].skip_reason == "builder_not_supplied"
+
+
+def test_local_builders_default_to_baseline_and_stable_metadata() -> None:
+    """Build only baseline by default with reproducible policy metadata."""
+    with TemporaryDirectory() as directory:
+        manager = DatabaseManager(Path(directory) / "search-quality.db")
+        try:
+            repository = RelationalMemoryRepository(manager)
+            label_to_id = seed_search_quality_records(repository)
+            builders = build_local_policy_builders(
+                repository,
+                label_to_id,
+                db_manager=manager,
+                vector_store=SQLiteVectorStore(manager),
+            )
+
+            assert builders.calibrated_fusion_builder is None
+            assert builders.query_expansion_builder is None
+            assert builders.reranking_builder is None
+            assert list(builders.identities) == ["baseline"]
+            assert builders.metadata() == {
+                "baseline": {
+                    "policy": "baseline",
+                    "identity": "mcp-memory-search-quality-v1:baseline",
+                    "fingerprint": "baseline",
+                }
+            }
+            assert builders.baseline_builder() is not builders.baseline_builder()
+        finally:
+            manager.close()
+
+
+def test_local_builders_apply_requested_config_overrides() -> None:
+    """Construct requested experimental policies without changing the base config."""
+    with TemporaryDirectory() as directory:
+        manager = DatabaseManager(Path(directory) / "search-quality.db")
+        try:
+            repository = RelationalMemoryRepository(manager)
+            label_to_id = seed_search_quality_records(repository)
+            config = Config(
+                searchkernel=SearchKernelConfig(query_expansion_policy="synonym")
+            )
+            builders = build_local_policy_builders(
+                repository,
+                label_to_id,
+                db_manager=manager,
+                vector_store=SQLiteVectorStore(manager),
+                config=config,
+                requested_policies=("calibrated_fusion", "query_expansion"),
+            )
+
+            assert builders.calibrated_fusion_builder is not None
+            assert builders.query_expansion_builder is not None
+            assert set(builders.identities) == {
+                "baseline",
+                "calibrated_fusion",
+                "query_expansion",
+            }
+            assert builders.identities["baseline"].fingerprint == "baseline"
+            assert (
+                builders.identities["calibrated_fusion"].fingerprint
+                == "calibrated-fusion"
+            )
+            assert (
+                builders.identities["query_expansion"].fingerprint
+                == "query-expansion:synonym"
+            )
+            assert config.searchkernel.active_feature_fingerprint() is None
+        finally:
+            manager.close()
+
+
+def test_local_builder_reranking_is_skipped_without_dependency() -> None:
+    """Leave reranking unbuilt when the local adapter has no reranker."""
+    with TemporaryDirectory() as directory:
+        manager = DatabaseManager(Path(directory) / "search-quality.db")
+        try:
+            repository = RelationalMemoryRepository(manager)
+            label_to_id = seed_search_quality_records(repository)
+            builders = build_local_policy_builders(
+                repository,
+                label_to_id,
+                db_manager=manager,
+                vector_store=SQLiteVectorStore(manager),
+                requested_policies=("reranking",),
+            )
+            comparison = run_policy_comparison(
+                SearchQualityCorpus(version="empty", entries=()),
+                baseline_builder=builders.baseline_builder,
+                calibrated_fusion_builder=builders.calibrated_fusion_builder,
+                query_expansion_builder=builders.query_expansion_builder,
+                reranking_builder=builders.reranking_builder,
+            )
+
+            reranking = comparison.by_policy["reranking"]
+            assert builders.reranking_builder is None
+            assert reranking.status == "skipped"
+            assert reranking.skip_reason == "builder_not_supplied"
+        finally:
+            manager.close()
