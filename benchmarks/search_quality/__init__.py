@@ -7,11 +7,23 @@ from .corpus import (
     SearchQualityCorpus,
     load_corpus,
 )
+from .metrics import (
+    CaseMetrics,
+    QueryClassMetrics,
+    SearchObservation,
+    SearchQualityMetrics,
+    evaluate_corpus,
+)
 
 __all__ = [
     "DEFAULT_CORPUS_PATH",
     "QueryClass",
     "SearchQualityCase",
     "SearchQualityCorpus",
+    "CaseMetrics",
+    "QueryClassMetrics",
+    "SearchObservation",
+    "SearchQualityMetrics",
+    "evaluate_corpus",
     "load_corpus",
 ]
