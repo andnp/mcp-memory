@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import cast
@@ -17,7 +17,7 @@ from mcp_memory.relational.search import (
     _to_relational_search_result,
 )
 from searchkernel.runtime import clear_query_embedding_cache
-from searchkernel.search.record_pipeline import RecordSearchResult
+from searchkernel.search.record_pipeline import RecordSearchOutcome, RecordSearchResult
 from tests.small.maintenance_read_repository_contract import (
     assert_maintenance_read_preserves_telemetry,
 )
@@ -286,6 +286,70 @@ def test_search_diagnostics_signal_multi_strategy_candidates_without_merging() -
     assert diagnostics.to_payload()["duplicate_candidate_ids"] == ["memory-a"]
     assert diagnostics.to_payload()["multi_lane_candidate_ids"] == ["memory-a"]
     assert diagnostics.to_payload()["final_duplicate_ids"] == []
+
+
+def test_service_search_diagnostics_separate_final_duplicates(db_manager) -> None:
+    """Report repeated final IDs separately from multi-lane provenance."""
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+    record = SimpleNamespace(
+        source_id="memory-a",
+        storage_key="workspace:memory-a",
+        title="Repeated result",
+        body="Body",
+        status=SimpleNamespace(value="active"),
+        metadata={"memory_type": "fact", "workspace_ids": []},
+    )
+    results = [
+        SimpleNamespace(
+            record=record,
+            record_id="memory-a",
+            score=0.5,
+            provenance=SimpleNamespace(
+                strategies=("keyword", "vector"),
+                to_dict=lambda: {"strategies": ["keyword", "vector"]},
+            ),
+        ),
+        SimpleNamespace(
+            record=record,
+            record_id="memory-a",
+            score=0.4,
+            provenance=SimpleNamespace(
+                strategies=("keyword",),
+                to_dict=lambda: {"strategies": ["keyword"]},
+            ),
+        ),
+    ]
+    outcome = cast(
+        RecordSearchOutcome,
+        SimpleNamespace(
+            results=results,
+            stage_timings_ms={},
+            candidate_counts={},
+            diagnostics=(),
+            cache_diagnostics=(),
+            failures=(),
+            missing_record_ids=(),
+            degraded=False,
+            trace=None,
+        ),
+    )
+    service._retrieval_facade.search_sync = cast(
+        Callable[..., RecordSearchOutcome], lambda *args, **kwargs: outcome
+    )
+
+    mapped, diagnostics = service.search_memories_with_diagnostics(
+        "repeated result",
+        side_effect_free=True,
+    )
+
+    assert diagnostics.multi_lane_candidate_ids == ["memory-a"]
+    assert diagnostics.final_duplicate_ids == ["memory-a"]
+    assert all(
+        result.ranking_debug is not None
+        and result.ranking_debug.get("final_duplicate") is True
+        for result in mapped
+    )
 
 
 def test_service_search_filters_archived_records_by_default(db_manager) -> None:
