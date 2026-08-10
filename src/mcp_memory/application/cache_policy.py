@@ -118,7 +118,14 @@ def _compact_cached_search_result(result: dict[str, object]) -> dict[str, object
     )
     return {
         key: result[key]
-        for key in (identifier_key, "title", "summary")
+        for key in (
+            identifier_key,
+            "title",
+            "summary",
+            "status",
+            "created_at",
+            "updated_at",
+        )
         if key in result
     }
 

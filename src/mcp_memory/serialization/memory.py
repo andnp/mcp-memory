@@ -129,8 +129,8 @@ def search_result_payload(result: RelationalSearchResult) -> dict:
         "summary": result.summary,
         "memory_type": result.memory_type,
         "status": result.status,
-        "created_at": result.created_at,
-        "updated_at": result.updated_at,
+        "created_at": getattr(result, "created_at", None),
+        "updated_at": getattr(result, "updated_at", None),
         "tags": list(result.tags),
         "workspace_ids": list(result.workspace_ids),
         "score": result.score,
@@ -147,9 +147,9 @@ def search_result_payload_compact(result: RelationalSearchResult) -> dict:
         "memory_ref": format_memory_ref(getattr(result, "memory_ref", None)) or result.memory_id,
         "title": result.title,
         "summary": result.summary,
-        "status": result.status,
-        "created_at": result.created_at,
-        "updated_at": result.updated_at,
+        "status": getattr(result, "status", None),
+        "created_at": getattr(result, "created_at", None),
+        "updated_at": getattr(result, "updated_at", None),
     }
 
 

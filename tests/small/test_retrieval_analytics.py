@@ -144,6 +144,9 @@ def test_non_debug_search_does_not_add_phase_timings(monkeypatch) -> None:
                 "memory_ref": "mem-1",
                 "title": "Compact result",
                 "summary": "Compact summary",
+                "status": "active",
+                "created_at": None,
+                "updated_at": None,
             }
         ],
     }

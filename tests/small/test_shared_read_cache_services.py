@@ -481,7 +481,14 @@ def _projection_payload(
 def _compact_projection_payload(payload: dict[str, object] | dict[str, str | float | list]) -> dict[str, object]:
     return {
         key: payload[key]
-        for key in ("memory_id", "title", "summary")
+        for key in (
+            "memory_id",
+            "title",
+            "summary",
+            "status",
+            "created_at",
+            "updated_at",
+        )
         if key in payload
     }
 
