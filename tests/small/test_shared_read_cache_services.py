@@ -503,6 +503,76 @@ def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -
     assert "_cache_validation_tokens" not in response
 
 
+def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Policy changes cannot reuse fresh, stale, or coalesced responses."""
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    baseline = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v1",
+        feature_fingerprint="baseline",
+    )
+    policy_variant = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v2",
+        feature_fingerprint="baseline",
+    )
+    feature_variant = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v1",
+        feature_fingerprint="rerank",
+    )
+    payload = {"status": "ok", "results": [{"memory_id": "baseline"}]}
+
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 10.0)
+    cache.store_search_response(baseline, payload)
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 20.0)
+
+    assert cache.load_search_response(baseline) == payload
+    assert cache.load_search_response(policy_variant) is None
+    assert cache.load_search_response(feature_variant) is None
+    assert cache.load_fresh_search_response(baseline, ttl_seconds=5.0) is None
+    assert cache.load_search_response(baseline) == payload
+    assert cache.load_fresh_search_response(policy_variant, ttl_seconds=30.0) is None
+    assert cache.load_search_response(policy_variant) is None
+
+    baseline_leader = cache.begin_inflight_search(baseline)
+    baseline_follower = cache.begin_inflight_search(baseline)
+    variant_leader = cache.begin_inflight_search(policy_variant)
+
+    assert baseline_leader.is_leader is True
+    assert baseline_follower.is_leader is False
+    assert variant_leader.is_leader is True
+
+    cache.finish_inflight_search(baseline_leader, payload=payload)
+    cache.finish_inflight_search(
+        variant_leader,
+        payload={"status": "ok", "results": [{"memory_id": "variant"}]},
+    )
+
+    assert cache.wait_for_inflight_search(baseline_follower) == payload
+
+
 def test_shared_read_cache_invalidation_clears_exact_query_and_affected_entries(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     request = SharedReadCacheSearchRequest(
