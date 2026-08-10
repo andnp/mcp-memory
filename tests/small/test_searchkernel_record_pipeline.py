@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 
+import mcp_memory.integrations.searchkernel_record_pipeline as record_pipeline
 from mcp_memory.config import Config, SearchKernelConfig, SearchRankingConfig
 from mcp_memory.core.ports.memory import (
     MemoryLink,
@@ -494,6 +495,51 @@ def test_pipeline_keeps_advanced_searchkernel_policies_disabled() -> None:
     assert kernel_config.rerank_budget == 0
     assert pipeline._pipeline._routing_fingerprint == "record-search-v1"
     assert kernel_config.artifact_confidence_threshold > 1.0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_candidate_eligibility_hook_when_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass memory eligibility to SearchKernel's released policy seam."""
+    captured: dict[str, object] = {}
+
+    class CompatiblePolicy:
+        def __init__(
+            self,
+            *,
+            query_candidate_set_eligible: object = None,
+            **kwargs: object,
+        ) -> None:
+            captured["query_candidate_set_eligible"] = query_candidate_set_eligible
+            for name, value in kwargs.items():
+                setattr(self, name, value)
+            self.query_candidate_filter = None
+            self.query_candidate_set_eligible = query_candidate_set_eligible
+            self.score_adjuster = None
+            self.parent_expander = None
+
+    monkeypatch.setattr(record_pipeline, "RecordSearchPolicy", CompatiblePolicy)
+    repository = FakeRepository(keyword_ids=["active"])
+    vector_store = FakeVectorStore()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=FakeEmbedder(),
+    )
+    outcome = await pipeline.search(
+        "src/searchkernel.py",
+        limit=1,
+        filters={
+            "workspace_id": "workspace-1",
+            "status": "active",
+            "include_superseded": False,
+        },
+    )
+
+    assert callable(captured["query_candidate_set_eligible"])
+    assert vector_store.search_count == 0
+    assert "vector:artifact_keyword_confident" in outcome.diagnostics
 
 
 def test_pipeline_applies_enabled_advanced_searchkernel_policies() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
@@ -341,42 +341,57 @@ def build_memory_record_pipeline(
                 repository=cast(MemoryReadPort, repository),
             )
 
-    policy = RecordSearchPolicy(
-        candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
-        vector_candidate_ids=lambda ranking, context: _vector_candidate_ids(
+    query_candidate_set_eligibility_supported = (
+        _supports_query_candidate_set_eligibility()
+    )
+    policy_options: dict[str, object] = {
+        "candidate_filter": lambda candidate: _candidate_allowed(repository, candidate),
+        "vector_candidate_ids": lambda ranking, context: _vector_candidate_ids(
             repository,
             ranking,
             context,
             resolved_config,
         ),
-        vector_ranking_order=lambda ranking, context: _order_vector_ranking(
+        "vector_ranking_order": lambda ranking, context: _order_vector_ranking(
             repository,
             ranking,
             context,
             resolved_config,
         ),
-        query_score_adjuster=lambda candidate, context: _adjust_score(
+        "query_score_adjuster": lambda candidate, context: _adjust_score(
             ranking_engine,
             repository,
             candidate,
             context,
         ),
-        result_filter=lambda result: _result_allowed(
+        "result_filter": lambda result: _result_allowed(
             repository,
             result,
             resolved_config,
         ),
-        post_process=_sort_results,
-    )
+        "post_process": _sort_results,
+    }
+    if query_candidate_set_eligibility_supported:
+        policy_options["query_candidate_set_eligible"] = (
+            lambda ranking, context: _candidate_set_eligible(
+                repository,
+                ranking,
+                context,
+            )
+        )
+    policy_factory = cast("Callable[..., RecordSearchPolicy]", RecordSearchPolicy)
+    policy = policy_factory(**policy_options)
     hydrator = MemoryHydrator(cast(MemoryReadPort, policy_repository))
     record_search_config = RecordSearchConfig(
         minimum_candidate_limit=50,
         graph_fusion="max",
         max_graph_seeds=3,
         max_neighbors_per_seed=10,
-        # searchkernel decides this before mcp-memory's eligibility policy;
-        # keep vector retrieval enabled until that decision is query-aware.
-        artifact_confidence_threshold=1.000001,
+        artifact_confidence_threshold=(
+            RecordSearchConfig().artifact_confidence_threshold
+            if query_candidate_set_eligibility_supported
+            else 1.000001
+        ),
         adaptive_graph_enabled=True,
         capture_trace=True,
         adaptive_enabled=adaptive_enabled,
@@ -447,6 +462,12 @@ def _embedding_dimension(embedder: EmbeddingBatchProvider) -> int | None:
     if len(embeddings) != 1 or not embeddings[0]:
         return None
     return len(embeddings[0])
+
+
+def _supports_query_candidate_set_eligibility() -> bool:
+    return "query_candidate_set_eligible" in inspect.signature(
+        RecordSearchPolicy
+    ).parameters
 
 
 def _ensure_searchable_embeddings(
@@ -560,6 +581,20 @@ def _vector_candidate_ids(
     effective_limit = context.limit
     candidate_cap = max(effective_limit * 4, 20)
     return [hit.source_id for hit in keyword_ranking[:candidate_cap]]
+
+
+def _candidate_set_eligible(
+    repository: MemoryRepositoryPort,
+    ranking: Sequence[RecordHit],
+    context: RecordSearchQueryContext,
+) -> bool:
+    eligible_ids = {
+        hit.source_id
+        for hit in ranking
+        if (record := _cached_memory(repository, hit.source_id)) is not None
+        and _memory_allowed(repository, record)
+    }
+    return len(eligible_ids) >= context.limit
 
 
 def _order_vector_ranking(
