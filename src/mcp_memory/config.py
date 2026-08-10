@@ -24,6 +24,8 @@ MemoryGCMode = Literal["report-only", "delete"]
 IngressEvidenceMode = Literal["off", "shadow", "enforce"]
 IngressReplayPolicy = Literal["legacy", "detect", "enforce"]
 IngressQualityAdmission = Literal["disabled", "manual", "canary"]
+SearchKernelExpansionPolicy = Literal["vector", "synonym"]
+SearchKernelRerankPolicy = Literal["disabled", "default"]
 
 
 @dataclass
@@ -413,10 +415,44 @@ class SearchRankingConfig:
 @dataclass
 class SearchKernelConfig:
     failure_mode: str = "lenient"
+    calibrated_fusion_enabled: bool = False
+    query_expansion_enabled: bool = False
+    query_expansion_policy: SearchKernelExpansionPolicy = "vector"
+    rerank_policy: SearchKernelRerankPolicy = "disabled"
+    rerank_budget: int = 0
 
     def __post_init__(self) -> None:
         if self.failure_mode not in {"strict", "lenient"}:
             raise ValueError("searchkernel.failure_mode must be strict or lenient")
+        if not isinstance(self.calibrated_fusion_enabled, bool):
+            raise ValueError("searchkernel.calibrated_fusion_enabled must be a boolean")
+        if not isinstance(self.query_expansion_enabled, bool):
+            raise ValueError("searchkernel.query_expansion_enabled must be a boolean")
+        if self.query_expansion_policy not in {"vector", "synonym"}:
+            raise ValueError(
+                "searchkernel.query_expansion_policy must be vector or synonym"
+            )
+        if self.rerank_policy not in {"disabled", "default"}:
+            raise ValueError(
+                "searchkernel.rerank_policy must be disabled or default"
+            )
+        if self.rerank_budget < 0:
+            raise ValueError("searchkernel.rerank_budget must be >= 0")
+        if self.rerank_policy == "disabled" and self.rerank_budget != 0:
+            raise ValueError(
+                "searchkernel.rerank_budget must be 0 when rerank_policy is disabled"
+            )
+
+    def active_feature_fingerprint(self) -> str | None:
+        """Return only enabled policy inputs for derivative-cache isolation."""
+        features: list[str] = []
+        if self.calibrated_fusion_enabled:
+            features.append("calibrated-fusion")
+        if self.query_expansion_enabled:
+            features.append(f"query-expansion:{self.query_expansion_policy}")
+        if self.rerank_policy != "disabled":
+            features.append(f"rerank:{self.rerank_policy}:{self.rerank_budget}")
+        return None if not features else ";".join(features)
 
 
 @dataclass
@@ -762,6 +798,11 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     }
     document["searchkernel"] = {
         "failure_mode": "lenient",
+        "calibrated_fusion_enabled": False,
+        "query_expansion_enabled": False,
+        "query_expansion_policy": "vector",
+        "rerank_policy": "disabled",
+        "rerank_budget": 0,
     }
     document["provider_routing"] = _default_provider_routing_data()
     document["ingest_suppression"] = {

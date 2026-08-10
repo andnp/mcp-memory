@@ -6,7 +6,7 @@ import asyncio
 import inspect
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from searchkernel.domain import RecordHit, Vector
@@ -22,7 +22,7 @@ from searchkernel.search.record_pipeline import (
     RecordSearchResult,
 )
 
-from mcp_memory.config import Config
+from mcp_memory.config import Config, SearchKernelConfig
 from mcp_memory.core.ports.memory import (
     MemoryLink,
     MemoryReadPort,
@@ -354,33 +354,48 @@ def build_memory_record_pipeline(
         post_process=_sort_results,
     )
     hydrator = MemoryHydrator(cast(MemoryReadPort, policy_repository))
+    record_search_config = RecordSearchConfig(
+        minimum_candidate_limit=50,
+        graph_fusion="max",
+        max_graph_seeds=3,
+        max_neighbors_per_seed=10,
+        # searchkernel decides this before mcp-memory's eligibility policy;
+        # keep vector retrieval enabled until that decision is query-aware.
+        artifact_confidence_threshold=1.000001,
+        adaptive_graph_enabled=True,
+        capture_trace=True,
+        adaptive_enabled=adaptive_enabled,
+        maximum_limit=resolved_config.search_ranking.adaptive_result_max,
+        score_ratio_floor=resolved_config.search_ranking.adaptive_result_score_ratio_floor,
+        minimum_score=resolved_config.search_ranking.adaptive_result_min_score,
+        maximum_score_gap=resolved_config.search_ranking.adaptive_result_max_score_gap,
+        failure_mode=(
+            "strict"
+            if searchkernel_config.failure_mode == "strict"
+            else "lenient"
+        ),
+    )
+    if searchkernel_config.calibrated_fusion_enabled:
+        record_search_config = replace(record_search_config, fusion_mode="calibrated")
+    if searchkernel_config.query_expansion_enabled:
+        record_search_config = replace(
+            record_search_config,
+            expansion_enabled=searchkernel_config.query_expansion_policy == "vector",
+            synonym_expansion_enabled=searchkernel_config.query_expansion_policy == "synonym",
+        )
+    if searchkernel_config.rerank_policy != "disabled":
+        record_search_config = replace(
+            record_search_config,
+            rerank_budget=searchkernel_config.rerank_budget,
+        )
+
     pipeline = RecordSearchPipeline(
         hydrator=hydrator,
         keyword_store=MemoryKeywordStore(repository, prefetch=prefetch),
         vector_store=adapted_vector_store,
         graph_store=MemoryGraphStore(cast(MemoryRepositoryPort, policy_repository)),
         embedding_provider=embedding_provider,
-        config=RecordSearchConfig(
-            minimum_candidate_limit=50,
-            graph_fusion="max",
-            max_graph_seeds=3,
-            max_neighbors_per_seed=10,
-            # searchkernel decides this before mcp-memory's eligibility policy;
-            # keep vector retrieval enabled until that decision is query-aware.
-            artifact_confidence_threshold=1.000001,
-            adaptive_graph_enabled=True,
-            capture_trace=True,
-            adaptive_enabled=adaptive_enabled,
-            maximum_limit=resolved_config.search_ranking.adaptive_result_max,
-            score_ratio_floor=resolved_config.search_ranking.adaptive_result_score_ratio_floor,
-            minimum_score=resolved_config.search_ranking.adaptive_result_min_score,
-            maximum_score_gap=resolved_config.search_ranking.adaptive_result_max_score_gap,
-            failure_mode=(
-                "strict"
-                if searchkernel_config.failure_mode == "strict"
-                else "lenient"
-            ),
-        ),
+        config=record_search_config,
         policy=policy,
         continue_on_error=None,
         policy_version=(
@@ -388,6 +403,7 @@ def build_memory_record_pipeline(
             if callable(getattr(repository, "get_search_epochs", None))
             else None
         ),
+        routing_fingerprint=_routing_fingerprint(searchkernel_config),
     )
     return MemoryRecordSearchPipeline(
         pipeline,
@@ -395,6 +411,13 @@ def build_memory_record_pipeline(
         semantic_only_abstain_threshold=resolved_config.search_ranking.semantic_only_abstain_threshold,
         diagnostics=MemoryRecordPipelineDiagnostics(tuple(diagnostics)),
     )
+
+
+def _routing_fingerprint(config: SearchKernelConfig) -> str:
+    feature_fingerprint = config.active_feature_fingerprint()
+    if feature_fingerprint is None:
+        return "record-search-v1"
+    return f"record-search-v1:{feature_fingerprint}"
 
 
 def _embedding_dimension(embedder: EmbeddingBatchProvider) -> int | None:
