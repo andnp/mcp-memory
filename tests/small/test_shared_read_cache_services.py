@@ -435,8 +435,14 @@ class ConfigurableReadService:
         return self._read_result
 
 
-def _build_context(*, read_cache: SharedReadCache, relational_search: object) -> ApplicationContext:
+def _build_context(
+    *,
+    read_cache: SharedReadCache,
+    relational_search: object,
+    config: Config | None = None,
+) -> ApplicationContext:
     context = ApplicationContext(
+        config=config,
         workspace_id="workspace-123",
         storage_backend="postgres",
         relational_search=cast(MemorySearchPort, relational_search),
@@ -532,6 +538,47 @@ def test_search_memory_records_service_does_not_reuse_default_policy_cache_entry
     assert search_service.calls == 1
     assert response["results"][0]["memory_ref"] == "memory-1"
     assert cache.load_search_response(legacy_request) == legacy_payload
+
+
+def test_search_memory_records_service_uses_active_feature_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Enabled searchkernel policies use a distinct production cache identity."""
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    config = Config()
+    config.searchkernel.calibrated_fusion_enabled = True
+    ctx = _build_context(
+        read_cache=cache,
+        relational_search=SuccessfulSearchService(),
+        config=config,
+    )
+
+    response = search_memory_records_service(ctx, {"query": "warm cache"})
+    feature_request = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
+        feature_fingerprint=config.searchkernel.active_feature_fingerprint(),
+    )
+    baseline_request = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
+    )
+
+    assert cache.load_search_response(feature_request) is not None
+    assert cache.load_search_response(baseline_request) is None
+    assert response["status"] == "ok"
 
 
 def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_paths(
