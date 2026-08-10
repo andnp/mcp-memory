@@ -120,6 +120,7 @@ def _acceptance_report(
     historical_rank: int = 1,
     latency_ms: float = 10.0,
     degraded_case_count: int = 0,
+    diagnostics: bool = False,
 ) -> SearchPolicyReport:
     def labels(rank: int) -> tuple[str, ...]:
         return tuple("target" if index == rank else "other" for index in range(1, 6))
@@ -128,9 +129,21 @@ def _acceptance_report(
     metrics = evaluate_corpus(
         corpus,
         {
-            "exact": SearchObservation(labels(exact_rank), latency_ms),
-            "broad": SearchObservation(labels(broad_rank), latency_ms),
-            "historical": SearchObservation(labels(historical_rank), latency_ms),
+            "exact": SearchObservation(
+                labels(exact_rank), latency_ms, diagnostics={"stage": "exact"}
+                if diagnostics
+                else None,
+            ),
+            "broad": SearchObservation(
+                labels(broad_rank), latency_ms, diagnostics={"stage": "broad"}
+                if diagnostics
+                else None,
+            ),
+            "historical": SearchObservation(
+                labels(historical_rank), latency_ms, diagnostics={"stage": "historical"}
+                if diagnostics
+                else None,
+            ),
         },
     )
     return SearchPolicyReport(
@@ -139,6 +152,7 @@ def _acceptance_report(
         metrics=metrics,
         degraded_case_count=degraded_case_count,
         degradation_rate=degraded_case_count / 3,
+        diagnostics_complete=diagnostics,
     )
 
 
@@ -243,6 +257,38 @@ def test_policy_acceptance_fails_closed_for_skipped_reranking() -> None:
 
     assert not decision.accepted
     assert decision.reasons == ("candidate_not_completed", "candidate_metrics_missing")
+
+
+def test_policy_acceptance_requires_diagnostics_when_opted_in() -> None:
+    """Reject completed reports without observations diagnostics when required."""
+    decision = evaluate_policy_acceptance(
+        _acceptance_report("query_expansion", diagnostics=False),
+        _acceptance_report("baseline", diagnostics=True),
+        thresholds=SearchPolicyAcceptanceThresholds(require_diagnostics=True),
+    )
+
+    assert not decision.accepted
+    assert decision.reasons == ("candidate_diagnostics_missing",)
+    assert decision.to_mapping()["diagnostics_complete"] is False
+    assert decision.to_mapping()["thresholds"] == {
+        "min_broad_hit_at_5_delta": 0.0,
+        "min_historical_hit_at_5_delta": 0.0,
+        "max_degradation_rate_delta": 0.0,
+        "max_p95_latency_ms": None,
+        "require_diagnostics": True,
+    }
+
+
+def test_policy_acceptance_passes_with_required_diagnostics() -> None:
+    """Accept completed reports when every observation has diagnostics."""
+    decision = evaluate_policy_acceptance(
+        _acceptance_report("query_expansion", diagnostics=True),
+        _acceptance_report("baseline", diagnostics=True),
+        thresholds=SearchPolicyAcceptanceThresholds(require_diagnostics=True),
+    )
+
+    assert decision.accepted
+    assert decision.diagnostics_complete is True
 
 
 def test_policy_comparison_runs_isolated_builders_in_stable_order() -> None:

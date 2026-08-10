@@ -213,6 +213,7 @@ class SearchPolicyReport:
     degraded_case_count: int
     degradation_rate: float | None
     skip_reason: str | None = None
+    diagnostics_complete: bool = False
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize one policy without search payloads."""
@@ -234,15 +235,19 @@ class SearchPolicyAcceptanceThresholds:
     min_historical_hit_at_5_delta: float = 0.0
     max_degradation_rate_delta: float = 0.0
     max_p95_latency_ms: float | None = None
+    require_diagnostics: bool = False
 
-    def to_mapping(self) -> dict[str, float | None]:
+    def to_mapping(self) -> dict[str, object]:
         """Serialize thresholds for a future canary consumer."""
-        return {
+        mapping: dict[str, object] = {
             "min_broad_hit_at_5_delta": self.min_broad_hit_at_5_delta,
             "min_historical_hit_at_5_delta": self.min_historical_hit_at_5_delta,
             "max_degradation_rate_delta": self.max_degradation_rate_delta,
             "max_p95_latency_ms": self.max_p95_latency_ms,
         }
+        if self.require_diagnostics:
+            mapping["require_diagnostics"] = True
+        return mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,16 +259,20 @@ class SearchPolicyAcceptanceDecision:
     baseline_policy: PolicyName
     reasons: tuple[str, ...]
     thresholds: SearchPolicyAcceptanceThresholds
+    diagnostics_complete: bool | None = None
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize the decision with deterministic reason ordering."""
-        return {
+        mapping: dict[str, object] = {
             "accepted": self.accepted,
             "candidate_policy": self.candidate_policy,
             "baseline_policy": self.baseline_policy,
             "reasons": list(self.reasons),
             "thresholds": self.thresholds.to_mapping(),
         }
+        if self.diagnostics_complete is not None:
+            mapping["diagnostics_complete"] = self.diagnostics_complete
+        return mapping
 
 
 def evaluate_policy_acceptance(
@@ -283,6 +292,19 @@ def evaluate_policy_acceptance(
         reasons.append("baseline_metrics_missing")
     if candidate.metrics is None:
         reasons.append("candidate_metrics_missing")
+    diagnostics_complete: bool | None = None
+    if (
+        resolved_thresholds.require_diagnostics
+        and baseline.status == "completed"
+        and candidate.status == "completed"
+    ):
+        diagnostics_complete = (
+            baseline.diagnostics_complete and candidate.diagnostics_complete
+        )
+        if not baseline.diagnostics_complete:
+            reasons.append("baseline_diagnostics_missing")
+        if not candidate.diagnostics_complete:
+            reasons.append("candidate_diagnostics_missing")
     if baseline.metrics is not None and candidate.metrics is not None:
         if baseline.metrics.corpus_version != candidate.metrics.corpus_version:
             reasons.append("corpus_version_mismatch")
@@ -334,6 +356,7 @@ def evaluate_policy_acceptance(
         baseline_policy=baseline.policy,
         reasons=tuple(reasons),
         thresholds=resolved_thresholds,
+        diagnostics_complete=diagnostics_complete,
     )
 
 
@@ -528,10 +551,12 @@ def _run_policy(
 ) -> SearchPolicyReport:
     observations: dict[str, SearchObservation] = {}
     degraded_case_count = 0
+    diagnostics_complete = True
     for case in corpus.entries:
         outcome = runner(case)
         observations[case.evaluation_label] = outcome.observation
         degraded_case_count += int(outcome.degraded)
+        diagnostics_complete &= outcome.observation.diagnostics is not None
     return SearchPolicyReport(
         policy=policy,
         status="completed",
@@ -540,6 +565,7 @@ def _run_policy(
         degradation_rate=degraded_case_count / len(corpus.entries)
         if corpus.entries
         else 0.0,
+        diagnostics_complete=diagnostics_complete,
     )
 
 
