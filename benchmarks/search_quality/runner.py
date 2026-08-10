@@ -1007,8 +1007,20 @@ def seed_search_quality_records(
         (
             "search-quality-follow-up",
             "Search quality follow-up",
-            "Search quality follow-up context: preserve exact retrieval while improving broad search results.",
-            "search quality retrieval",
+            "Search-quality follow-up evidence: searchkernel version 0.21 showed broad-query recall loss during latency spikes with transport and runtime warnings.",
+            "search quality searchkernel query runtime",
+        ),
+        (
+            "search-quality-follow-up-decoy-runtime",
+            "Search quality runtime report",
+            "Another project reported searchkernel version transport and runtime warnings during a latency review; broad query recall remained under observation.",
+            "search quality searchkernel query runtime",
+        ),
+        (
+            "search-quality-follow-up-decoy-transport",
+            "Search quality transport report",
+            "A separate benchmark project tracked searchkernel version, broad query recall, latency, transport warnings, and runtime behavior.",
+            "search quality searchkernel query runtime",
         ),
         (
             "global-project-ranking",
@@ -1026,6 +1038,9 @@ def seed_search_quality_records(
     workspace_ids_by_label = {
         "global-project-ranking": [workspace],
         "global-other-project": ["other-workspace"],
+        "search-quality-follow-up": [workspace],
+        "search-quality-follow-up-decoy-runtime": ["other-workspace"],
+        "search-quality-follow-up-decoy-transport": ["benchmark-project"],
     }
     label_to_id: dict[str, str] = {}
     for label, title, content, tags in records:

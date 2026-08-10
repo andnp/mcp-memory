@@ -44,7 +44,7 @@ def test_search_quality_corpus_fixture_has_stable_labels() -> None:
     assert corpus.version == "search-quality-v1"
     assert len(corpus.entries) == 12
     assert len({entry.evaluation_label for entry in corpus.entries}) == 12
-    assert sum(entry.workspace == "global" for entry in corpus.entries) == 1
+    assert sum(entry.workspace == "global" for entry in corpus.entries) == 2
 
 
 def test_search_quality_corpus_rejects_duplicate_labels() -> None:

@@ -94,10 +94,10 @@
     {
       "id": "search-quality-follow-up",
       "evaluation_label": "search-quality-follow-up",
-      "query": "what did we decide about search quality",
+      "query": "searchkernel version broad query recall latency transport runtime warnings",
       "query_class": "broad",
-      "intent": "retrieve broad search-quality follow-up context",
-      "workspace": "workspace",
+      "intent": "retrieve historical search-quality follow-up evidence",
+      "workspace": "global",
       "expected_labels": ["search-quality-follow-up"],
       "acceptable_top_k": 5
     },
