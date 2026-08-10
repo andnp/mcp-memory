@@ -266,6 +266,7 @@ async def test_candidate_cache_requires_authoritative_epochs() -> None:
 
 @pytest.mark.asyncio
 async def test_strong_keyword_matches_bound_vector_candidates() -> None:
+    """Bound semantic candidates when the keyword match is strong."""
     repository = FakeRepository(keyword_ids=["active"])
     vector_store = FakeVectorStore()
     pipeline = build_memory_record_pipeline(

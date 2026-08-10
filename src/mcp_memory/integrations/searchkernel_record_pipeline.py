@@ -18,6 +18,7 @@ from searchkernel.search.record_pipeline import (
     RecordSearchOutcome,
     RecordSearchPipeline,
     RecordSearchPolicy,
+    RecordSearchQueryContext,
     RecordSearchResult,
 )
 
@@ -327,22 +328,23 @@ def build_memory_record_pipeline(
 
     policy = RecordSearchPolicy(
         candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
-        vector_candidate_ids=lambda ranking, filters: _vector_candidate_ids(
+        vector_candidate_ids=lambda ranking, context: _vector_candidate_ids(
             repository,
             ranking,
-            filters,
+            context,
             resolved_config,
         ),
-        vector_ranking_order=lambda ranking, filters: _order_vector_ranking(
+        vector_ranking_order=lambda ranking, context: _order_vector_ranking(
             repository,
             ranking,
-            filters,
+            context,
             resolved_config,
         ),
-        score_adjuster=lambda candidate: _adjust_score(
+        query_score_adjuster=lambda candidate, context: _adjust_score(
             ranking_engine,
             repository,
             candidate,
+            context,
         ),
         result_filter=lambda result: _result_allowed(
             repository,
@@ -492,7 +494,7 @@ def _candidate_allowed(
 def _vector_candidate_ids(
     repository: MemoryRepositoryPort,
     keyword_ranking: Sequence[RecordHit],
-    filters: Mapping[str, object],
+    context: RecordSearchQueryContext,
     config: Config,
 ) -> Sequence[str] | None:
     if not keyword_ranking:
@@ -514,9 +516,7 @@ def _vector_candidate_ids(
     )
     if strongest_coverage < config.search_ranking.keyword_coverage_floor:
         return None
-    requested_limit = filters.get("_mcp_memory_requested_limit")
-    effective_limit = getattr(filters, "limit", requested_limit)
-    effective_limit = effective_limit if isinstance(effective_limit, int) else 1
+    effective_limit = context.limit
     candidate_cap = max(effective_limit * 4, 20)
     return [hit.source_id for hit in keyword_ranking[:candidate_cap]]
 
@@ -524,9 +524,10 @@ def _vector_candidate_ids(
 def _order_vector_ranking(
     repository: MemoryRepositoryPort,
     ranking: Sequence[RecordHit],
-    filters: Mapping[str, object],
+    context: RecordSearchQueryContext,
     config: Config,
 ) -> Sequence[RecordHit]:
+    filters = context.filters
     workspace_id = filters.get("_ranking_workspace_id", filters.get("workspace_id"))
     workspace = workspace_id if isinstance(workspace_id, str) else None
 
@@ -583,6 +584,7 @@ def _adjust_score(
     ranking_engine: RankingEngine,
     repository: MemoryRepositoryPort,
     candidate: RecordSearchCandidate,
+    context: RecordSearchQueryContext,
 ) -> float:
     record = _cached_memory(repository, candidate.record_id)
     if record is None:
@@ -591,9 +593,9 @@ def _adjust_score(
     if ranked_candidate is None:
         return 0.0
 
-    workspace_id = _ACTIVE_FILTERS.get().get(
+    workspace_id = context.filters.get(
         "_ranking_workspace_id",
-        _ACTIVE_FILTERS.get().get("workspace_id"),
+        context.filters.get("workspace_id"),
     )
     workspace = workspace_id if isinstance(workspace_id, str) else None
     provenance = candidate.provenance
@@ -617,9 +619,7 @@ def _adjust_score(
         semantic_score=semantic_score,
         keyword_token_coverage=keyword_token_coverage,
         expanded_by_graph="graph" in provenance.strategies,
-        exact_identifier_match=_has_exact_identifier_match(signal_context.query, record)
-        if signal_context is not None
-        else False,
+        exact_identifier_match=_has_exact_identifier_match(context.query, record),
     )
     ranked = ranking_engine.rank_records(
         [ranked_candidate],
