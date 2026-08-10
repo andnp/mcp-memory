@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from time import perf_counter
@@ -65,6 +66,54 @@ from mcp_memory.storage.skill_review import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_DEBUG_PHASE_TIMING_MS = 60_000.0
+
+
+def _bounded_timing_ms(value_ms: float) -> float:
+    if not math.isfinite(value_ms):
+        return _MAX_DEBUG_PHASE_TIMING_MS if value_ms > 0 else 0.0
+    return round(min(max(value_ms, 0.0), _MAX_DEBUG_PHASE_TIMING_MS), 3)
+
+
+def _elapsed_timing_ms(started_at: float) -> float:
+    return _bounded_timing_ms((perf_counter() - started_at) * 1000.0)
+
+
+def _new_search_phase_timings() -> dict[str, float]:
+    return {
+        "fresh_cache_lookup": 0.0,
+        "coalesced_wait": 0.0,
+        "authoritative_search": 0.0,
+        "validation_projection_warming": 0.0,
+        "embedding_repair_wait": 0.0,
+    }
+
+
+def _embedding_repair_health_snapshot(
+    ctx: MemoryReadDependencies,
+) -> tuple[int, float] | None:
+    get_health = getattr(ctx.relational_search, "get_health", None)
+    if not callable(get_health):
+        return None
+    try:
+        health = get_health()
+    except Exception:
+        return None
+    repair_wait_count = getattr(health, "repair_wait_count", None)
+    wait_seconds = getattr(health, "last_repair_wait_seconds", None)
+    if not isinstance(repair_wait_count, int) or not isinstance(wait_seconds, (int, float)):
+        return None
+    return repair_wait_count, float(wait_seconds)
+
+
+def _request_embedding_repair_wait_ms(
+    before: tuple[int, float] | None,
+    after: tuple[int, float] | None,
+) -> float:
+    if before is None or after is None or after[0] <= before[0]:
+        return 0.0
+    return _bounded_timing_ms(after[1] * 1000.0)
 
 
 def _graph_provenance_from_results(
@@ -212,6 +261,7 @@ def _search_memory_records(
     operation = SearchMemoryRecordsOperation(retrieval)
     started_at = perf_counter()
     debug_enabled = arguments["debug"]
+    phase_timings_ms = _new_search_phase_timings()
     execution_arguments = {
         "query": query,
         "workspace_id": arguments.get("workspace_id"),
@@ -235,12 +285,14 @@ def _search_memory_records(
         caller_kind=caller_kind,
         debug_enabled=debug_enabled,
     )
+    cache_lookup_started = perf_counter()
     cached_payload = _load_fresh_cached_search_hit(
         ctx,
         cache_request,
         caller_kind=caller_kind,
         debug_enabled=debug_enabled,
     )
+    phase_timings_ms["fresh_cache_lookup"] = _elapsed_timing_ms(cache_lookup_started)
     if cached_payload is not None:
         _increment_shared_read_cache_metric(
             ctx,
@@ -256,6 +308,7 @@ def _search_memory_records(
         debug_enabled=debug_enabled,
     )
     if inflight_search is not None and not inflight_search.is_leader:
+        coalesced_wait_started = perf_counter()
         try:
             read_cache = ctx.read_cache
             if read_cache is None:
@@ -288,6 +341,7 @@ def _search_memory_records(
                     )
                     return projection_payload
             raise
+        phase_timings_ms["coalesced_wait"] = _elapsed_timing_ms(coalesced_wait_started)
         duration_ms = (perf_counter() - started_at) * 1000.0
         surfaced_memory_ids = [
             str(result["memory_id"])
@@ -303,6 +357,8 @@ def _search_memory_records(
         )
         return _compact_cached_search_payload(coalesced_payload)
     diagnostics = None
+    repair_health_before = _embedding_repair_health_snapshot(ctx)
+    authoritative_search_started = perf_counter()
     try:
         if debug_enabled:
             results, diagnostics = operation.execute_with_diagnostics(
@@ -338,6 +394,13 @@ def _search_memory_records(
                 )
                 return projection_payload
         raise
+    phase_timings_ms["authoritative_search"] = _elapsed_timing_ms(
+        authoritative_search_started
+    )
+    phase_timings_ms["embedding_repair_wait"] = _request_embedding_repair_wait_ms(
+        repair_health_before,
+        _embedding_repair_health_snapshot(ctx),
+    )
     duration_ms = (perf_counter() - started_at) * 1000.0
     surfaced_memory_ids = [result.memory_id for result in results]
     surface_tracker = ctx.surface_tracker or ctx.repository
@@ -362,21 +425,8 @@ def _search_memory_records(
         "status": "ok",
         "results": result_payloads,
     }
-    if debug_enabled:
-        timing_ms = {"total": round(duration_ms, 3)}
-        if diagnostics is not None:
-            timing_ms |= {
-                key: value
-                for key, value in diagnostics.timing_ms.items()
-                if key != "total"
-            }
-            payload["search_diagnostics"] = diagnostics.to_payload()
-        payload["timing_ms"] = timing_ms
-        payload["adaptive_limit_enabled"] = execution_arguments["adaptive_limit"]
-        payload["requested_limit"] = execution_arguments["limit"]
-        payload["expanded_result_window"] = len(results) > execution_arguments["limit"]
-        payload["returned_result_count"] = len(results)
     validation_tokens: dict[str, str] = {}
+    validation_warming_started = perf_counter()
     if _shared_read_cache_enabled(
         ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
     ):
@@ -396,6 +446,9 @@ def _search_memory_records(
         debug_enabled=debug_enabled,
         validation_tokens=validation_tokens,
     )
+    phase_timings_ms["validation_projection_warming"] = _elapsed_timing_ms(
+        validation_warming_started
+    )
     if warmed_projection_rows > 0:
         _increment_shared_read_cache_metric(
             ctx,
@@ -404,6 +457,25 @@ def _search_memory_records(
             caller_kind=caller_kind,
             debug_enabled=debug_enabled,
         )
+    if debug_enabled:
+        timing_ms = {"total": round(duration_ms, 3)}
+        if diagnostics is not None:
+            timing_ms |= {
+                key: value
+                for key, value in diagnostics.timing_ms.items()
+                if key != "total"
+            }
+            timing_ms |= phase_timings_ms
+            diagnostics_payload = diagnostics.to_payload()
+            diagnostics_payload["timing_ms"] = timing_ms
+            payload["search_diagnostics"] = diagnostics_payload
+        else:
+            timing_ms |= phase_timings_ms
+        payload["timing_ms"] = timing_ms
+        payload["adaptive_limit_enabled"] = execution_arguments["adaptive_limit"]
+        payload["requested_limit"] = execution_arguments["limit"]
+        payload["expanded_result_window"] = len(results) > execution_arguments["limit"]
+        payload["returned_result_count"] = len(results)
     if _shared_read_cache_enabled(
         ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
     ):
@@ -435,6 +507,9 @@ async def _search_memory_records_async(
     query = arguments["query"]
     limit = arguments["limit"]
     started_at = perf_counter()
+    phase_timings_ms = _new_search_phase_timings()
+    repair_health_before = _embedding_repair_health_snapshot(ctx)
+    authoritative_search_started = perf_counter()
     pipeline = build_memory_record_pipeline(
         ctx.repository,
         vector_store=ctx.vector_store,
@@ -453,6 +528,13 @@ async def _search_memory_records_async(
             "status": arguments["status"],
             "include_superseded": arguments["include_superseded"],
         },
+    )
+    phase_timings_ms["authoritative_search"] = _elapsed_timing_ms(
+        authoritative_search_started
+    )
+    phase_timings_ms["embedding_repair_wait"] = _request_embedding_repair_wait_ms(
+        repair_health_before,
+        _embedding_repair_health_snapshot(ctx),
     )
     results = [
         _to_relational_search_result(result)
@@ -482,6 +564,7 @@ async def _search_memory_records_async(
                 for stage, duration in outcome.stage_timings_ms.items()
             }
         )
+        timing_ms.update(phase_timings_ms)
         payload["search_diagnostics"] = {
             "kernel_failures": [
                 {
