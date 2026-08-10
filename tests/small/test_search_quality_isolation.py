@@ -236,6 +236,7 @@ class MemoryRecallVectorBackend:
 
     def __init__(self) -> None:
         self.vectors: dict[str, list[float]] = {}
+        self.search_calls = 0
 
     def upsert(self, **kwargs: object) -> bool:
         source_id = kwargs.get("source_id")
@@ -256,6 +257,7 @@ class MemoryRecallVectorBackend:
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
+        self.search_calls += 1
         del source_kind, model_name, diagnostics, workspace_id
         ids = self.vectors if candidate_ids is None else {
             memory_id: self.vectors[memory_id]
@@ -287,6 +289,7 @@ def _cosine(left: list[float], right: list[float]) -> float:
 @dataclass
 class MemoryRecallHarness:
     pipeline: MemoryRecordSearchPipeline
+    vector_backend: MemoryRecallVectorBackend
 
     @classmethod
     def build(cls) -> MemoryRecallHarness:
@@ -313,14 +316,50 @@ class MemoryRecallHarness:
                 )
             ),
         )
-        return cls(pipeline)
+        return cls(pipeline, vector_backend)
 
-    async def search(self, query: str):
+    async def search(self, query: str, *, limit: int = 3):
         return await self.pipeline.search(
             query,
-            limit=3,
+            limit=limit,
             filters={"workspace_id": "workspace"},
         )
+
+
+@pytest.mark.asyncio
+async def test_keyword_limit_branch_skips_semantic_retrieval() -> None:
+    """Skip semantic retrieval when confident keyword hits fill the limit."""
+    harness = MemoryRecallHarness.build()
+    outcome = await harness.search('"Search quality guidance"', limit=1)
+
+    assert outcome.trace is not None
+    provenance = cast("dict[str, object]", getattr(outcome.trace, "provenance"))
+    query_plan = cast("dict[str, object]", provenance["query_plan"])
+    assert query_plan["signals"] == ("artifact", "quoted")
+    assert "vector:artifact_keyword_confident" in outcome.diagnostics
+
+    assert outcome.candidate_counts["keyword"] >= 1
+    assert harness.vector_backend.search_calls == 0
+    assert len(outcome.results) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_branch_runs_when_keyword_lane_does_not_fill_limit() -> None:
+    """Run semantic retrieval for a query without a confident keyword lane."""
+    harness = MemoryRecallHarness.build()
+    outcome = await harness.search("summary specificity retrieval")
+
+    assert outcome.trace is not None
+    provenance = cast("dict[str, object]", getattr(outcome.trace, "provenance"))
+    query_plan = cast("dict[str, object]", provenance["query_plan"])
+    assert query_plan["signals"] == ()
+    lanes = cast("tuple[str, ...]", query_plan["lanes"])
+    assert "vector" in lanes
+    assert "vector:artifact_keyword_confident" not in outcome.diagnostics
+
+    assert outcome.candidate_counts["vector"] > 0
+    assert harness.vector_backend.search_calls == 1
+    assert outcome.results
 
 
 @pytest.mark.asyncio
