@@ -14,6 +14,7 @@ from .metrics import (
     SearchQualityMetrics,
     evaluate_corpus,
 )
+from .runner import TopicEmbedder, run_in_process, run_search_quality
 
 __all__ = [
     "DEFAULT_CORPUS_PATH",
@@ -26,4 +27,7 @@ __all__ = [
     "SearchQualityMetrics",
     "evaluate_corpus",
     "load_corpus",
+    "TopicEmbedder",
+    "run_in_process",
+    "run_search_quality",
 ]
