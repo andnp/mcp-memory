@@ -19,8 +19,9 @@ also exposed three follow-up problems:
    curator-health memories;
 2. search latency varies from sub-second to roughly two seconds, while daemon
    logs still contain slow-transport warnings; and
-3. the `duplicate_candidate` diagnostic appears to describe keyword/vector
-   lane overlap, not duplicate final results.
+3. the `duplicate_candidate` diagnostic name does not make clear that it
+   reports post-fusion multi-lane provenance rather than duplicate final
+   records.
 
 The recommended sequence is:
 
@@ -147,8 +148,13 @@ query
 ```
 
 The planner may skip a lane when another lane already satisfies the requested
-limit. Tests and diagnostics must expose that decision so lane-specific
-budgets are not mistaken for execution guarantees.
+limit, but only when the upstream candidate count reflects the downstream
+eligibility contract. Workspace, status, tag, supersession, and application
+candidate filters must already be applied, or the planner must use a safety
+multiplier. Tests and diagnostics must expose that decision so lane-specific
+budgets are not mistaken for execution guarantees. In particular, the
+artifact-keyword shortcut must prove that its confident keyword candidates
+survive mcp-memory's later policy filters before it suppresses vector search.
 
 ### 6.1 Authority boundary
 
@@ -183,6 +189,7 @@ id: search-history-001
 query: searchkernel core migration
 workspace: /home/andy/Projects/personal/mcp-memory
 intent: historical design retrieval
+evaluation_label: searchkernel-core-migration
 expected_memory_refs:
   - mem-<stable-reference>
 acceptable_top_k: 5
@@ -201,8 +208,10 @@ The initial corpus should cover:
   planner decisions.
 
 The corpus must not encode private content outside the workspace or depend on
-unstable generated summaries. Stable memory references and intent labels are
-the minimum useful oracle.
+unstable generated summaries. Stable evaluation labels are the primary oracle;
+memory references are resolved when the corpus is built and must record whether
+the expected memory was superseded, deleted, or replaced. This keeps the
+evaluation useful without making every memory consolidation a test edit.
 
 ### 7.2 Metrics
 
@@ -212,9 +221,11 @@ Track at least:
 - reciprocal rank of the first expected record;
 - query-class recall, not only aggregate recall;
 - false-positive rate for exact identifiers;
+- semantic-abstention rate and precision of the low-confidence semantic tail;
 - semantic and keyword lane participation;
 - final-result duplicate count versus lane-overlap count;
-- degraded/fallback/error rate; and
+- degraded/fallback/error rate;
+- fallback-row-cap application rate;
 - p50, p95, and maximum end-to-end latency.
 
 The evaluation should report regressions by query class. An aggregate score
@@ -226,9 +237,13 @@ semantic queries.
 - Small tests: deterministic ranking math, provenance normalization, and
   diagnostics naming.
 - Medium tests: real search pipeline with deterministic stores and planner
-  routing.
+  routing, including fixtures that force keyword-only, vector-only, hybrid,
+  and lane-skipping branches.
 - Large tests: daemon restart, transport behavior, and end-to-end thought
   capture followed by search/read.
+- Backend parity tests: run the corpus against local SQLite and shared Postgres
+  server-side `pgvector` and Python-fallback modes when those fixtures exist;
+  compare ordering, abstention, degradation, and latency separately.
 - Live dogfood: a small opt-in command that runs the corpus against the live
   daemon and stores only metrics, not query content or result payloads.
 
@@ -238,25 +253,35 @@ semantic queries.
 
 Add phase timing to the existing search diagnostics, with bounded fields for:
 
-- request queue wait;
+- daemon-internal request queue wait;
+- cache lookup and cache fallback;
 - embedding/provider time;
 - keyword retrieval;
-- vector retrieval;
+- vector retrieval, split between server-side `pgvector` query time and
+  client-side Python fallback decode/score time;
 - graph expansion;
 - fusion/calibration/rerank;
+- request-scoped embedding-repair wait;
 - hydration;
 - serialization; and
-- daemon transport.
+- daemon-internal transport handling.
 
 Each phase should report elapsed time and a small outcome code. Diagnostics
 must remain safe to return when a phase fails or is skipped.
+
+Daemon diagnostics cannot measure the complete client-observed IPC/MCP round
+trip on their own. The live corpus runner should add a client-side start/end
+timestamp and correlate it with the daemon request ID, so transport overhead
+can be calculated rather than inferred from internal timings.
 
 ### 8.2 Investigation order
 
 1. Compare daemon transport time with in-process search time.
 2. Compare keyword-only, vector-only, and hybrid corpus queries.
-3. Compare SQLite and shared Postgres where both are available.
-4. Check embedding repair/backfill activity and provider admission state.
+3. Compare SQLite with shared Postgres server-side `pgvector` and Python
+   fallback modes where available.
+4. Check cache hits/fallbacks, embedding repair/backfill activity, and provider
+   admission state.
 5. Check hydration size and graph expansion fanout.
 6. Only then tune candidate limits, caching, or ranking policy.
 
@@ -318,16 +343,21 @@ An advanced policy may become the default only if it:
 
 ## 10. Workstream D: diagnostics ergonomics
 
-Rename or split `duplicate_candidate` so the output distinguishes:
+Clarify or split the current `duplicate_candidate` output. Today it is computed
+after fusion by checking whether a result has more than one provenance
+strategy; it does not mean that duplicate records remain in the final result
+list. The future diagnostic shape should distinguish:
 
-- `lane_overlap_count`: a record appeared in multiple retrieval lanes;
+- `raw_lane_overlap_count`: a record appeared in multiple pre-fusion
+  retrieval lanes;
+- `multi_lane_result_count`: a post-fusion result has more than one strategy;
 - `final_duplicate_count`: duplicate IDs remained after fusion; and
 - `missing_record_ids`: candidates could not be hydrated.
 
 The existing hybrid provenance should remain available, but diagnostics should
 not imply that final results contain duplicates when they only share candidates
 between lanes. Add one small test per field for zero, positive, and degraded
-cases.
+cases, plus a regression test proving the current multi-lane result behavior.
 
 ## 11. Workstream E: upstream extraction
 
@@ -340,17 +370,25 @@ lane when the requested limit is already satisfied.
 
 ### 11.2 Candidate extraction: cache epochs
 
-mcp-memory's authoritative cache epochs and invalidation rules may be useful as
-a generic searchkernel cache contract, but only if the abstraction describes
-freshness/version tokens rather than SQLite or Postgres details. First define
-the required lifecycle and stale-read semantics locally; then propose the
-smallest upstream interface.
+mcp-memory's derivative cache freshness tokens and invalidation rules may be
+useful as a generic searchkernel cache contract, but only if the abstraction
+describes freshness/version tokens rather than SQLite or Postgres details.
+First define the required lifecycle and stale-read semantics locally; then
+propose the smallest upstream interface. Cache contents remain disposable and
+Postgres remains authoritative.
+
+Any search-response cache used during policy experiments must include the
+active search policy version and feature-flag fingerprint in its key, or be
+explicitly purged when policy configuration changes. This applies to both
+fresh hits and degraded stale fallbacks.
 
 ### 11.3 Candidate extraction: embedding integrity diagnostics
 
 mcp-memory has concrete diagnostics for malformed embedding rows and safe
-fallback behavior. A searchkernel contribution should be a backend-neutral
-validation/result protocol, not a copy of mcp-memory's storage checks.
+fallback behavior. Embedding storage validation and repair remain strictly in
+mcp-memory's storage/application adapters. A possible searchkernel contribution
+is limited to a generic candidate/search outcome error envelope, not storage
+table validation or provider-specific integrity checks.
 
 ### 11.4 What should not move upstream
 
@@ -386,6 +424,8 @@ product domain it is meant to serve.
 
 - enable one searchkernel policy feature at a time;
 - compare against the baseline corpus;
+- verify cache bypass or invalidation when the policy version or feature
+  fingerprint changes;
 - run medium and large runtime tests;
 - canary the policy for live dogfooding;
 - revert to the baseline policy on any gate failure.
@@ -414,10 +454,15 @@ If phase instrumentation itself fails, it must not fail the search request.
 If a new upstream adapter changes storage ownership or lifecycle semantics, it
 must be rejected until those invariants are explicitly preserved.
 
+Policy rollback must not serve a response produced by a different policy from
+the readthrough cache. The cache key/version or an explicit purge is part of
+the rollback contract, including when the authoritative Postgres backend is
+temporarily unavailable and a stale derivative response is returned.
+
 ## 14. Open decisions
 
-1. Should the evaluation corpus store stable memory references directly, or
-   use a separate durable evaluation label that survives memory replacement?
+1. Which durable evaluation-label lifecycle should represent superseded or
+   replaced memories without turning corpus maintenance into manual relinking?
 2. What is the minimum corpus size that gives stable conclusions across
    SQLite, Postgres fallback, and Postgres server-side vector modes?
 3. Should phase timing be returned by default in debug output only, or also be
