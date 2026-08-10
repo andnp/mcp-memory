@@ -15,8 +15,12 @@ from .metrics import (
     evaluate_corpus,
 )
 from .runner import (
+    SearchPolicyComparison,
+    SearchPolicyObservation,
+    SearchPolicyReport,
     TopicEmbedder,
     run_in_process,
+    run_policy_comparison,
     run_search_quality,
     seed_search_quality_records,
 )
@@ -30,10 +34,14 @@ __all__ = [
     "QueryClassMetrics",
     "SearchObservation",
     "SearchQualityMetrics",
+    "SearchPolicyComparison",
+    "SearchPolicyObservation",
+    "SearchPolicyReport",
     "evaluate_corpus",
     "load_corpus",
     "TopicEmbedder",
     "run_in_process",
+    "run_policy_comparison",
     "run_search_quality",
     "seed_search_quality_records",
 ]

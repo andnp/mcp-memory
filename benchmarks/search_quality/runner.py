@@ -88,6 +88,8 @@ class SearchQualityRepository(Protocol):
 
 
 SearchCaseRunner = Callable[[SearchQualityCase], SearchObservation]
+PolicyName = Literal["baseline", "calibrated_fusion", "query_expansion", "reranking"]
+PolicyStatus = Literal["completed", "skipped"]
 LiveRequest = Callable[[SearchQualityCase, float], object]
 ResultLabeler = Callable[[dict[str, object]], str | None]
 LiveStatus = Literal[
@@ -138,6 +140,138 @@ class LiveSearchQualityReport:
                 for case in self.cases
             ],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPolicyObservation:
+    """One policy result with its externally observed degradation state."""
+
+    observation: SearchObservation
+    degraded: bool = False
+
+
+PolicyCaseRunner = Callable[[SearchQualityCase], SearchPolicyObservation]
+PolicyBuilder = Callable[[], PolicyCaseRunner]
+RerankingPolicyBuilder = Callable[[object], PolicyCaseRunner]
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPolicyReport:
+    """Metrics and degradation outcomes for one policy run."""
+
+    policy: PolicyName
+    status: PolicyStatus
+    metrics: SearchQualityMetrics | None
+    degraded_case_count: int
+    degradation_rate: float | None
+    skip_reason: str | None = None
+
+    def to_mapping(self) -> dict[str, object]:
+        """Serialize one policy without search payloads."""
+        return {
+            "policy": self.policy,
+            "status": self.status,
+            "metrics": None if self.metrics is None else self.metrics.to_mapping(),
+            "degraded_case_count": self.degraded_case_count,
+            "degradation_rate": self.degradation_rate,
+            "skip_reason": self.skip_reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPolicyComparison:
+    """Deterministic baseline and experiment results for one corpus."""
+
+    corpus_version: str
+    policies: tuple[SearchPolicyReport, ...]
+
+    @property
+    def by_policy(self) -> dict[str, SearchPolicyReport]:
+        """Return policy reports keyed by their stable names."""
+        return {report.policy: report for report in self.policies}
+
+    def to_mapping(self) -> dict[str, object]:
+        """Serialize the comparison in policy execution order."""
+        return {
+            "corpus_version": self.corpus_version,
+            "policies": [report.to_mapping() for report in self.policies],
+        }
+
+
+def run_policy_comparison(
+    corpus: SearchQualityCorpus | None = None,
+    *,
+    baseline_builder: PolicyBuilder,
+    calibrated_fusion_builder: PolicyBuilder | None = None,
+    query_expansion_builder: PolicyBuilder | None = None,
+    reranking_builder: RerankingPolicyBuilder | None = None,
+    reranker: object | None = None,
+) -> SearchPolicyComparison:
+    """Run the same corpus against isolated baseline and policy builders.
+
+    Experimental builders are supplied by the caller so this deterministic
+    benchmark never changes production configuration or downloads providers.
+    Reranking is skipped unless both its builder and reranker are supplied.
+    """
+    selected_corpus = corpus or load_corpus()
+    policies: tuple[
+        tuple[PolicyName, PolicyBuilder | RerankingPolicyBuilder | None, object | None],
+        ...,
+    ] = (
+        ("baseline", baseline_builder, None),
+        ("calibrated_fusion", calibrated_fusion_builder, None),
+        ("query_expansion", query_expansion_builder, None),
+        ("reranking", reranking_builder, reranker),
+    )
+    reports: list[SearchPolicyReport] = []
+    for policy, builder, supplied_reranker in policies:
+        if builder is None:
+            reports.append(_skipped_policy(policy, "builder_not_supplied"))
+            continue
+        if policy == "reranking" and supplied_reranker is None:
+            reports.append(_skipped_policy(policy, "reranker_not_supplied"))
+            continue
+        if policy == "reranking":
+            runner = cast(RerankingPolicyBuilder, builder)(
+                cast(object, supplied_reranker)
+            )
+        else:
+            runner = cast(PolicyBuilder, builder)()
+        reports.append(_run_policy(selected_corpus, policy, runner))
+    return SearchPolicyComparison(selected_corpus.version, tuple(reports))
+
+
+def _run_policy(
+    corpus: SearchQualityCorpus,
+    policy: PolicyName,
+    runner: PolicyCaseRunner,
+) -> SearchPolicyReport:
+    observations: dict[str, SearchObservation] = {}
+    degraded_case_count = 0
+    for case in corpus.entries:
+        outcome = runner(case)
+        observations[case.evaluation_label] = outcome.observation
+        degraded_case_count += int(outcome.degraded)
+    return SearchPolicyReport(
+        policy=policy,
+        status="completed",
+        metrics=evaluate_corpus(corpus, observations),
+        degraded_case_count=degraded_case_count,
+        degradation_rate=degraded_case_count / len(corpus.entries)
+        if corpus.entries
+        else 0.0,
+    )
+
+
+def _skipped_policy(policy: PolicyName, reason: str) -> SearchPolicyReport:
+    return SearchPolicyReport(
+        policy=policy,
+        status="skipped",
+        metrics=None,
+        degraded_case_count=0,
+        degradation_rate=None,
+        skip_reason=reason,
+    )
 
 
 def run_search_quality(
