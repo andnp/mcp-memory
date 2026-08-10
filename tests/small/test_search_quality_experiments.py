@@ -121,6 +121,7 @@ def _acceptance_report(
     latency_ms: float = 10.0,
     degraded_case_count: int = 0,
     diagnostics: bool = False,
+    duplicate_case_count: int = 0,
 ) -> SearchPolicyReport:
     def labels(rank: int) -> tuple[str, ...]:
         return tuple("target" if index == rank else "other" for index in range(1, 6))
@@ -153,6 +154,7 @@ def _acceptance_report(
         degraded_case_count=degraded_case_count,
         degradation_rate=degraded_case_count / 3,
         diagnostics_complete=diagnostics,
+        duplicate_case_count=duplicate_case_count,
     )
 
 
@@ -289,6 +291,51 @@ def test_policy_acceptance_passes_with_required_diagnostics() -> None:
 
     assert decision.accepted
     assert decision.diagnostics_complete is True
+
+
+@pytest.mark.parametrize(
+    ("candidate_count", "baseline_count", "reason"),
+    [
+        (1, 0, "candidate_duplicate_case_count_above_threshold"),
+        (0, 1, "baseline_duplicate_case_count_above_threshold"),
+    ],
+)
+def test_policy_acceptance_rejects_duplicate_case_threshold(
+    candidate_count: int,
+    baseline_count: int,
+    reason: str,
+) -> None:
+    """Reject completed reports exceeding the configured duplicate threshold."""
+    decision = evaluate_policy_acceptance(
+        _acceptance_report(
+            "query_expansion", duplicate_case_count=candidate_count
+        ),
+        _acceptance_report("baseline", duplicate_case_count=baseline_count),
+        thresholds=SearchPolicyAcceptanceThresholds(max_duplicate_case_count=0),
+    )
+
+    assert not decision.accepted
+    assert decision.reasons == (reason,)
+    assert decision.to_mapping()["thresholds"] == {
+        "min_broad_hit_at_5_delta": 0.0,
+        "min_historical_hit_at_5_delta": 0.0,
+        "max_degradation_rate_delta": 0.0,
+        "max_p95_latency_ms": None,
+        "max_duplicate_case_count": 0,
+    }
+
+
+def test_policy_acceptance_preserves_defaults_without_duplicate_threshold() -> None:
+    """Keep the existing decision mapping when duplicate gating is disabled."""
+    decision = evaluate_policy_acceptance(
+        _acceptance_report("query_expansion", duplicate_case_count=1),
+        _acceptance_report("baseline"),
+    )
+
+    assert decision.accepted
+    thresholds = decision.to_mapping()["thresholds"]
+    assert isinstance(thresholds, dict)
+    assert "max_duplicate_case_count" not in thresholds
 
 
 def test_policy_comparison_runs_isolated_builders_in_stable_order() -> None:

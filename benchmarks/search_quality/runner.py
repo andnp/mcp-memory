@@ -214,6 +214,7 @@ class SearchPolicyReport:
     degradation_rate: float | None
     skip_reason: str | None = None
     diagnostics_complete: bool = False
+    duplicate_case_count: int = 0
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize one policy without search payloads."""
@@ -236,6 +237,7 @@ class SearchPolicyAcceptanceThresholds:
     max_degradation_rate_delta: float = 0.0
     max_p95_latency_ms: float | None = None
     require_diagnostics: bool = False
+    max_duplicate_case_count: int | None = None
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize thresholds for a future canary consumer."""
@@ -247,6 +249,8 @@ class SearchPolicyAcceptanceThresholds:
         }
         if self.require_diagnostics:
             mapping["require_diagnostics"] = True
+        if self.max_duplicate_case_count is not None:
+            mapping["max_duplicate_case_count"] = self.max_duplicate_case_count
         return mapping
 
 
@@ -305,6 +309,21 @@ def evaluate_policy_acceptance(
             reasons.append("baseline_diagnostics_missing")
         if not candidate.diagnostics_complete:
             reasons.append("candidate_diagnostics_missing")
+    if (
+        resolved_thresholds.max_duplicate_case_count is not None
+        and baseline.status == "completed"
+        and candidate.status == "completed"
+    ):
+        if (
+            baseline.duplicate_case_count
+            > resolved_thresholds.max_duplicate_case_count
+        ):
+            reasons.append("baseline_duplicate_case_count_above_threshold")
+        if (
+            candidate.duplicate_case_count
+            > resolved_thresholds.max_duplicate_case_count
+        ):
+            reasons.append("candidate_duplicate_case_count_above_threshold")
     if baseline.metrics is not None and candidate.metrics is not None:
         if baseline.metrics.corpus_version != candidate.metrics.corpus_version:
             reasons.append("corpus_version_mismatch")
@@ -552,11 +571,17 @@ def _run_policy(
     observations: dict[str, SearchObservation] = {}
     degraded_case_count = 0
     diagnostics_complete = True
+    duplicate_case_count = 0
     for case in corpus.entries:
         outcome = runner(case)
         observations[case.evaluation_label] = outcome.observation
         degraded_case_count += int(outcome.degraded)
         diagnostics_complete &= outcome.observation.diagnostics is not None
+        diagnostics = outcome.observation.diagnostics
+        duplicate_ids = None if diagnostics is None else diagnostics.get(
+            "final_duplicate_ids"
+        )
+        duplicate_case_count += int(bool(duplicate_ids))
     return SearchPolicyReport(
         policy=policy,
         status="completed",
@@ -566,6 +591,7 @@ def _run_policy(
         if corpus.entries
         else 0.0,
         diagnostics_complete=diagnostics_complete,
+        duplicate_case_count=duplicate_case_count,
     )
 
 
