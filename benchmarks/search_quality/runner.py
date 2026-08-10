@@ -224,6 +224,117 @@ class SearchPolicyReport:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchPolicyAcceptanceThresholds:
+    """Named thresholds for accepting an experimental search policy."""
+
+    min_broad_hit_at_5_delta: float = 0.0
+    min_historical_hit_at_5_delta: float = 0.0
+    max_degradation_rate_delta: float = 0.0
+    max_p95_latency_ms: float | None = None
+
+    def to_mapping(self) -> dict[str, float | None]:
+        """Serialize thresholds for a future canary consumer."""
+        return {
+            "min_broad_hit_at_5_delta": self.min_broad_hit_at_5_delta,
+            "min_historical_hit_at_5_delta": self.min_historical_hit_at_5_delta,
+            "max_degradation_rate_delta": self.max_degradation_rate_delta,
+            "max_p95_latency_ms": self.max_p95_latency_ms,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPolicyAcceptanceDecision:
+    """Stable, provider-free result of comparing one policy with baseline."""
+
+    accepted: bool
+    candidate_policy: PolicyName
+    baseline_policy: PolicyName
+    reasons: tuple[str, ...]
+    thresholds: SearchPolicyAcceptanceThresholds
+
+    def to_mapping(self) -> dict[str, object]:
+        """Serialize the decision with deterministic reason ordering."""
+        return {
+            "accepted": self.accepted,
+            "candidate_policy": self.candidate_policy,
+            "baseline_policy": self.baseline_policy,
+            "reasons": list(self.reasons),
+            "thresholds": self.thresholds.to_mapping(),
+        }
+
+
+def evaluate_policy_acceptance(
+    candidate: SearchPolicyReport,
+    baseline: SearchPolicyReport,
+    *,
+    thresholds: SearchPolicyAcceptanceThresholds | None = None,
+) -> SearchPolicyAcceptanceDecision:
+    """Evaluate a candidate report against deterministic acceptance gates."""
+    resolved_thresholds = thresholds or SearchPolicyAcceptanceThresholds()
+    reasons: list[str] = []
+    if baseline.status != "completed":
+        reasons.append("baseline_not_completed")
+    if candidate.status != "completed":
+        reasons.append("candidate_not_completed")
+    if baseline.metrics is None:
+        reasons.append("baseline_metrics_missing")
+    if candidate.metrics is None:
+        reasons.append("candidate_metrics_missing")
+    if baseline.metrics is not None and candidate.metrics is not None:
+        if baseline.metrics.corpus_version != candidate.metrics.corpus_version:
+            reasons.append("corpus_version_mismatch")
+        if baseline.metrics.query_count != candidate.metrics.query_count:
+            reasons.append("query_count_mismatch")
+        summaries = (
+            ("exact", "exact_hit_at_1_not_preserved"),
+            ("broad", "broad_hit_at_5_below_threshold"),
+            ("historical", "historical_hit_at_5_below_threshold"),
+        )
+        for query_class, failure in summaries:
+            baseline_summary = baseline.metrics.by_query_class.get(query_class)
+            candidate_summary = candidate.metrics.by_query_class.get(query_class)
+            if baseline_summary is None or candidate_summary is None:
+                reasons.append(f"{query_class}_metrics_missing")
+                continue
+            if baseline_summary.query_count < 1 or candidate_summary.query_count < 1:
+                reasons.append(f"{query_class}_metrics_insufficient")
+                continue
+            if query_class == "exact":
+                if candidate_summary.hit_at_1 < baseline_summary.hit_at_1:
+                    reasons.append(failure)
+            elif query_class == "broad":
+                if (
+                    candidate_summary.hit_at_5 - baseline_summary.hit_at_5
+                    < resolved_thresholds.min_broad_hit_at_5_delta
+                ):
+                    reasons.append(failure)
+            elif (
+                candidate_summary.hit_at_5 - baseline_summary.hit_at_5
+                < resolved_thresholds.min_historical_hit_at_5_delta
+            ):
+                reasons.append(failure)
+        if baseline.degradation_rate is None or candidate.degradation_rate is None:
+            reasons.append("degradation_rate_missing")
+        elif (
+            candidate.degradation_rate - baseline.degradation_rate
+            > resolved_thresholds.max_degradation_rate_delta
+        ):
+            reasons.append("degradation_rate_above_threshold")
+        if resolved_thresholds.max_p95_latency_ms is not None:
+            if candidate.metrics.latency_p95_ms is None:
+                reasons.append("candidate_p95_latency_missing")
+            elif candidate.metrics.latency_p95_ms > resolved_thresholds.max_p95_latency_ms:
+                reasons.append("candidate_p95_latency_above_threshold")
+    return SearchPolicyAcceptanceDecision(
+        accepted=not reasons,
+        candidate_policy=candidate.policy,
+        baseline_policy=baseline.policy,
+        reasons=tuple(reasons),
+        thresholds=resolved_thresholds,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class SearchPolicyComparison:
     """Deterministic baseline and experiment results for one corpus."""
 
