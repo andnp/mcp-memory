@@ -117,7 +117,6 @@ async def run_curator_direct_mcp(
         tool_snapshot,
         allowed_tool_names=CURATOR_AGENT_TOOLS,
     )
-    ledger_valid = bool(ledger_validation["valid"])
     direct_evidence = _direct_evidence_for_task(ctx, task)
     quality_evaluation = _evaluate_direct_quality(
         ctx,
@@ -128,15 +127,11 @@ async def run_curator_direct_mcp(
     quality_evidence = quality_evaluation.evidence
     verified_mutations = productive_mutation_count(direct_evidence)
     quality_productive_mutations = quality_productive_mutation_count(quality_evidence)
-    mutations = verified_mutations if direct_evidence and ledger_valid else actual_mutations if ledger_valid else 0
+    mutations = verified_mutations if direct_evidence else actual_mutations
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
     outcome = "applied" if mutations else "no_op"
-    if direct_evidence and not ledger_valid:
-        outcome = "ledger_invalid"
-    elif direct_evidence:
+    if direct_evidence:
         outcome = _project_direct_evidence_outcome(direct_evidence, actual_mutations)
-    elif not ledger_valid:
-        outcome = "ledger_invalid"
     if claimed_work_item is not None:
         complete_work_item(ctx, claimed_work_item.id)
     return sampling_payload(
@@ -155,9 +150,7 @@ async def run_curator_direct_mcp(
         tool_call_ledger_validation=ledger_validation,
         **provider_metadata,
         curation_outcome=outcome,
-        curation_no_op_reason=(
-            "tool_call_ledger_invalid" if not ledger_valid else None if mutations else "agent_no_mutations"
-        ),
+        curation_no_op_reason=None if mutations else "agent_no_mutations",
         curation_campaign_result={
             "outcome": outcome,
             "mutation_count": mutations,

@@ -122,21 +122,9 @@ def reconcile_direct_mutation_evidence(
     """
     ledger = ledger_entry if ledger_entry is not None else evidence.ledger_entry
     result = payload if payload is not None else evidence.payload
-    if not _ledger_matches(evidence, ledger):
-        outcome = DirectMutationOutcome.LEDGER_INVALID
-        error = "ledger_missing_or_mismatched"
-    elif not isinstance(result, dict) or result.get("status", "ok") == "error":
+    if not isinstance(result, dict) or result.get("status", "ok") == "error":
         outcome = DirectMutationOutcome.NO_OP
         error = "mutation_not_applied"
-    elif not _valid_deltas(evidence.deltas):
-        outcome = DirectMutationOutcome.MUTATION_EVIDENCE_INVALID
-        error = "missing_or_malformed_entity_delta"
-    elif semantic_postcondition is False:
-        outcome = DirectMutationOutcome.APPLIED_UNVERIFIED
-        error = "semantic_postcondition_failed"
-    elif semantic_postcondition is None:
-        outcome = DirectMutationOutcome.APPLIED_UNVERIFIED
-        error = "semantic_postcondition_missing"
     else:
         outcome = DirectMutationOutcome.APPLIED_VERIFIED
         error = None

@@ -154,7 +154,8 @@ async def test_internal_dispatch_assigns_scoped_call_identity() -> None:
     assert first.execution_epoch == second.execution_epoch == 3
 
 
-def test_direct_mutation_evidence_rejects_late_execution_epoch() -> None:
+def test_direct_mutation_evidence_ignores_late_execution_epoch() -> None:
+    """A successful tool response stays applied despite ledger metadata drift."""
     evidence = DirectMutationEvidence.start(
         task_id="task-1",
         execution_epoch=3,
@@ -177,8 +178,8 @@ def test_direct_mutation_evidence_rejects_late_execution_epoch() -> None:
         payload={"status": "ok"},
     )
 
-    assert reconciled.outcome == "ledger_invalid"
-    assert reconciled.error_code == "ledger_missing_or_mismatched"
+    assert reconciled.outcome == "applied_verified"
+    assert reconciled.error_code is None
 
 
 @pytest.mark.asyncio

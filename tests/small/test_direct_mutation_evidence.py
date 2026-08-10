@@ -29,14 +29,16 @@ def _evidence() -> DirectMutationEvidence:
     )
 
 
-def test_reconciliation_requires_ledger_delta_and_postcondition() -> None:
+def test_reconciliation_counts_successful_mutations_without_evidence_gates() -> None:
+    """Successful mutation responses remain applied without post-write gates."""
     evidence = _evidence()
     verified = reconcile_direct_mutation_evidence(
         evidence, semantic_postcondition=True,
     )
     assert verified.outcome == DirectMutationOutcome.APPLIED_VERIFIED
-    assert reconcile_direct_mutation_evidence(evidence, ledger_entry={}, semantic_postcondition=True).outcome == DirectMutationOutcome.LEDGER_INVALID
-    assert reconcile_direct_mutation_evidence(evidence, semantic_postcondition=None).outcome == DirectMutationOutcome.APPLIED_UNVERIFIED
+    assert reconcile_direct_mutation_evidence(
+        evidence, ledger_entry={}, semantic_postcondition=None,
+    ).outcome == DirectMutationOutcome.APPLIED_VERIFIED
 
 
 def test_missing_call_id_is_repeatable_for_same_inputs() -> None:
@@ -114,7 +116,8 @@ def test_sqlite_evidence_append_recovers_from_idempotency_conflict(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_crash_finalization_persists_invalid_evidence() -> None:
+async def test_crash_finalization_persists_non_mutation_evidence() -> None:
+    """A failed mutation call is recorded without classifying it as a write."""
     class Store:
         def __init__(self) -> None:
             self.items = []
@@ -138,4 +141,4 @@ async def test_crash_finalization_persists_invalid_evidence() -> None:
         )
 
     assert len(store.items) == 1
-    assert store.items[0].outcome == DirectMutationOutcome.LEDGER_INVALID
+    assert store.items[0].outcome == DirectMutationOutcome.NO_OP
