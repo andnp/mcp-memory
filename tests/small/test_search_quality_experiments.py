@@ -122,6 +122,7 @@ def _acceptance_report(
     degraded_case_count: int = 0,
     diagnostics: bool = False,
     duplicate_case_count: int = 0,
+    semantic_abstained: bool | None = None,
 ) -> SearchPolicyReport:
     def labels(rank: int) -> tuple[str, ...]:
         return tuple("target" if index == rank else "other" for index in range(1, 6))
@@ -134,16 +135,19 @@ def _acceptance_report(
                 labels(exact_rank), latency_ms, diagnostics={"stage": "exact"}
                 if diagnostics
                 else None,
+                semantic_abstained=semantic_abstained,
             ),
             "broad": SearchObservation(
                 labels(broad_rank), latency_ms, diagnostics={"stage": "broad"}
                 if diagnostics
                 else None,
+                semantic_abstained=semantic_abstained,
             ),
             "historical": SearchObservation(
                 labels(historical_rank), latency_ms, diagnostics={"stage": "historical"}
                 if diagnostics
                 else None,
+                semantic_abstained=semantic_abstained,
             ),
         },
     )
@@ -336,6 +340,56 @@ def test_policy_acceptance_preserves_defaults_without_duplicate_threshold() -> N
     thresholds = decision.to_mapping()["thresholds"]
     assert isinstance(thresholds, dict)
     assert "max_duplicate_case_count" not in thresholds
+
+
+def test_policy_acceptance_rejects_semantic_abstention_delta() -> None:
+    """Reject a candidate whose abstention rate exceeds the configured delta."""
+    decision = evaluate_policy_acceptance(
+        _acceptance_report("query_expansion", semantic_abstained=True),
+        _acceptance_report("baseline", semantic_abstained=False),
+        thresholds=SearchPolicyAcceptanceThresholds(
+            max_semantic_abstention_rate_delta=0.5
+        ),
+    )
+
+    assert not decision.accepted
+    assert decision.reasons == (
+        "candidate_semantic_abstention_rate_above_threshold",
+    )
+    assert decision.to_mapping()["thresholds"] == {
+        "min_broad_hit_at_5_delta": 0.0,
+        "min_historical_hit_at_5_delta": 0.0,
+        "max_degradation_rate_delta": 0.0,
+        "max_p95_latency_ms": None,
+        "max_semantic_abstention_rate_delta": 0.5,
+    }
+
+
+@pytest.mark.parametrize(
+    ("candidate_abstained", "baseline_abstained", "reason"),
+    [
+        (True, None, "baseline_semantic_abstention_rate_missing"),
+        (None, False, "candidate_semantic_abstention_rate_missing"),
+    ],
+)
+def test_policy_acceptance_fails_closed_for_missing_semantic_rates(
+    candidate_abstained: bool | None,
+    baseline_abstained: bool | None,
+    reason: str,
+) -> None:
+    """Reject configured abstention gating when either rate is unavailable."""
+    decision = evaluate_policy_acceptance(
+        _acceptance_report(
+            "query_expansion", semantic_abstained=candidate_abstained
+        ),
+        _acceptance_report("baseline", semantic_abstained=baseline_abstained),
+        thresholds=SearchPolicyAcceptanceThresholds(
+            max_semantic_abstention_rate_delta=0.5
+        ),
+    )
+
+    assert not decision.accepted
+    assert reason in decision.reasons
 
 
 def test_policy_comparison_runs_isolated_builders_in_stable_order() -> None:

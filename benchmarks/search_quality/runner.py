@@ -238,6 +238,7 @@ class SearchPolicyAcceptanceThresholds:
     max_p95_latency_ms: float | None = None
     require_diagnostics: bool = False
     max_duplicate_case_count: int | None = None
+    max_semantic_abstention_rate_delta: float | None = None
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize thresholds for a future canary consumer."""
@@ -251,6 +252,10 @@ class SearchPolicyAcceptanceThresholds:
             mapping["require_diagnostics"] = True
         if self.max_duplicate_case_count is not None:
             mapping["max_duplicate_case_count"] = self.max_duplicate_case_count
+        if self.max_semantic_abstention_rate_delta is not None:
+            mapping["max_semantic_abstention_rate_delta"] = (
+                self.max_semantic_abstention_rate_delta
+            )
         return mapping
 
 
@@ -369,6 +374,21 @@ def evaluate_policy_acceptance(
                 reasons.append("candidate_p95_latency_missing")
             elif candidate.metrics.latency_p95_ms > resolved_thresholds.max_p95_latency_ms:
                 reasons.append("candidate_p95_latency_above_threshold")
+        if resolved_thresholds.max_semantic_abstention_rate_delta is not None:
+            baseline_rate = baseline.metrics.semantic_abstention_rate
+            candidate_rate = candidate.metrics.semantic_abstention_rate
+            if baseline_rate is None:
+                reasons.append("baseline_semantic_abstention_rate_missing")
+            if candidate_rate is None:
+                reasons.append("candidate_semantic_abstention_rate_missing")
+            if baseline_rate is not None and candidate_rate is not None:
+                if (
+                    candidate_rate - baseline_rate
+                    > resolved_thresholds.max_semantic_abstention_rate_delta
+                ):
+                    reasons.append(
+                        "candidate_semantic_abstention_rate_above_threshold"
+                    )
     return SearchPolicyAcceptanceDecision(
         accepted=not reasons,
         candidate_policy=candidate.policy,
