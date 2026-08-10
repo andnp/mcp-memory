@@ -21,6 +21,7 @@ from mcp_memory.storage.shared_read_cache import (
     SharedReadCache,
     SharedReadCacheProjectionUpsert,
     SharedReadCacheSearchRequest,
+    SharedReadCacheSearchPurgedError,
 )
 from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
 
@@ -685,6 +686,128 @@ def test_shared_read_cache_invalidation_clears_exact_query_and_affected_entries(
     assert cache.load_read_response("memory-1") is None
     assert cache.load_projection_entry("memory-1") is None
     assert cache.load_search_response(request) is None
+
+
+def test_shared_read_cache_purges_policy_identity_without_touching_other_derivatives(
+    tmp_path: Path,
+) -> None:
+    """Policy purge removes only search responses and preserves other caches."""
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    baseline = SharedReadCacheSearchRequest(
+        query="rollback query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v1",
+    )
+    target = SharedReadCacheSearchRequest(
+        query="rollback query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v2",
+        feature_fingerprint="calibrated-fusion",
+    )
+    other = SharedReadCacheSearchRequest(
+        query="rollback query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v2",
+        feature_fingerprint="query-expansion",
+    )
+    cache.store_search_response(baseline, {"results": [{"memory_id": "baseline"}]})
+    cache.store_search_response(target, {"results": [{"memory_id": "target"}]})
+    cache.store_search_response(other, {"results": [{"memory_id": "other"}]})
+    cache.store_read_response("memory-1", {"status": "ok"}, validation_token="token-1")
+    cache.store_projection_entries(
+        [
+            SharedReadCacheProjectionUpsert(
+                memory_id="memory-1",
+                payload=_projection_payload(
+                    "memory-1", title="Projection", summary="Preserved projection"
+                ),
+                validation_token="token-1",
+            )
+        ]
+    )
+    cache.enqueue_record_thought_outbox_entry(
+        content="Preserve this thought",
+        workspace_id="workspace-123",
+        timestamp=1.0,
+        max_entries=10,
+    )
+    cache.increment_metric("search_requests", amount=3)
+
+    result = cache.purge_search_responses(
+        policy_version="policy-v2",
+        feature_fingerprint="calibrated-fusion",
+    )
+
+    assert result.deleted_search_responses == 1
+    assert result.cancelled_inflight_searches == 0
+    assert cache.load_search_response(target) is None
+    assert cache.load_search_response(baseline) is not None
+    assert cache.load_search_response(other) is not None
+    snapshot = cache.get_metrics_snapshot()
+    assert snapshot.search_requests == 3
+    assert snapshot.cached_search_result_count == 2
+    assert snapshot.cached_read_record_count == 1
+    assert snapshot.cached_projection_count == 1
+    assert cache.count_record_thought_outbox_entries() == 1
+
+
+def test_shared_read_cache_purge_cancels_inflight_response_before_rollback(
+    tmp_path: Path,
+) -> None:
+    """Purged leaders cannot publish stale responses after a policy rollback."""
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    request = SharedReadCacheSearchRequest(
+        query="rollback query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v2",
+        feature_fingerprint="calibrated-fusion",
+    )
+    leader = cache.begin_inflight_search(request)
+    follower = cache.begin_inflight_search(request)
+
+    result = cache.purge_search_responses(
+        policy_version=request.policy_version,
+        feature_fingerprint=request.feature_fingerprint,
+    )
+
+    assert result.cancelled_inflight_searches == 1
+    with pytest.raises(SharedReadCacheSearchPurgedError):
+        cache.wait_for_inflight_search(follower)
+    cache.store_search_response(
+        request,
+        {"results": [{"memory_id": "stale"}]},
+        inflight_search=leader,
+    )
+    assert cache.load_search_response(request) is None
+
+    replacement = cache.begin_inflight_search(request)
+    assert replacement.is_leader is True
+    fresh_payload = {"results": [{"memory_id": "fresh"}]}
+    cache.store_search_response(request, fresh_payload, inflight_search=replacement)
+    cache.finish_inflight_search(replacement, payload=fresh_payload)
+    cache.finish_inflight_search(leader, payload={"results": [{"memory_id": "stale"}]})
+
+    assert cache.load_search_response(request) == fresh_payload
 
 
 def test_record_thought_service_queues_writeback_entry_on_authoritative_failure(tmp_path: Path) -> None:
