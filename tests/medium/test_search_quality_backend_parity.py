@@ -119,7 +119,7 @@ def _vector_corpus_metrics(
             model_name=context.embedder.model_name,
             query_embedding=query_vector,
             diagnostics=diagnostics,
-            workspace_id=case.workspace,
+            workspace_id=(None if case.workspace == "global" else case.workspace),
             limit=case.acceptable_top_k,
         )
         return SearchObservation(
@@ -152,6 +152,24 @@ def test_postgres_fallback_matches_corpus_order_and_workspace_scope(
     }
     assert diagnostics["search_mode"] == "client_python_fallback"
     assert diagnostics["server_side_vector_search_available"] is False
+
+
+def test_global_search_includes_workspaces_and_ranks_active_project(
+    postgres_quality_context: _PostgresQualityContext,
+) -> None:
+    """Verify global retrieval includes both projects with active-project preference."""
+    context = postgres_quality_context
+    outcome = asyncio.run(
+        context.pipeline.search(
+            "shared deployment guidance",
+            limit=5,
+            filters={"_ranking_workspace_id": "workspace"},
+        )
+    )
+    labels_by_id = {memory_id: label for label, memory_id in context.label_to_id.items()}
+    labels = [labels_by_id[result.record_id] for result in outcome.results]
+
+    assert labels[:2] == ["global-project-ranking", "global-other-project"]
 
 
 def test_postgres_fallback_reports_abstention_and_degradation(

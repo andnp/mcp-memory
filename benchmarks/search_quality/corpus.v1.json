@@ -100,6 +100,16 @@
       "workspace": "workspace",
       "expected_labels": ["search-quality-follow-up"],
       "acceptable_top_k": 5
+    },
+    {
+      "id": "global-project-ranking",
+      "evaluation_label": "global-project-ranking",
+      "query": "shared search deployment guidance",
+      "query_class": "broad",
+      "intent": "retrieve global guidance ranked for the active project",
+      "workspace": "global",
+      "expected_labels": ["global-project-ranking"],
+      "acceptable_top_k": 5
     }
   ]
 }

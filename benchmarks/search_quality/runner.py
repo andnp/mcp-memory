@@ -843,9 +843,13 @@ def run_in_process(
 
             def search_case(case: SearchQualityCase) -> SearchObservation:
                 started = time.perf_counter()
+                workspace_id = None if case.workspace == "global" else case.workspace
                 results = service.search_memories(
                     case.query,
-                    workspace_id=case.workspace,
+                    workspace_id=workspace_id,
+                    ranking_workspace_id=(
+                        "workspace" if case.workspace == "global" else None
+                    ),
                     limit=case.acceptable_top_k,
                     side_effect_free=True,
                 )
@@ -934,13 +938,29 @@ def seed_search_quality_records(
             "Search quality follow-up context: preserve exact retrieval while improving broad search results.",
             "search quality retrieval",
         ),
+        (
+            "global-project-ranking",
+            "Shared deployment guidance",
+            "Shared search retrieval deployment guidance for the active project workspace.",
+            "deployment guidance project search retrieval",
+        ),
+        (
+            "global-other-project",
+            "Shared deployment guidance elsewhere",
+            "Shared deployment guidance for another project workspace.",
+            "deployment guidance project",
+        ),
     )
+    workspace_ids_by_label = {
+        "global-project-ranking": [workspace],
+        "global-other-project": ["other-workspace"],
+    }
     label_to_id: dict[str, str] = {}
     for label, title, content, tags in records:
         created = repository.create_memory(
             title,
             content,
-            [workspace],
+            workspace_ids_by_label.get(label, [workspace]),
             summary=content,
             tags=tags.split(),
             memory_type="fact",
