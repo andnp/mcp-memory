@@ -26,7 +26,14 @@ import psycopg
 from psycopg import sql
 import pytest
 
+from benchmarks.search_quality import (
+    TopicEmbedder,
+    load_corpus,
+    seed_search_quality_records,
+)
 from mcp_memory.config import PostgresStorageConfig
+from mcp_memory.integrations.searchkernel_adapters import MemoryRecordAdapter
+from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
@@ -87,7 +94,10 @@ def pgvector_base_dsn() -> Iterator[str]:
         try:
             image = client.images.get(_POSTGRES_IMAGE)
         except docker.errors.ImageNotFound:
-            image = client.images.pull("pgvector/pgvector", "pg17")
+            pytest.skip(
+                f"pgvector image {_POSTGRES_IMAGE!r} is not available locally; "
+                "pull it explicitly before running this parity benchmark"
+            )
 
         port = _free_localhost_port()
         container = client.containers.run(
@@ -465,3 +475,75 @@ def test_postgres_vector_backend_capability_benchmark(
         },
     }
     print("POSTGRES_VECTOR_PARITY " + json.dumps(report, sort_keys=True))
+
+
+def test_pgvector_search_quality_corpus_matches_workspace_ordering(
+    parity_backends: _ParityBackends,
+) -> None:
+    """Compare mcp-memory and searchkernel ordering over the labeled corpus."""
+    from searchkernel.adapters.stores.pgvector import PGVectorStore
+
+    repository = PostgresRelationalMemoryRepository(parity_backends.mcp_manager)
+    label_to_id = seed_search_quality_records(repository, workspace="workspace")
+    other = repository.create_memory(
+        "Authentication policy elsewhere",
+        "Authentication policy in another workspace.",
+        ["other-workspace"],
+        summary="Authentication policy in another workspace.",
+        tags=["auth"],
+        memory_type="fact",
+    )
+    assert other is not None
+
+    embedder = TopicEmbedder()
+    memory_ids = [*label_to_id.values(), other.id]
+    memories = [
+        memory
+        for memory_id in memory_ids
+        if (memory := repository.get_memory(memory_id)) is not None
+    ]
+    records = []
+    for memory in memories:
+        record = MemoryRecordAdapter.to_record(memory)
+        record.embedding = embedder.embed([
+            "\n".join([memory.summary or "", memory.content, ", ".join(memory.tags)])
+        ])[0]
+        records.append(record)
+
+    mcp_store = PostgresVectorStore(parity_backends.mcp_manager)
+    searchkernel_store = PGVectorStore(parity_backends.searchkernel_pool)
+    _upsert_mcp(mcp_store, tuple(records))
+    searchkernel_store.upsert(records, model_name=_MODEL_NAME, dim=embedder.dim)
+
+    corpus = load_corpus()
+    label_by_id = {memory_id: label for label, memory_id in label_to_id.items()}
+    for case in corpus.entries:
+        query_vector = embedder.embed([case.query])[0]
+        mcp_diagnostics: dict[str, object] = {}
+        mcp_hits = mcp_store.search(
+            source_kind="memory",
+            model_name=_MODEL_NAME,
+            query_embedding=query_vector,
+            diagnostics=mcp_diagnostics,
+            workspace_id=case.workspace,
+            limit=case.acceptable_top_k,
+        )
+        kernel_hits = searchkernel_store.search(
+            query_vector,
+            k=case.acceptable_top_k,
+            model_name=_MODEL_NAME,
+            dim=embedder.dim,
+            filters={
+                "workspace_id": case.workspace,
+                "source_kinds": ["memory"],
+            },
+        )
+
+        assert tuple(label_by_id.get(memory_id, "unknown") for memory_id, _ in mcp_hits) == tuple(
+            label_by_id.get(hit.source_id, "unknown") for hit in kernel_hits
+        )
+        assert case.expected_labels[0] in {
+            label_by_id.get(memory_id, "unknown") for memory_id, _ in mcp_hits
+        }
+        assert mcp_diagnostics["search_mode"] == "server_side_pgvector"
+        assert all(hit.workspace_id == case.workspace for hit in kernel_hits)

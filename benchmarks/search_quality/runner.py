@@ -9,11 +9,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 from mcp_memory.daemon import ensure_daemon_started
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.config import Config
+from mcp_memory.core.ports.memory import MemoryRecord
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
@@ -71,6 +72,19 @@ class TopicEmbedder:
             norm = math.sqrt(sum(value * value for value in vector))
             vectors.append([value / norm for value in vector] if norm else vector)
         return vectors
+
+
+class SearchQualityRepository(Protocol):
+    def create_memory(
+        self,
+        title: str,
+        content: str,
+        workspace_ids: list[str],
+        *,
+        summary: str,
+        tags: list[str],
+        memory_type: str,
+    ) -> MemoryRecord | None: ...
 
 
 SearchCaseRunner = Callable[[SearchQualityCase], SearchObservation]
@@ -402,7 +416,7 @@ def run_in_process(
         manager = DatabaseManager(Path(directory) / "search-quality.db")
         try:
             repository = RelationalMemoryRepository(manager)
-            label_to_id = _seed_records(repository)
+            label_to_id = seed_search_quality_records(repository)
             service = RelationalMemorySearchService(
                 repository,
                 Config(),
@@ -433,7 +447,11 @@ def run_in_process(
             manager.close()
 
 
-def _seed_records(repository: RelationalMemoryRepository) -> dict[str, str]:
+def seed_search_quality_records(
+    repository: SearchQualityRepository,
+    *,
+    workspace: str = "workspace",
+) -> dict[str, str]:
     records = (
         (
             "authentication-token-rotation",
@@ -489,7 +507,7 @@ def _seed_records(repository: RelationalMemoryRepository) -> dict[str, str]:
         created = repository.create_memory(
             title,
             content,
-            ["workspace"],
+            [workspace],
             summary=content,
             tags=tags.split(),
             memory_type="fact",
