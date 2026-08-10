@@ -16,6 +16,7 @@ from mcp_memory.core.ports.memory import (
 from mcp_memory.core.search_ranking import RankingEngine, RankingSignals
 from mcp_memory.integrations.searchkernel_adapters import MemoryVectorBackend
 from mcp_memory.integrations.searchkernel_record_pipeline import (
+    MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     build_memory_record_pipeline,
 )
 
@@ -203,6 +204,11 @@ class FakeVectorStore:
     def delete(self, **kwargs: object) -> int:
         self.write_count += 1
         return 1
+
+
+class FailingVectorStore(FakeVectorStore):
+    def search(self, **kwargs: object) -> list[tuple[str, float]]:
+        raise RuntimeError("vector backend unavailable")
 
 
 class FakeEmbedder:
@@ -600,16 +606,18 @@ async def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("semantic_score", "expected_ids"),
+    ("semantic_score", "expected_ids", "expected_rejected"),
     [
-        (0.72, []),
-        (0.96, ["semantic"]),
+        (0.72, [], 1),
+        (0.96, ["semantic"], 0),
     ],
 )
 async def test_semantic_only_abstention_uses_vector_raw_score(
     semantic_score: float,
     expected_ids: list[str],
+    expected_rejected: int,
 ) -> None:
+    """Report semantic-only candidates rejected by the raw-score policy."""
     repository = FakeRepository(
         records={"semantic": _memory("semantic")},
         keyword_ids=[],
@@ -628,6 +636,10 @@ async def test_semantic_only_abstention_uses_vector_raw_score(
     outcome = await pipeline.search("unmatched query", limit=2)
 
     assert [result.record_id for result in outcome.results] == expected_ids
+    assert (
+        f"{MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX}"
+        f"semantic_candidates=1;semantic_only_candidates=1;rejected={expected_rejected}"
+    ) in outcome.diagnostics
     assert vector_store.write_count == 0
 
 
@@ -716,6 +728,7 @@ async def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
 
 @pytest.mark.asyncio
 async def test_keyword_match_survives_semantic_only_abstention_threshold() -> None:
+    """Exclude keyword-supported semantic candidates from abstention counts."""
     exact = _memory(
         "exact",
         title="ripgrep ban",
@@ -743,3 +756,26 @@ async def test_keyword_match_survives_semantic_only_abstention_threshold() -> No
     outcome = await pipeline.search("ripgrep ban", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["exact"]
+    assert (
+        f"{MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX}"
+        "semantic_candidates=1;semantic_only_candidates=0;rejected=0"
+    ) in outcome.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_degraded_semantic_search_does_not_report_abstention() -> None:
+    """Keep backend degradation separate from semantic abstention outcomes."""
+    repository = FakeRepository(keyword_ids=[])
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", FailingVectorStore()),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search("unmatched query", limit=2)
+
+    assert outcome.degraded is True
+    assert (
+        f"{MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX}"
+        "semantic_candidates=0;semantic_only_candidates=0;rejected=0"
+    ) in outcome.diagnostics

@@ -557,6 +557,87 @@ def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) 
     assert diagnostics.to_payload()["kernel_diagnostics"] == list(outcome.diagnostics)
 
 
+@pytest.mark.parametrize(
+    (
+        "diagnostic",
+        "degraded",
+        "expected_count",
+        "expected_rate",
+        "expected_abstained",
+    ),
+    [
+        (
+            "semantic_abstention:semantic_candidates=1;"
+            "semantic_only_candidates=1;rejected=0",
+            False,
+            0,
+            0.0,
+            False,
+        ),
+        (
+            "semantic_abstention:semantic_candidates=1;"
+            "semantic_only_candidates=1;rejected=1",
+            False,
+            1,
+            1.0,
+            True,
+        ),
+        (
+            "semantic_abstention:semantic_candidates=1;"
+            "semantic_only_candidates=0;rejected=0",
+            False,
+            0,
+            None,
+            False,
+        ),
+        (
+            "semantic_abstention:semantic_candidates=2;"
+            "semantic_only_candidates=2;rejected=1",
+            True,
+            1,
+            0.5,
+            None,
+        ),
+    ],
+)
+def test_service_search_diagnostics_expose_semantic_abstention(
+    db_manager,
+    diagnostic: str,
+    degraded: bool,
+    expected_count: int,
+    expected_rate: float | None,
+    expected_abstained: bool | None,
+) -> None:
+    """Map bounded outcome diagnostics to benchmark-safe semantic signals."""
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+    outcome = SimpleNamespace(
+        results=(),
+        stage_timings_ms={},
+        candidate_counts={},
+        diagnostics=(diagnostic,),
+        cache_diagnostics=(),
+        failures=(RuntimeError("degraded"),) if degraded else (),
+        missing_record_ids=(),
+        degraded=degraded,
+        trace=None,
+    )
+    service._retrieval_facade.search_sync = cast(
+        Callable[..., RecordSearchOutcome], lambda *args, **kwargs: outcome
+    )
+
+    _, diagnostics = service.search_memories_with_diagnostics(
+        "semantic diagnostics",
+        debug=True,
+        side_effect_free=True,
+    )
+
+    assert diagnostics.semantic_abstention_count == expected_count
+    assert diagnostics.semantic_abstention_rate == expected_rate
+    assert diagnostics.semantic_abstained is expected_abstained
+    assert diagnostics.to_payload()["semantic_abstention_count"] == expected_count
+
+
 def test_read_memory_preserves_access_and_superseded_breadcrumbs(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
