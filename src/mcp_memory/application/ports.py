@@ -27,6 +27,7 @@ class MemorySearchPort(Protocol):
 
 
 CACHE_SCHEMA_VERSION = 1
+DEFAULT_SEARCH_POLICY_VERSION = "default"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class SharedReadCacheSearchRequest:
     status: str | None
     include_superseded: bool
     ranking_workspace_id: str | None = None
+    policy_version: str = DEFAULT_SEARCH_POLICY_VERSION
+    feature_fingerprint: str | None = None
 
     def normalized_params(self) -> dict[str, Any]:
         params = {
@@ -53,6 +56,10 @@ class SharedReadCacheSearchRequest:
         }
         if self.ranking_workspace_id is not None:
             params["ranking_workspace_id"] = self.ranking_workspace_id
+        if self.policy_version != DEFAULT_SEARCH_POLICY_VERSION:
+            params["policy_version"] = self.policy_version
+        if self.feature_fingerprint is not None:
+            params["feature_fingerprint"] = self.feature_fingerprint
         return params
 
 

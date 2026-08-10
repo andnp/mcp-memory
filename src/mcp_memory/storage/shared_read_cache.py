@@ -15,6 +15,7 @@ from typing import Any, Iterator
 
 from mcp_memory.application.ports import (
     CACHE_SCHEMA_VERSION,
+    DEFAULT_SEARCH_POLICY_VERSION,
     SharedReadCacheInFlightSearch,
     SharedReadCacheProjectionEntry,
     SharedReadCacheProjectionUpsert,
@@ -216,7 +217,12 @@ class SharedReadCache:
         request: SharedReadCacheSearchRequest,
         columns: str,
     ) -> Any:
-        keys = [self._search_cache_key(request), self._legacy_search_cache_key(request)]
+        keys = [self._search_cache_key(request)]
+        if (
+            request.policy_version == DEFAULT_SEARCH_POLICY_VERSION
+            and request.feature_fingerprint is None
+        ):
+            keys.append(self._legacy_search_cache_key(request))
         if request.ranking_workspace_id is None and request.workspace_id is not None:
             keys.append(
                 self._search_cache_key(

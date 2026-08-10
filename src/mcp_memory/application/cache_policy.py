@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from mcp_memory.application.ports import (
+    DEFAULT_SEARCH_POLICY_VERSION,
     MemoryReadPort,
     SharedReadCacheInFlightSearch,
     SharedReadCacheProjectionEntry,
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 def build_search_cache_request(
     ctx: MemoryReadPort,
     arguments: dict[str, Any],
+    *,
+    policy_version: str = DEFAULT_SEARCH_POLICY_VERSION,
+    feature_fingerprint: str | None = None,
 ) -> SharedReadCacheSearchRequest:
     return SharedReadCacheSearchRequest(
         query=str(arguments["query"]),
@@ -48,6 +52,8 @@ def build_search_cache_request(
             if arguments.get("workspace_id") is not None
             else None
         ),
+        policy_version=policy_version,
+        feature_fingerprint=feature_fingerprint,
     )
 
 
