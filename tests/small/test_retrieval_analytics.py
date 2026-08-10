@@ -3,9 +3,18 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+import mcp_memory.application.memory_use_cases as memory_use_cases
+from mcp_memory.application.memory_use_cases import SearchMemoryRecordsUseCase
+from mcp_memory.application.ports import (
+    MemoryReadDependencies,
+    MemorySearchPort,
+    RetrievalTelemetryPort,
+)
 from mcp_memory.management.analytics_reporting import build_retrieval_analytics
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
@@ -13,10 +22,131 @@ from mcp_memory.mcp.internal_services import internal_search_memory_records_serv
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.relational.search import RelationalSearchResult, SearchExecutionDiagnostics
 from mcp_memory.utils.db import DatabaseManager
 
 
 pytestmark = pytest.mark.small
+
+
+def test_debug_search_reports_bounded_application_phase_timings(monkeypatch) -> None:
+    """Debug search exposes deterministic bounded phase timings."""
+    clock_values = iter((0.0, 0.001, 0.004, 0.006, 100.006, 100.007, 100.008, 100.009))
+    monkeypatch.setattr(memory_use_cases, "perf_counter", lambda: next(clock_values))
+    health = SimpleNamespace(repair_wait_count=0, last_repair_wait_seconds=0.007)
+    result = RelationalSearchResult(
+        memory_id="memory-1",
+        memory_ref=1,
+        title="Timing result",
+        summary="Timing summary",
+        memory_type="fact",
+        status="active",
+    )
+    diagnostics = SearchExecutionDiagnostics(timing_ms={"total": 2.0, "search": 1.5})
+
+    def execute_with_diagnostics(_operation, **_kwargs):
+        health.repair_wait_count += 1
+        return [result], diagnostics
+
+    monkeypatch.setattr(
+        memory_use_cases.SearchMemoryRecordsOperation,
+        "execute_with_diagnostics",
+        execute_with_diagnostics,
+    )
+    ctx = MemoryReadDependencies(
+        workspace_id="workspace-1",
+        relational_search=cast(
+            MemorySearchPort,
+            SimpleNamespace(get_health=lambda: health),
+        ),
+        memory_retrieval=object(),
+    )
+    telemetry = cast(
+        RetrievalTelemetryPort,
+        SimpleNamespace(record_search=lambda **_kwargs: None),
+    )
+
+    payload = SearchMemoryRecordsUseCase(ctx, telemetry).execute(
+        {
+            "query": "timing query",
+            "workspace_id": None,
+            "limit": 5,
+            "adaptive_limit": False,
+            "memory_type": None,
+            "status": None,
+            "tags": (),
+            "include_superseded": False,
+            "debug": True,
+        }
+    )
+
+    timing_ms = payload["timing_ms"]
+    assert timing_ms["fresh_cache_lookup"] == 3.0
+    assert timing_ms["authoritative_search"] == 60_000.0
+    assert timing_ms["validation_projection_warming"] == 1.0
+    assert timing_ms["embedding_repair_wait"] == 7.0
+    assert timing_ms["coalesced_wait"] == 0.0
+    phase_keys = {
+        "fresh_cache_lookup",
+        "coalesced_wait",
+        "authoritative_search",
+        "validation_projection_warming",
+        "embedding_repair_wait",
+    }
+    assert all(isinstance(timing_ms[key], (int, float)) for key in phase_keys)
+    assert all(0.0 <= timing_ms[key] <= 60_000.0 for key in phase_keys)
+    assert payload["search_diagnostics"]["timing_ms"] == timing_ms
+
+
+def test_non_debug_search_does_not_add_phase_timings(monkeypatch) -> None:
+    """Non-debug search retains its compact response contract."""
+    result = RelationalSearchResult(
+        memory_id="memory-1",
+        memory_ref=1,
+        title="Compact result",
+        summary="Compact summary",
+        memory_type="fact",
+        status="active",
+    )
+    monkeypatch.setattr(
+        memory_use_cases.SearchMemoryRecordsOperation,
+        "execute",
+        lambda _operation, **_kwargs: [result],
+    )
+    ctx = MemoryReadDependencies(
+        workspace_id="workspace-1",
+        relational_search=cast(MemorySearchPort, SimpleNamespace()),
+        memory_retrieval=object(),
+    )
+    telemetry = cast(
+        RetrievalTelemetryPort,
+        SimpleNamespace(record_search=lambda **_kwargs: None),
+    )
+
+    payload = SearchMemoryRecordsUseCase(ctx, telemetry).execute(
+        {
+            "query": "compact query",
+            "workspace_id": None,
+            "limit": 5,
+            "adaptive_limit": False,
+            "memory_type": None,
+            "status": None,
+            "tags": (),
+            "include_superseded": False,
+            "debug": False,
+        }
+    )
+
+    assert payload == {
+        "status": "ok",
+        "results": [
+            {
+                "memory_ref": "mem-1",
+                "title": "Compact result",
+                "summary": "Compact summary",
+            }
+        ],
+    }
 
 
 def test_open_connection_timeout_bounds_sqlite_busy_lock(tmp_path: Path) -> None:
