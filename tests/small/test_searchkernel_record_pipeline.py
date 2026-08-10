@@ -246,6 +246,32 @@ async def test_composition_applies_memory_policy_without_writes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_artifact_queries_keep_vector_lane_for_memory_eligibility() -> None:
+    """Retain semantic retrieval while workspace and lifecycle filters apply."""
+    repository = FakeRepository()
+    vector_store = FakeVectorStore()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search(
+        "release v1",
+        limit=1,
+        filters={
+            "workspace_id": "workspace-1",
+            "status": "active",
+            "include_superseded": False,
+        },
+    )
+
+    assert [result.record_id for result in outcome.results] == ["active"]
+    assert vector_store.search_count == 1
+    assert "vector:artifact_keyword_confident" not in outcome.diagnostics
+
+
+@pytest.mark.asyncio
 async def test_candidate_cache_requires_authoritative_epochs() -> None:
     pipeline_without_epochs = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", FakeRepository())

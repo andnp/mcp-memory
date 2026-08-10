@@ -365,6 +365,9 @@ def build_memory_record_pipeline(
             graph_fusion="max",
             max_graph_seeds=3,
             max_neighbors_per_seed=10,
+            # searchkernel decides this before mcp-memory's eligibility policy;
+            # keep vector retrieval enabled until that decision is query-aware.
+            artifact_confidence_threshold=1.000001,
             adaptive_graph_enabled=True,
             capture_trace=True,
             adaptive_enabled=adaptive_enabled,
