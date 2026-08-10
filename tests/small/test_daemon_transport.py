@@ -123,8 +123,9 @@ def test_resolve_daemon_request_timeout_seconds_preserves_default_and_explicit_o
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/api/memories/search", timeout_seconds=7.5) == 7.5
 
 
-def test_attach_transport_diagnostics_correlates_debug_search_response() -> None:
+def test_attach_transport_diagnostics_correlates_debug_search_response(monkeypatch) -> None:
     daemon_transport = _daemon_transport_module()
+    monkeypatch.setattr("mcp_memory.daemon_transport.perf_counter", lambda: 0.0)
     tracked_request = daemon_transport._TrackedDaemonTransportRequest(
         request_id=17,
         path="/internal/tools/search_memory_records",
@@ -145,6 +146,7 @@ def test_attach_transport_diagnostics_correlates_debug_search_response() -> None
         "request_id": 17,
         "queue_wait_ms": 12.346,
         "execution_ms": 678.901,
+        "daemon_total_ms": 0.0,
     }
     assert "transport" not in response["search_diagnostics"]
 
@@ -178,6 +180,107 @@ def test_attach_transport_diagnostics_updates_serialized_tool_response() -> None
 
     assert payload["search_diagnostics"]["transport"]["request_id"] == 19
     assert response["contents"][0]["text"] != enriched["contents"][0]["text"]
+
+
+def test_attach_client_transport_timing_preserves_daemon_timing() -> None:
+    """Verify client round-trip timing is additive to daemon diagnostics.
+
+    The client measurement must identify the same request without replacing the daemon's internal timings.
+    """
+    daemon_transport = _daemon_transport_module()
+    response = {
+        "search_diagnostics": {
+            "transport": {
+                "request_id": 17,
+                "queue_wait_ms": 12.346,
+                "execution_ms": 678.901,
+                "daemon_total_ms": 691.247,
+            }
+        }
+    }
+
+    enriched = daemon_transport._attach_client_transport_timing(response, 705.1234)
+
+    assert enriched["search_diagnostics"]["transport"] == {
+        "request_id": 17,
+        "queue_wait_ms": 12.346,
+        "execution_ms": 678.901,
+        "daemon_total_ms": 691.247,
+        "client_round_trip_ms": 705.123,
+    }
+    assert response["search_diagnostics"]["transport"] == {
+        "request_id": 17,
+        "queue_wait_ms": 12.346,
+        "execution_ms": 678.901,
+        "daemon_total_ms": 691.247,
+    }
+
+
+def test_attach_client_transport_timing_ignores_old_or_malformed_responses() -> None:
+    """Verify responses without diagnostics remain compatible with old clients.
+
+    Malformed serialized tool text must not make client timing enrichment fail.
+    """
+    daemon_transport = _daemon_transport_module()
+
+    assert daemon_transport._attach_client_transport_timing({"status": "ok"}, 10.0) == {"status": "ok"}
+    malformed = {"contents": [{"type": "text", "text": "not-json"}]}
+    assert daemon_transport._attach_client_transport_timing(malformed, 10.0) is malformed
+
+
+def test_request_zmq_json_adds_client_timing_to_existing_transport_diagnostics(monkeypatch) -> None:
+    """Verify the client runner measures round-trip time around the wire call.
+
+    The outbound envelope remains unchanged so existing daemon clients keep the same request contract.
+    """
+    daemon_transport = _daemon_transport_module()
+    sent_payloads: list[dict[str, object | None]] = []
+
+    class FakeSocket:
+        def connect(self, endpoint: str) -> None:
+            assert endpoint == "ipc:///tmp/daemon.sock"
+
+        def close(self, linger: int) -> None:
+            assert linger == 0
+
+    class FakeContext:
+        def socket(self, socket_type: int) -> FakeSocket:
+            assert socket_type == daemon_transport.zmq.DEALER
+            return FakeSocket()
+
+        def term(self) -> None:
+            pass
+
+    now_values = iter([10.0, 10.125])
+    monkeypatch.setattr("mcp_memory.daemon_transport.zmq.Context", FakeContext)
+    monkeypatch.setattr("mcp_memory.daemon_transport.suspend_aware_deadline", lambda _timeout: 100.0)
+    monkeypatch.setattr("mcp_memory.daemon_transport.suspend_aware_now", lambda: next(now_values))
+    monkeypatch.setattr(
+        "mcp_memory.daemon_transport._send_zmq_json_before_deadline",
+        lambda _socket, payload, _deadline: sent_payloads.append(payload),
+    )
+    monkeypatch.setattr(
+        "mcp_memory.daemon_transport._recv_zmq_json_before_deadline",
+        lambda _socket, _deadline: {"search_diagnostics": {"transport": {"request_id": 7}}},
+    )
+
+    response = daemon_transport._request_zmq_json(
+        "/tmp/daemon.sock",
+        "/internal/tools/search_memory_records",
+        {"query": "auth"},
+        timeout_seconds=0.5,
+    )
+
+    assert sent_payloads == [
+        {
+            "path": "/internal/tools/search_memory_records",
+            "payload": {"query": "auth"},
+        }
+    ]
+    assert response["search_diagnostics"]["transport"] == {
+        "request_id": 7,
+        "client_round_trip_ms": 125.0,
+    }
 
 
 def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> None:
@@ -341,7 +444,7 @@ def test_request_zmq_json_uses_short_poll_slices_until_deadline(monkeypatch) -> 
         created_contexts.append(context)
         return context
 
-    now_values = iter([0.0, 0.0, 0.05, 0.11])
+    now_values = iter([0.0, 0.0, 0.0, 0.05, 0.11])
 
     monkeypatch.setattr("mcp_memory.daemon_transport.zmq.Context", _fake_context_factory)
     monkeypatch.setattr("mcp_memory.daemon_transport.suspend_aware_now", lambda: next(now_values))

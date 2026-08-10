@@ -179,6 +179,7 @@ def _request_zmq_json(
         socket.connect(_socket_endpoint(socket_path))
         try:
             deadline = suspend_aware_deadline(timeout_seconds)
+            client_started_at = suspend_aware_now()
             _send_zmq_json_before_deadline(socket, {"path": path, "payload": payload}, deadline)
             response = _recv_zmq_json_before_deadline(socket, deadline)
         finally:
@@ -187,7 +188,8 @@ def _request_zmq_json(
         context.term()
     if not isinstance(response, dict):
         raise ValueError("daemon_response_must_be_object")
-    return cast(dict[str, Any], response)
+    client_round_trip_ms = (suspend_aware_now() - client_started_at) * 1000.0
+    return _attach_client_transport_timing(cast(dict[str, Any], response), client_round_trip_ms)
 
 
 def _send_zmq_json_before_deadline(socket: zmq.Socket, payload: dict[str, object | None], deadline: float) -> None:
@@ -659,11 +661,7 @@ def _attach_transport_diagnostics(
     if isinstance(search_diagnostics, dict):
         enriched_response = dict(response)
         enriched_diagnostics = dict(search_diagnostics)
-        enriched_diagnostics["transport"] = {
-            "request_id": tracked_request.request_id,
-            "queue_wait_ms": round(max(tracked_request.queue_wait_ms, 0.0), 3),
-            "execution_ms": round(max(tracked_request.execution_ms, 0.0), 3),
-        }
+        enriched_diagnostics["transport"] = _daemon_transport_timing(tracked_request)
         enriched_response["search_diagnostics"] = enriched_diagnostics
         return enriched_response
 
@@ -680,6 +678,61 @@ def _attach_transport_diagnostics(
         if not isinstance(tool_payload, dict):
             continue
         enriched_payload = _attach_transport_diagnostics(tool_payload, tracked_request)
+        if enriched_payload is tool_payload:
+            continue
+        enriched_response = dict(response)
+        enriched_contents = list(contents)
+        enriched_content = dict(content)
+        enriched_content["text"] = json.dumps(enriched_payload, sort_keys=True)
+        enriched_contents[index] = enriched_content
+        enriched_response["contents"] = enriched_contents
+        return enriched_response
+    return response
+
+
+def _daemon_transport_timing(tracked_request: _TrackedDaemonTransportRequest) -> dict[str, object]:
+    daemon_total_ms = max((perf_counter() - tracked_request.started_at_perf) * 1000.0, 0.0)
+    return {
+        "request_id": tracked_request.request_id,
+        "queue_wait_ms": round(max(tracked_request.queue_wait_ms, 0.0), 3),
+        "execution_ms": round(max(tracked_request.execution_ms, 0.0), 3),
+        "daemon_total_ms": round(daemon_total_ms, 3),
+    }
+
+
+def _attach_client_transport_timing(response: dict, client_round_trip_ms: float) -> dict:
+    rounded_round_trip_ms = round(max(client_round_trip_ms, 0.0), 3)
+    transport_diagnostics = response.get("transport_diagnostics")
+    if isinstance(transport_diagnostics, dict):
+        enriched_response = dict(response)
+        enriched_transport_diagnostics = dict(transport_diagnostics)
+        enriched_transport_diagnostics["client_round_trip_ms"] = rounded_round_trip_ms
+        enriched_response["transport_diagnostics"] = enriched_transport_diagnostics
+        return enriched_response
+
+    search_diagnostics = response.get("search_diagnostics")
+    if isinstance(search_diagnostics, dict) and isinstance(search_diagnostics.get("transport"), dict):
+        enriched_response = dict(response)
+        enriched_diagnostics = dict(search_diagnostics)
+        enriched_transport = dict(search_diagnostics["transport"])
+        enriched_transport["client_round_trip_ms"] = rounded_round_trip_ms
+        enriched_diagnostics["transport"] = enriched_transport
+        enriched_response["search_diagnostics"] = enriched_diagnostics
+        return enriched_response
+
+    contents = response.get("contents")
+    if not isinstance(contents, list):
+        return response
+    for index, content in enumerate(contents):
+        if not isinstance(content, dict) or not isinstance(content.get("text"), str):
+            continue
+        try:
+            tool_payload = json.loads(content["text"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(tool_payload, dict):
+            continue
+        enriched_payload = _attach_client_transport_timing(tool_payload, client_round_trip_ms)
         if enriched_payload is tool_payload:
             continue
         enriched_response = dict(response)
