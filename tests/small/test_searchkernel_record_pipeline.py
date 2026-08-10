@@ -4,6 +4,7 @@ from collections import Counter
 from typing import cast
 
 import pytest
+from searchkernel.search.record_pipeline import RecordSearchConfig
 
 import mcp_memory.integrations.searchkernel_record_pipeline as record_pipeline
 from mcp_memory.config import Config, SearchKernelConfig, SearchRankingConfig
@@ -494,7 +495,9 @@ def test_pipeline_keeps_advanced_searchkernel_policies_disabled() -> None:
     assert kernel_config.synonym_expansion_enabled is False
     assert kernel_config.rerank_budget == 0
     assert pipeline._pipeline._routing_fingerprint == "record-search-v1"
-    assert kernel_config.artifact_confidence_threshold > 1.0
+    assert kernel_config.artifact_confidence_threshold == (
+        RecordSearchConfig().artifact_confidence_threshold
+    )
 
 
 @pytest.mark.asyncio
@@ -567,7 +570,9 @@ def test_pipeline_applies_enabled_advanced_searchkernel_policies() -> None:
     assert pipeline._pipeline._routing_fingerprint == (
         "record-search-v1:calibrated-fusion;query-expansion:synonym;rerank:default:4"
     )
-    assert kernel_config.artifact_confidence_threshold > 1.0
+    assert kernel_config.artifact_confidence_threshold == (
+        RecordSearchConfig().artifact_confidence_threshold
+    )
 
 
 @pytest.mark.asyncio
