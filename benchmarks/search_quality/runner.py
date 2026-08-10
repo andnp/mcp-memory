@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal, Protocol, cast
@@ -153,6 +153,51 @@ class SearchPolicyObservation:
 PolicyCaseRunner = Callable[[SearchQualityCase], SearchPolicyObservation]
 PolicyBuilder = Callable[[], PolicyCaseRunner]
 RerankingPolicyBuilder = Callable[[object], PolicyCaseRunner]
+LOCAL_POLICY_VERSION = "mcp-memory-search-quality-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPolicyIdentity:
+    """Stable metadata for one benchmark policy configuration."""
+
+    policy: PolicyName
+    identity: str
+    fingerprint: str
+
+    def to_mapping(self) -> dict[str, str]:
+        """Serialize policy metadata without runtime objects."""
+        return {
+            "policy": self.policy,
+            "identity": self.identity,
+            "fingerprint": self.fingerprint,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LocalPolicyBuilders:
+    """Lazy local builders and metadata for deterministic comparisons."""
+
+    baseline_builder: PolicyBuilder
+    calibrated_fusion_builder: PolicyBuilder | None
+    query_expansion_builder: PolicyBuilder | None
+    reranking_builder: RerankingPolicyBuilder | None
+    identities: Mapping[PolicyName, SearchPolicyIdentity]
+
+    def comparison_kwargs(self) -> dict[str, object]:
+        """Return builders in the shape accepted by ``run_policy_comparison``."""
+        return {
+            "baseline_builder": self.baseline_builder,
+            "calibrated_fusion_builder": self.calibrated_fusion_builder,
+            "query_expansion_builder": self.query_expansion_builder,
+            "reranking_builder": self.reranking_builder,
+        }
+
+    def metadata(self) -> dict[str, dict[str, str]]:
+        """Return stable metadata keyed by policy name."""
+        return {
+            policy: identity.to_mapping()
+            for policy, identity in self.identities.items()
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +284,126 @@ def run_policy_comparison(
             runner = cast(PolicyBuilder, builder)()
         reports.append(_run_policy(selected_corpus, policy, runner))
     return SearchPolicyComparison(selected_corpus.version, tuple(reports))
+
+
+def build_local_policy_builders(
+    repository: RelationalMemoryRepository,
+    label_to_id: Mapping[str, str],
+    *,
+    db_manager: DatabaseManager,
+    vector_store: SQLiteVectorStore,
+    embedder: TopicEmbedder | None = None,
+    config: Config | None = None,
+    requested_policies: Collection[PolicyName] = (),
+) -> LocalPolicyBuilders:
+    """Build lazy policy factories over deterministic local dependencies.
+
+    Baseline is always available. Experimental services are constructed only
+    when their policy is requested and each factory call creates a fresh
+    service. Reranking remains absent because this local adapter has no real
+    reranker dependency to supply.
+    """
+    valid_policies: set[PolicyName] = {
+        "baseline",
+        "calibrated_fusion",
+        "query_expansion",
+        "reranking",
+    }
+    requested = set(requested_policies)
+    unknown = requested - valid_policies
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown search policy: {names}")
+    requested.add("baseline")
+
+    resolved_embedder = embedder or TopicEmbedder()
+    resolved_config = config or Config()
+    id_to_label = {memory_id: label for label, memory_id in label_to_id.items()}
+    identities: dict[PolicyName, SearchPolicyIdentity] = {}
+    builders: dict[PolicyName, PolicyBuilder] = {}
+    for policy in ("baseline", "calibrated_fusion", "query_expansion"):
+        if policy not in requested:
+            continue
+        policy_config = _local_policy_config(resolved_config, policy)
+        identities[policy] = SearchPolicyIdentity(
+            policy=policy,
+            identity=f"{LOCAL_POLICY_VERSION}:{policy}",
+            fingerprint=(
+                policy_config.searchkernel.active_feature_fingerprint()
+                or "baseline"
+            ),
+        )
+        builders[policy] = _local_policy_builder(
+            repository,
+            id_to_label,
+            db_manager=db_manager,
+            vector_store=vector_store,
+            embedder=resolved_embedder,
+            config=policy_config,
+        )
+
+    return LocalPolicyBuilders(
+        baseline_builder=builders["baseline"],
+        calibrated_fusion_builder=builders.get("calibrated_fusion"),
+        query_expansion_builder=builders.get("query_expansion"),
+        reranking_builder=None,
+        identities=identities,
+    )
+
+
+def _local_policy_config(config: Config, policy: PolicyName) -> Config:
+    if policy == "reranking":
+        raise ValueError("reranking has no local deterministic builder")
+    searchkernel = replace(
+        config.searchkernel,
+        calibrated_fusion_enabled=policy == "calibrated_fusion",
+        query_expansion_enabled=policy == "query_expansion",
+        rerank_policy="disabled",
+        rerank_budget=0,
+    )
+    return replace(config, searchkernel=searchkernel)
+
+
+def _local_policy_builder(
+    repository: RelationalMemoryRepository,
+    id_to_label: Mapping[str, str],
+    *,
+    db_manager: DatabaseManager,
+    vector_store: SQLiteVectorStore,
+    embedder: TopicEmbedder,
+    config: Config,
+) -> PolicyBuilder:
+    def build() -> PolicyCaseRunner:
+        service = RelationalMemorySearchService(
+            repository,
+            config,
+            embedder=embedder,
+            vector_store=vector_store,
+            db_manager=db_manager,
+        )
+
+        def search_case(case: SearchQualityCase) -> SearchPolicyObservation:
+            started = time.perf_counter()
+            results, diagnostics = service.search_memories_with_diagnostics(
+                case.query,
+                workspace_id=case.workspace,
+                limit=case.acceptable_top_k,
+                debug=True,
+                side_effect_free=True,
+            )
+            observation = SearchObservation(
+                result_labels=tuple(
+                    id_to_label.get(result.memory_id, "unknown")
+                    for result in results
+                ),
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+                semantic_abstained=diagnostics.semantic_abstained,
+            )
+            return SearchPolicyObservation(observation, diagnostics.degraded)
+
+        return search_case
+
+    return build
 
 
 def _run_policy(
