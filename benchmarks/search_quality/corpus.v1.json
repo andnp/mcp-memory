@@ -80,6 +80,16 @@
       "workspace": "workspace",
       "expected_labels": ["authentication-token-rotation"],
       "acceptable_top_k": 5
+    },
+    {
+      "id": "search-quality-follow-up",
+      "evaluation_label": "search-quality-follow-up",
+      "query": "what did we decide about search quality",
+      "query_class": "broad",
+      "intent": "retrieve broad search-quality follow-up context",
+      "workspace": "workspace",
+      "expected_labels": ["search-quality-follow-up"],
+      "acceptable_top_k": 5
     }
   ]
 }

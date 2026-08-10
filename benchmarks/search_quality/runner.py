@@ -914,6 +914,12 @@ def seed_search_quality_records(
             "Architecture decisions and implementation details.",
             "architecture",
         ),
+        (
+            "search-quality-follow-up",
+            "Search quality follow-up",
+            "Search quality follow-up context: preserve exact retrieval while improving broad search results.",
+            "search quality retrieval",
+        ),
     )
     label_to_id: dict[str, str] = {}
     for label, title, content, tags in records:

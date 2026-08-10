@@ -42,8 +42,8 @@ def test_search_quality_corpus_fixture_has_stable_labels() -> None:
     corpus = load_corpus()
 
     assert corpus.version == "search-quality-v1"
-    assert len(corpus.entries) == 8
-    assert len({entry.evaluation_label for entry in corpus.entries}) == 8
+    assert len(corpus.entries) == 9
+    assert len({entry.evaluation_label for entry in corpus.entries}) == 9
     assert all(entry.workspace == "workspace" for entry in corpus.entries)
 
 
@@ -121,7 +121,7 @@ def test_search_quality_in_process_runner_uses_local_search_path() -> None:
     metrics = run_in_process(load_corpus())
 
     assert metrics.corpus_version == "search-quality-v1"
-    assert metrics.query_count == 8
+    assert metrics.query_count == 9
     assert metrics.hit_at_1 == 1.0
     assert metrics.hit_at_5 == 1.0
     assert all(case.latency_ms is not None for case in metrics.cases)
