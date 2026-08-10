@@ -14,6 +14,7 @@ from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import JournalEntry
+from mcp_memory.integrations.searchkernel_record_pipeline import MEMORY_SEARCH_POLICY_VERSION
 from mcp_memory.mcp import services as services_module
 from mcp_memory.mcp.services import read_memory_record_service, record_thought_service, search_memory_records_service
 from mcp_memory.storage.shared_read_cache import (
@@ -493,6 +494,7 @@ def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -
             memory_type=None,
             status=None,
             include_superseded=False,
+            policy_version=MEMORY_SEARCH_POLICY_VERSION,
         )
     )
 
@@ -501,6 +503,35 @@ def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -
     assert cached_payload["results"] == response["results"]
     assert cached_payload["_cache_validation_tokens"] == {}
     assert "_cache_validation_tokens" not in response
+
+
+def test_search_memory_records_service_does_not_reuse_default_policy_cache_entry(
+    tmp_path: Path,
+) -> None:
+    """Production searches bypass entries written under the legacy default policy."""
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    legacy_request = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    legacy_payload = {
+        "status": "ok",
+        "results": [{"memory_id": "legacy", "title": "Legacy result"}],
+    }
+    cache.store_search_response(legacy_request, legacy_payload)
+    search_service = CountingSearchService()
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    response = search_memory_records_service(ctx, {"query": "warm cache"})
+
+    assert search_service.calls == 1
+    assert response["results"][0]["memory_ref"] == "memory-1"
+    assert cache.load_search_response(legacy_request) == legacy_payload
 
 
 def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_paths(
@@ -772,6 +803,7 @@ def test_search_memory_records_service_serves_stale_cache_on_authoritative_failu
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
     cache.store_search_response(request, cached_payload)
@@ -1023,6 +1055,7 @@ def test_search_memory_records_service_short_circuits_on_fresh_cache_hit(
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     cached_payload = {
         "status": "ok",
@@ -1133,6 +1166,7 @@ def test_search_memory_records_service_refreshes_expired_cache_entry(
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     cached_payload = {
         "status": "ok",
@@ -1167,6 +1201,7 @@ def test_search_memory_records_service_debug_bypasses_fresh_cache_hit(
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
     cache.store_search_response(
@@ -1258,6 +1293,7 @@ def test_search_memory_records_service_uses_stale_fallback_after_hot_hit_ttl_exp
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     cached_payload = {
         "status": "ok",
@@ -1304,6 +1340,7 @@ def test_search_memory_records_service_stale_exact_fallback_takes_precedence_ove
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     stale_payload = {
         "status": "ok",
@@ -1825,6 +1862,7 @@ def test_search_memory_records_service_records_cache_metrics_for_external_non_de
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
     cache.store_search_response(request, warm_response)
@@ -1998,6 +2036,7 @@ def test_search_memory_records_service_coalesced_authoritative_failure_preserves
         memory_type=None,
         status=None,
         include_superseded=False,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     cached_payload = {
         "status": "ok",

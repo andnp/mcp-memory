@@ -13,6 +13,7 @@ from mcp_memory.application.ports import (
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
 from mcp_memory.integrations.searchkernel_record_pipeline import (
+    MEMORY_SEARCH_POLICY_VERSION,
     build_memory_record_pipeline,
 )
 from mcp_memory.application.cache_policy import (
@@ -223,7 +224,11 @@ def _search_memory_records(
         "include_superseded": arguments["include_superseded"],
         "debug": debug_enabled,
     }
-    cache_request = build_search_cache_request(ctx, execution_arguments)
+    cache_request = build_search_cache_request(
+        ctx,
+        execution_arguments,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
+    )
     _increment_shared_read_cache_metric(
         ctx,
         "search_requests",
