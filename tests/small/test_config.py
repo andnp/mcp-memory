@@ -81,8 +81,66 @@ def test_maintenance_config_rejects_invalid_values(field: str, value: object, me
 
 
 def test_searchkernel_defaults_to_lenient_failure_mode() -> None:
+    """Keep advanced searchkernel policies disabled by default."""
     config = SearchKernelConfig()
+
     assert config.failure_mode == "lenient"
+    assert config.calibrated_fusion_enabled is False
+    assert config.query_expansion_enabled is False
+    assert config.query_expansion_policy == "vector"
+    assert config.rerank_policy == "disabled"
+    assert config.rerank_budget == 0
+    assert config.active_feature_fingerprint() is None
+
+
+def test_searchkernel_loads_advanced_policy_settings(tmp_path: Path) -> None:
+    """Load explicitly enabled searchkernel policies from TOML."""
+    config_path = tmp_path / "advanced-searchkernel-config.toml"
+    config_path.write_text(
+        """
+[searchkernel]
+calibrated_fusion_enabled = true
+query_expansion_enabled = true
+query_expansion_policy = "synonym"
+rerank_policy = "default"
+rerank_budget = 4
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.searchkernel.calibrated_fusion_enabled is True
+    assert loaded.searchkernel.query_expansion_enabled is True
+    assert loaded.searchkernel.query_expansion_policy == "synonym"
+    assert loaded.searchkernel.rerank_policy == "default"
+    assert loaded.searchkernel.rerank_budget == 4
+    assert loaded.searchkernel.active_feature_fingerprint() == (
+        "calibrated-fusion;query-expansion:synonym;rerank:default:4"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("query_expansion_policy", "llm", "query_expansion_policy"),
+        ("rerank_policy", "cross-encoder", "rerank_policy"),
+        ("rerank_budget", -1, "rerank_budget"),
+    ],
+)
+def test_searchkernel_rejects_invalid_advanced_policy_settings(
+    field: str, value: object, message: str
+) -> None:
+    """Reject unsupported or unsafe advanced searchkernel values."""
+    with pytest.raises(ValueError, match=message):
+        invalid_config: dict[str, Any] = {field: value}
+        SearchKernelConfig(**invalid_config)
+
+
+def test_searchkernel_rejects_budget_for_disabled_reranking() -> None:
+    """Prevent an inactive reranking policy from carrying a budget."""
+    with pytest.raises(ValueError, match="rerank_budget"):
+        SearchKernelConfig(rerank_budget=2)
 
 
 def test_config_preserves_legacy_ingress_rollout_defaults() -> None:

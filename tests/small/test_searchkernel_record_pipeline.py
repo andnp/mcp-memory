@@ -461,6 +461,7 @@ def test_pipeline_matches_native_graph_expansion_bounds() -> None:
 
 
 def test_pipeline_uses_searchkernel_failure_mode() -> None:
+    """Keep failure-mode wiring compatible with existing searchkernel policy."""
     repository = FakeRepository()
 
     lenient = build_memory_record_pipeline(
@@ -473,6 +474,48 @@ def test_pipeline_uses_searchkernel_failure_mode() -> None:
 
     assert lenient._pipeline._config.failure_mode == "lenient"
     assert strict._pipeline._config.failure_mode == "strict"
+
+
+def test_pipeline_keeps_advanced_searchkernel_policies_disabled() -> None:
+    """Preserve baseline fusion, expansion, reranking, and routing identity."""
+    pipeline = build_memory_record_pipeline(cast("MemoryRepositoryPort", FakeRepository()))
+
+    kernel_config = pipeline._pipeline._config
+
+    assert kernel_config.fusion_mode == "rrf"
+    assert kernel_config.expansion_enabled is False
+    assert kernel_config.synonym_expansion_enabled is False
+    assert kernel_config.rerank_budget == 0
+    assert pipeline._pipeline._routing_fingerprint == "record-search-v1"
+    assert kernel_config.artifact_confidence_threshold > 1.0
+
+
+def test_pipeline_applies_enabled_advanced_searchkernel_policies() -> None:
+    """Thread enabled policies without weakening the eligibility safeguard."""
+    config = Config(
+        searchkernel=SearchKernelConfig(
+            calibrated_fusion_enabled=True,
+            query_expansion_enabled=True,
+            query_expansion_policy="synonym",
+            rerank_policy="default",
+            rerank_budget=4,
+        )
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository()),
+        config=config,
+    )
+
+    kernel_config = pipeline._pipeline._config
+
+    assert kernel_config.fusion_mode == "calibrated"
+    assert kernel_config.expansion_enabled is False
+    assert kernel_config.synonym_expansion_enabled is True
+    assert kernel_config.rerank_budget == 4
+    assert pipeline._pipeline._routing_fingerprint == (
+        "record-search-v1:calibrated-fusion;query-expansion:synonym;rerank:default:4"
+    )
+    assert kernel_config.artifact_confidence_threshold > 1.0
 
 
 @pytest.mark.asyncio
