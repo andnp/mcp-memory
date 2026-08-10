@@ -206,6 +206,8 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
         storage_key="workspace:memory-id",
         title="Mapped result",
         body="Body fallback for a result without summary metadata.",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         status=status,
         metadata={
             "memory_ref": "mem-42",
@@ -245,6 +247,8 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
     assert actual.summary == record.body
     assert actual.memory_type == ""
     assert actual.status == "active"
+    assert actual.created_at == "2026-01-01T00:00:00+00:00"
+    assert actual.updated_at == "2026-01-02T00:00:00+00:00"
     assert actual.tags == ["useful"]
     assert actual.workspace_ids == ["workspace-a"]
     assert actual.ranking_debug == {

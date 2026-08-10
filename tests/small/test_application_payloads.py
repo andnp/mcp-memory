@@ -46,7 +46,14 @@ def test_build_search_result_payloads_preserves_compact_and_debug_shapes() -> No
     )
 
     assert build_search_result_payloads([result], debug_enabled=False) == [
-        {"memory_ref": "mem-7", "title": "Title", "summary": "Summary"}
+        {
+            "memory_ref": "mem-7",
+            "title": "Title",
+            "summary": "Summary",
+            "status": "active",
+            "created_at": None,
+            "updated_at": None,
+        }
     ]
     assert build_search_result_payloads([result], debug_enabled=True) == [
         {
@@ -56,6 +63,8 @@ def test_build_search_result_payloads_preserves_compact_and_debug_shapes() -> No
             "summary": "Summary",
             "memory_type": "fact",
             "status": "active",
+            "created_at": None,
+            "updated_at": None,
             "tags": ["tag-1"],
             "workspace_ids": ["workspace-1"],
             "score": 0.9,
@@ -63,6 +72,25 @@ def test_build_search_result_payloads_preserves_compact_and_debug_shapes() -> No
         }
     ]
     assert compatibility_build_search_result_payloads is build_search_result_payloads
+
+
+def test_search_result_payloads_expose_temporal_metadata() -> None:
+    result = RelationalSearchResult(
+        memory_id="id-1",
+        title="Title",
+        summary="Summary",
+        memory_type="fact",
+        status="active",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-02T00:00:00+00:00",
+    )
+
+    compact = build_search_result_payloads([result], debug_enabled=False)[0]
+    full = build_search_result_payloads([result], debug_enabled=True)[0]
+
+    assert compact["status"] == full["status"] == "active"
+    assert compact["created_at"] == full["created_at"] == "2026-01-01T00:00:00+00:00"
+    assert compact["updated_at"] == full["updated_at"] == "2026-01-02T00:00:00+00:00"
 
 
 def test_build_read_payload_applies_requested_relationship_and_metadata_flags() -> None:

@@ -55,6 +55,8 @@ class RelationalSearchResult:
     score: float = 0.0
     ranking_debug: dict[str, Any] | None = None
     memory_ref: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -517,6 +519,8 @@ def _to_relational_search_result(result: RecordSearchResult) -> RelationalSearch
     memory_type = metadata.get("memory_type")
     status = metadata.get("memory_status")
     status_value = getattr(record.status, "value", record.status)
+    created_at = getattr(record, "created_at", None)
+    updated_at = getattr(record, "updated_at", None)
     return RelationalSearchResult(
         memory_id=record.source_id,
         memory_ref=memory_ref,
@@ -524,6 +528,20 @@ def _to_relational_search_result(result: RecordSearchResult) -> RelationalSearch
         summary=summary,
         memory_type=memory_type if isinstance(memory_type, str) else "",
         status=status if isinstance(status, str) else str(status_value),
+        created_at=(
+            created_at.isoformat()
+            if isinstance(created_at, datetime)
+            else created_at
+            if isinstance(created_at, str)
+            else None
+        ),
+        updated_at=(
+            updated_at.isoformat()
+            if isinstance(updated_at, datetime)
+            else updated_at
+            if isinstance(updated_at, str)
+            else None
+        ),
         tags=[
             str(tag)
             for tag in metadata.get("tags", [])

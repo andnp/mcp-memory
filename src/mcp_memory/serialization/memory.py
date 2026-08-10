@@ -129,6 +129,8 @@ def search_result_payload(result: RelationalSearchResult) -> dict:
         "summary": result.summary,
         "memory_type": result.memory_type,
         "status": result.status,
+        "created_at": result.created_at,
+        "updated_at": result.updated_at,
         "tags": list(result.tags),
         "workspace_ids": list(result.workspace_ids),
         "score": result.score,
@@ -138,14 +140,16 @@ def search_result_payload(result: RelationalSearchResult) -> dict:
 def search_result_payload_compact(result: RelationalSearchResult) -> dict:
     """Minimal search result for agent consumption.
 
-    Returns only the fields needed to decide whether to read a record:
-    memory_ref, title, summary. Omits type, status, tags, and ranking
-    fields that burn context without helping the selection decision.
+    Returns the fields needed to decide whether to read a record, including
+    objective status and temporal metadata.
     """
     return {
         "memory_ref": format_memory_ref(getattr(result, "memory_ref", None)) or result.memory_id,
         "title": result.title,
         "summary": result.summary,
+        "status": result.status,
+        "created_at": result.created_at,
+        "updated_at": result.updated_at,
     }
 
 
