@@ -251,6 +251,8 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
         "provenance": {"matched_by_keyword": True},
         "canonical_id": "workspace:memory-id",
         "duplicate_candidate": False,
+        "multi_lane_provenance": False,
+        "final_duplicate": False,
     }
 
 
@@ -272,11 +274,18 @@ def test_search_diagnostics_signal_multi_strategy_candidates_without_merging() -
         ),
     )
     mapped = _to_relational_search_result(cast(RecordSearchResult, result))
-    diagnostics = SearchExecutionDiagnostics(duplicate_candidate_ids=["memory-a"])
+    diagnostics = SearchExecutionDiagnostics(
+        duplicate_candidate_ids=["memory-a"],
+        multi_lane_candidate_ids=["memory-a"],
+    )
 
     assert mapped.ranking_debug is not None
     assert mapped.ranking_debug["duplicate_candidate"] is True
+    assert mapped.ranking_debug["multi_lane_provenance"] is True
+    assert mapped.ranking_debug["final_duplicate"] is False
     assert diagnostics.to_payload()["duplicate_candidate_ids"] == ["memory-a"]
+    assert diagnostics.to_payload()["multi_lane_candidate_ids"] == ["memory-a"]
+    assert diagnostics.to_payload()["final_duplicate_ids"] == []
 
 
 def test_service_search_filters_archived_records_by_default(db_manager) -> None:

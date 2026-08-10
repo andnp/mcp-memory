@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -92,6 +93,8 @@ class SearchExecutionDiagnostics:
     trace: dict[str, object] | None = None
     scope: dict[str, object] = field(default_factory=dict)
     duplicate_candidate_ids: list[str] = field(default_factory=list)
+    multi_lane_candidate_ids: list[str] = field(default_factory=list)
+    final_duplicate_ids: list[str] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -111,6 +114,8 @@ class SearchExecutionDiagnostics:
             "trace": None if self.trace is None else dict(self.trace),
             "scope": dict(self.scope),
             "duplicate_candidate_ids": list(self.duplicate_candidate_ids),
+            "multi_lane_candidate_ids": list(self.multi_lane_candidate_ids),
+            "final_duplicate_ids": list(self.final_duplicate_ids),
         }
 
 
@@ -298,6 +303,15 @@ class RelationalMemorySearchService:
             include_superseded=include_superseded,
         )
         results = [_to_relational_search_result(result) for result in outcome.results]
+        result_counts = Counter(result.memory_id for result in results)
+        final_duplicate_ids = sorted(
+            memory_id for memory_id, count in result_counts.items() if count > 1
+        )
+        for result in results:
+            if result.ranking_debug is not None:
+                result.ranking_debug["final_duplicate"] = (
+                    result.memory_id in final_duplicate_ids
+                )
         if results and not side_effect_free:
             self._repository.touch_last_surfaced(
                 [result.memory_id for result in results],
@@ -338,6 +352,12 @@ class RelationalMemorySearchService:
                 for result in outcome.results
                 if _is_duplicate_candidate(result)
             ],
+            multi_lane_candidate_ids=[
+                result.record_id
+                for result in outcome.results
+                if _is_duplicate_candidate(result)
+            ],
+            final_duplicate_ids=final_duplicate_ids,
         )
         return results, diagnostics
 
@@ -447,7 +467,7 @@ def _to_relational_search_result(result: RecordSearchResult) -> RelationalSearch
             for tag in metadata.get("tags", [])
             if isinstance(tag, str)
         ],
-        workspace_ids=[
+    workspace_ids=[
             str(workspace_id)
             for workspace_id in metadata.get("workspace_ids", [])
             if isinstance(workspace_id, str)
@@ -457,6 +477,8 @@ def _to_relational_search_result(result: RecordSearchResult) -> RelationalSearch
             "provenance": result.provenance.to_dict(),
             "canonical_id": record.storage_key,
             "duplicate_candidate": _is_duplicate_candidate(result),
+            "multi_lane_provenance": _is_duplicate_candidate(result),
+            "final_duplicate": False,
         },
     )
 
