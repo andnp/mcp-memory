@@ -110,6 +110,16 @@
       "workspace": "global",
       "expected_labels": ["global-project-ranking"],
       "acceptable_top_k": 5
+    },
+    {
+      "id": "authentication-token-paraphrase",
+      "evaluation_label": "authentication-token-paraphrase",
+      "query": "refresh authentication secrets after security audit",
+      "query_class": "broad",
+      "intent": "retrieve authentication policy from a paraphrased query",
+      "workspace": "workspace",
+      "expected_labels": ["authentication-token-rotation"],
+      "acceptable_top_k": 5
     }
   ]
 }
