@@ -46,6 +46,7 @@ from mcp_memory.integrations.searchkernel_adapters import (
 )
 
 MEMORY_SEARCH_POLICY_VERSION = "mcp-memory-record-policy-v1"
+MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX = "semantic_abstention:"
 
 
 class MemoryQueryEmbeddingProvider(AsyncEmbeddingProvider):
@@ -101,9 +102,20 @@ class _MemorySearchSignalContext:
     query_tokens: tuple[str, ...]
     semantic_only_abstain_threshold: float
     keyword_candidates_present: bool = False
+    semantic_candidate_count: int = 0
+    semantic_only_candidate_count: int = 0
+    semantic_abstention_count: int = 0
     top_semantic_score: float = 0.0
     top_score: float = float("-inf")
     top_record_id: str = ""
+
+    def diagnostic(self) -> str:
+        return (
+            f"{MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX}"
+            f"semantic_candidates={self.semantic_candidate_count};"
+            f"semantic_only_candidates={self.semantic_only_candidate_count};"
+            f"rejected={self.semantic_abstention_count}"
+        )
 
 
 _ACTIVE_FILTERS: ContextVar[dict[str, object]] = ContextVar(
@@ -263,8 +275,11 @@ class MemoryRecordSearchPipeline:
                 filters=pipeline_filters,
             )
             if inspect.isawaitable(outcome):
-                return await outcome
-            return outcome
+                outcome = await outcome
+            return replace(
+                outcome,
+                diagnostics=(*outcome.diagnostics, signal_context.diagnostic()),
+            )
         finally:
             _ACTIVE_POLICY_CONTEXT.reset(policy_token)
             _ACTIVE_FILTERS.reset(token)
@@ -589,21 +604,30 @@ def _result_allowed(
     signal_context = _signal_context()
     if signal_context is None:
         return True
+    semantic = result.provenance.strategy_details.get("vector")
+    if semantic is not None:
+        signal_context.semantic_candidate_count += 1
     if "keyword" in result.provenance.strategies:
         signal_context.keyword_candidates_present = True
         return True
-    semantic = result.provenance.strategy_details.get("vector")
+    semantic_only = semantic is not None
+    if semantic is not None:
+        signal_context.semantic_only_candidate_count += 1
     if (
         semantic is not None
         and semantic.raw_score
         < config.search_ranking.semantic_only_abstain_threshold
     ):
+        signal_context.semantic_abstention_count += 1
         return False
-    return (
+    allowed = (
         signal_context.keyword_candidates_present
         or signal_context.top_semantic_score
         >= signal_context.semantic_only_abstain_threshold
     )
+    if semantic_only and not allowed:
+        signal_context.semantic_abstention_count += 1
+    return allowed
 
 
 def _adjust_score(

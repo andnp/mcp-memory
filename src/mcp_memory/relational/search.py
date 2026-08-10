@@ -22,6 +22,7 @@ from mcp_memory.core.ports.memory import (
 )
 from mcp_memory.integrations.memory_retrieval import MemoryRetrievalFacade
 from mcp_memory.integrations.searchkernel_record_pipeline import (
+    MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     build_memory_record_pipeline,
 )
 from mcp_memory.utils.db import DatabaseManager
@@ -82,6 +83,10 @@ class SearchExecutionDiagnostics:
     timing_ms: dict[str, float] = field(default_factory=dict)
     keyword_candidate_count: int = 0
     semantic_candidate_count: int = 0
+    semantic_only_candidate_count: int = 0
+    semantic_abstention_count: int = 0
+    semantic_abstention_rate: float | None = None
+    semantic_abstained: bool | None = None
     semantic_candidate_strategy: str = "kernel"
     candidate_counts: dict[str, int] = field(default_factory=dict)
     vector_search: dict[str, object] | None = None
@@ -101,6 +106,10 @@ class SearchExecutionDiagnostics:
             "timing_ms": dict(self.timing_ms),
             "keyword_candidate_count": self.keyword_candidate_count,
             "semantic_candidate_count": self.semantic_candidate_count,
+            "semantic_only_candidate_count": self.semantic_only_candidate_count,
+            "semantic_abstention_count": self.semantic_abstention_count,
+            "semantic_abstention_rate": self.semantic_abstention_rate,
+            "semantic_abstained": self.semantic_abstained,
             "semantic_candidate_strategy": self.semantic_candidate_strategy,
             "candidate_counts": dict(self.candidate_counts),
             "vector_search": (
@@ -129,6 +138,39 @@ def build_search_scope_diagnostics(
         "workspace_filter": workspace_id,
         "ranking_workspace_id": ranking_workspace_id,
     }
+
+
+def _semantic_abstention_counts(
+    diagnostics: list[str] | tuple[str, ...],
+) -> tuple[int, int, int]:
+    diagnostic = next(
+        (
+            value
+            for value in diagnostics
+            if value.startswith(MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX)
+        ),
+        None,
+    )
+    if diagnostic is None:
+        return 0, 0, 0
+    values: dict[str, int] = {}
+    for field_value in diagnostic[
+        len(MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX) :
+    ].split(";"):
+        name, separator, raw_value = field_value.partition("=")
+        if not separator:
+            continue
+        try:
+            value = int(raw_value)
+        except ValueError:
+            continue
+        if value >= 0:
+            values[name] = value
+    return (
+        values.get("semantic_candidates", 0),
+        values.get("semantic_only_candidates", 0),
+        values.get("rejected", 0),
+    )
 
 
 @dataclass(slots=True)
@@ -327,8 +369,28 @@ class RelationalMemorySearchService:
                 for stage, duration in outcome.stage_timings_ms.items()
             }
         )
+        (
+            semantic_candidate_count,
+            semantic_only_candidate_count,
+            semantic_abstention_count,
+        ) = _semantic_abstention_counts(outcome.diagnostics)
+        semantic_abstention_rate = (
+            semantic_abstention_count / semantic_only_candidate_count
+            if semantic_only_candidate_count
+            else None
+        )
+        semantic_abstained = (
+            None
+            if outcome.degraded or semantic_candidate_count == 0
+            else semantic_abstention_count > 0
+        )
         diagnostics = SearchExecutionDiagnostics(
             timing_ms=timing_ms,
+            semantic_candidate_count=semantic_candidate_count,
+            semantic_only_candidate_count=semantic_only_candidate_count,
+            semantic_abstention_count=semantic_abstention_count,
+            semantic_abstention_rate=semantic_abstention_rate,
+            semantic_abstained=semantic_abstained,
             candidate_counts={
                 str(stage): int(count)
                 for stage, count in outcome.candidate_counts.items()
