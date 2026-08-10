@@ -548,8 +548,7 @@ def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_pat
         memory_type=None,
         status=None,
         include_superseded=False,
-        policy_version="policy-v1",
-        feature_fingerprint="baseline",
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     policy_variant = SharedReadCacheSearchRequest(
         query="warm cache",
@@ -560,7 +559,6 @@ def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_pat
         status=None,
         include_superseded=False,
         policy_version="policy-v2",
-        feature_fingerprint="baseline",
     )
     feature_variant = SharedReadCacheSearchRequest(
         query="warm cache",
@@ -570,8 +568,8 @@ def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_pat
         memory_type=None,
         status=None,
         include_superseded=False,
-        policy_version="policy-v1",
-        feature_fingerprint="rerank",
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
+        feature_fingerprint="calibrated-fusion",
     )
     payload = {"status": "ok", "results": [{"memory_id": "baseline"}]}
 
@@ -585,20 +583,28 @@ def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_pat
     assert cache.load_fresh_search_response(baseline, ttl_seconds=5.0) is None
     assert cache.load_search_response(baseline) == payload
     assert cache.load_fresh_search_response(policy_variant, ttl_seconds=30.0) is None
+    assert cache.load_fresh_search_response(feature_variant, ttl_seconds=30.0) is None
     assert cache.load_search_response(policy_variant) is None
+    assert cache.load_search_response(feature_variant) is None
 
     baseline_leader = cache.begin_inflight_search(baseline)
     baseline_follower = cache.begin_inflight_search(baseline)
     variant_leader = cache.begin_inflight_search(policy_variant)
+    feature_leader = cache.begin_inflight_search(feature_variant)
 
     assert baseline_leader.is_leader is True
     assert baseline_follower.is_leader is False
     assert variant_leader.is_leader is True
+    assert feature_leader.is_leader is True
 
     cache.finish_inflight_search(baseline_leader, payload=payload)
     cache.finish_inflight_search(
         variant_leader,
         payload={"status": "ok", "results": [{"memory_id": "variant"}]},
+    )
+    cache.finish_inflight_search(
+        feature_leader,
+        payload={"status": "ok", "results": [{"memory_id": "feature"}]},
     )
 
     assert cache.wait_for_inflight_search(baseline_follower) == payload
