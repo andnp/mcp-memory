@@ -1,0 +1,85 @@
+{
+  "version": "search-quality-v1",
+  "entries": [
+    {
+      "id": "authentication-token-rotation",
+      "evaluation_label": "authentication-token-rotation",
+      "query": "rotate credentials after security review",
+      "query_class": "exact",
+      "intent": "retrieve authentication policy",
+      "workspace": "workspace",
+      "expected_labels": ["authentication-token-rotation"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "sqlite-wal-persistence",
+      "evaluation_label": "sqlite-wal-persistence",
+      "query": "local persistence database",
+      "query_class": "broad",
+      "intent": "retrieve local storage guidance",
+      "workspace": "workspace",
+      "expected_labels": ["sqlite-wal-persistence"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "postgres-vector-ranking",
+      "evaluation_label": "postgres-vector-ranking",
+      "query": "semantic retrieval vectors",
+      "query_class": "broad",
+      "intent": "retrieve vector search guidance",
+      "workspace": "workspace",
+      "expected_labels": ["postgres-vector-ranking"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "search-ranking-ladder",
+      "evaluation_label": "search-ranking-ladder",
+      "query": "exact query intent ranking",
+      "query_class": "exact",
+      "intent": "retrieve ranking policy",
+      "workspace": "workspace",
+      "expected_labels": ["search-ranking-ladder"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "daemon-worker-lifecycle",
+      "evaluation_label": "daemon-worker-lifecycle",
+      "query": "background shutdown worker",
+      "query_class": "historical",
+      "intent": "retrieve daemon lifecycle guidance",
+      "workspace": "workspace",
+      "expected_labels": ["daemon-worker-lifecycle"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "graph-authority-links",
+      "evaluation_label": "graph-authority-links",
+      "query": "relationship authority support",
+      "query_class": "relational",
+      "intent": "retrieve graph authority guidance",
+      "workspace": "workspace",
+      "expected_labels": ["graph-authority-links"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "embedding-repair-queue",
+      "evaluation_label": "embedding-repair-queue",
+      "query": "repair semantic embeddings",
+      "query_class": "degraded",
+      "intent": "retrieve embedding repair guidance",
+      "workspace": "workspace",
+      "expected_labels": ["embedding-repair-queue"],
+      "acceptable_top_k": 5
+    },
+    {
+      "id": "authentication-policy",
+      "evaluation_label": "authentication-policy",
+      "query": "auth policy",
+      "query_class": "broad",
+      "intent": "retrieve authentication policy",
+      "workspace": "workspace",
+      "expected_labels": ["authentication-token-rotation"],
+      "acceptable_top_k": 5
+    }
+  ]
+}
