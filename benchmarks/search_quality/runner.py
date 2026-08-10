@@ -125,9 +125,12 @@ class LiveSearchQualityReport:
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize metrics without query text or result payloads."""
+        scored_case_count = sum(case.scored for case in self.cases)
         return {
             "corpus_version": self.corpus_version,
             "metrics": self.metrics.to_mapping(),
+            "scored_case_count": scored_case_count,
+            "quality_scored": scored_case_count > 0,
             "cases": [
                 {
                     "evaluation_label": case.evaluation_label,

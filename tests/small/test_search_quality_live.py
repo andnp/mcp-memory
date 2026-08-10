@@ -42,14 +42,21 @@ def _corpus() -> SearchQualityCorpus:
 
 
 def _response(
-    label: str,
+    label: str | None,
     *,
     request_id: int = 17,
     degraded: bool = False,
+    memory_id: str | None = None,
 ) -> dict[str, object]:
     payload = {
         "status": "ok",
-        "results": [{"evaluation_label": label, "private": "do-not-store"}],
+        "results": [
+            {
+                **({"evaluation_label": label} if label is not None else {}),
+                "memory_id": memory_id,
+                "private": "do-not-store",
+            }
+        ],
         "search_diagnostics": {
             "degraded": degraded,
             "transport": {"request_id": request_id},
@@ -76,6 +83,48 @@ def test_search_quality_live_runner_retains_timing_and_request_id() -> None:
     assert calls == [("exact-target", 3.5), ("historical-target", 3.5)]
     assert "do-not-store" not in serialized
     assert "exact query" not in serialized
+
+
+def test_search_quality_live_runner_marks_unscored_real_results() -> None:
+    """Expose that real memory IDs are unscored without an explicit labeler."""
+    report = run_live_daemon(
+        _corpus(),
+        request_fn=lambda case, _timeout: _response(
+            None,
+            memory_id=f"memory-{case.case_id}",
+        ),
+    )
+
+    assert report.metrics.hit_at_1 == 0.0
+    assert all(not case.scored for case in report.cases)
+    assert report.to_mapping()["scored_case_count"] == 0
+    assert report.to_mapping()["quality_scored"] is False
+
+
+def test_search_quality_live_runner_scores_memory_id_map() -> None:
+    """Translate daemon memory IDs into corpus labels before evaluating quality."""
+    label_map = {
+        "memory-exact-case": "exact-target",
+        "memory-historical-case": "historical-target",
+    }
+
+    def label_result(result: dict[str, object]) -> str | None:
+        memory_id = result.get("memory_id")
+        return label_map.get(memory_id) if isinstance(memory_id, str) else None
+
+    report = run_live_daemon(
+        _corpus(),
+        request_fn=lambda case, _timeout: _response(
+            case.evaluation_label,
+            memory_id=f"memory-{case.case_id}",
+        ),
+        result_labeler=label_result,
+    )
+
+    assert report.metrics.hit_at_1 == 1.0
+    assert all(case.scored for case in report.cases)
+    assert report.to_mapping()["scored_case_count"] == 2
+    assert report.to_mapping()["quality_scored"] is True
 
 
 @pytest.mark.parametrize(
