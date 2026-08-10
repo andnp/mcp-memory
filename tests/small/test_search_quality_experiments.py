@@ -16,6 +16,7 @@ from benchmarks.search_quality import (
     SearchQualityCase,
     SearchQualityCorpus,
     build_local_policy_builders,
+    load_corpus,
     run_policy_comparison,
     seed_search_quality_records,
 )
@@ -253,6 +254,21 @@ def test_local_builders_apply_requested_config_overrides() -> None:
                 == "query-expansion:synonym"
             )
             assert config.searchkernel.active_feature_fingerprint() is None
+
+            comparison = run_policy_comparison(
+                load_corpus(),
+                baseline_builder=builders.baseline_builder,
+                calibrated_fusion_builder=builders.calibrated_fusion_builder,
+                query_expansion_builder=builders.query_expansion_builder,
+            )
+            assert all(
+                report.status == "completed"
+                for report in comparison.policies[:3]
+            )
+            assert all(
+                report.metrics is not None
+                for report in comparison.policies[:3]
+            )
         finally:
             manager.close()
 
