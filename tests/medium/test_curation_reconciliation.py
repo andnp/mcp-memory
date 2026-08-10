@@ -483,7 +483,8 @@ def test_sqlite_lock_retries_are_bounded(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_curator_work_is_gated_by_typed_block_outcome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_curator_work_runs_past_typed_block_outcome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Reconciliation outcomes do not gate direct curator task execution."""
     runtime = _make_runtime(monkeypatch, tmp_path)
     try:
         task = runtime.task_queue.enqueue(
@@ -516,9 +517,8 @@ async def test_curator_work_is_gated_by_typed_block_outcome(monkeypatch: pytest.
         )
         await worker._process_task(claimed)
         stored = runtime.task_queue.get_task(task.id)
-        assert calls == 0
-        assert stored.status == "failed"
-        assert stored.last_error is not None
-        assert "verification_failed" in stored.last_error
+        assert calls == 1
+        assert stored.status == "completed"
+        assert stored.last_error is None
     finally:
         runtime.close()

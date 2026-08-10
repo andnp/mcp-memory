@@ -664,34 +664,6 @@ class RuntimeTaskWorker:
                 await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
                 return
 
-        if task.task_name == CURATOR_TASK_NAME and self._curation_reconciler is not None:
-            curation_outcome = await asyncio.to_thread(self._curation_reconciler.before_curator_work)
-            if curation_outcome.disposition is CurationReconciliationDisposition.BLOCK:
-                blocked_task = await asyncio.to_thread(
-                    task_queue.fail_permanently,
-                    task.id,
-                    f"Curation reconciliation blocked work: {curation_outcome.reason_code}",
-                    None,
-                    task.execution_epoch,
-                )
-                await asyncio.to_thread(self._reconcile_terminal_task_state, blocked_task)
-                return
-            if curation_outcome.disposition is CurationReconciliationDisposition.DEFER:
-                delay = curation_outcome.retry_delay_seconds or self._retry_delay_seconds
-                deferred_task = await asyncio.to_thread(
-                    task_queue.retry_running_task,
-                    task.id,
-                    f"Curation reconciliation deferred work: {curation_outcome.reason_code}",
-                    time.time() + max(delay, 0.0),
-                    task.execution_epoch,
-                )
-                await asyncio.to_thread(
-                    self._reconcile_retryable_interruption,
-                    deferred_task,
-                    termination_reason=f"curation_reconciliation_{curation_outcome.reason_code}",
-                )
-                return
-
         if task.task_name == CURATOR_TASK_NAME:
             await asyncio.to_thread(self._preflight_curator_provider_startup, task)
 
