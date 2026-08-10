@@ -1,35 +1,43 @@
-# Design: Searchkernel Post-Upgrade Quality Roadmap
+# Design: SearchKernel Post-Upgrade Quality Roadmap
 
-**Status:** Draft
+**Status:** Evidence-led roadmap
 **Date:** 2026-08-09
 
-This document is a follow-up design for the `andnp-searchkernel` 0.21 upgrade.
-It describes the next search-quality, latency, diagnostics, and upstream-
-extraction work. It is not the canonical description of current runtime
-behavior; active specs, runbooks, and the root `README` remain authoritative.
+This document is the follow-up roadmap for the `andnp-searchkernel` 0.22.0
+upgrade. It records the current evidence, the remaining staged search-quality,
+latency, diagnostics, and upstream-extraction work, and the acceptance and
+rollback rules for each stage. It is not the canonical description of current
+runtime behavior; active specs, runbooks, and the root `README` remain
+authoritative.
 
 ## 1. Executive summary
 
-The upgrade to searchkernel 0.21 is complete and the daemon is healthy. Live
-dogfooding showed that exact technical and degraded-path queries return useful
-hybrid results with correct workspace scope and no semantic degradation. It
-also exposed three follow-up problems:
+The SearchKernel 0.22.0 upgrade is landed. Daemon remediation is also landed
+and verified by 33 lifecycle tests. The deterministic benchmark now has 12
+labeled queries covering exact, broad, historical-runtime, global and
+multi-workspace, and paraphrase cases. Current Hit@1 and Hit@5 are both 1.0,
+so the evidence does not justify a ranking fix.
 
-1. broad or historical queries can miss an expected record or return noisy
-   curator-health memories;
-2. search latency varies from sub-second to roughly two seconds, while daemon
-   logs still contain slow-transport warnings; and
-3. the `duplicate_candidate` diagnostic name does not make clear that it
-   reports post-fusion multi-lane provenance rather than duplicate final
-   records.
+The remaining work is observability and controlled acceptance of future
+changes:
+
+1. benchmark observations now carry execution diagnostics, enabling evidence
+   about lane participation, degradation, and abstention rather than inference
+   from rankings alone;
+2. acceptance can opt into diagnostics-completeness, duplicate-result, and
+   semantic-abstention stability gates; and
+3. temporal search results expose objective `status`, `created_at`, and
+   `updated_at` metadata only. They do not add a heuristic historical/current
+   label.
 
 The recommended sequence is:
 
-1. establish a small, durable search-evaluation corpus;
-2. instrument phase-level latency and clarify diagnostics;
-3. improve recall and ranking only where the corpus demonstrates a gap;
-4. evaluate advanced searchkernel scoring behind a feature flag; and
-5. extract provider-neutral capabilities from mcp-memory into searchkernel
+1. retain the passing labeled benchmark as the baseline;
+2. use execution diagnostics to complete latency and planner observability;
+3. enable stability gates only for experiments that need them;
+4. evaluate advanced SearchKernel scoring only if a reproducible benchmark
+   regression or new evidence creates a ranking hypothesis; and
+5. extract provider-neutral capabilities from mcp-memory into SearchKernel
    only after their contracts and benchmarks are stable.
 
 The design deliberately keeps mcp-memory's relational, vector, and graph
@@ -40,10 +48,14 @@ layer; it should not become a second storage authority.
 
 ### 2.1 Upgrade and verification baseline
 
-The dependency now requires searchkernel 0.21 and the lockfile resolves
-`andnp-searchkernel==0.21.0`. The integration uses searchkernel's query-aware
+The dependency now requires SearchKernel 0.22.0 and the lockfile resolves
+`andnp-searchkernel==0.22.0`. The integration uses SearchKernel's query-aware
 policy context for vector candidate selection, vector ordering, and score
 adjustment.
+
+Daemon lifecycle remediation is landed and verified by 33 lifecycle tests. The
+daemon baseline is therefore a completed prerequisite, not an open remediation
+workstream.
 
 Verification completed with the upgrade:
 
@@ -51,32 +63,40 @@ Verification completed with the upgrade:
 | --- | --- |
 | Ruff | passed |
 | Pyright | passed |
-| Focused searchkernel tests | 39 passed |
+| Focused search-quality and payload tests | 64 passed |
 | Relevant medium parity tests | 7 passed, 1 skipped |
-| Small suite | 1,285 passed; 2 unrelated schema-version assertions failed |
+| Small suite | 1,360 passed |
 | Search health after restart | semantic enabled, not degraded, no fallback/rebuild/failure/missing-ID diagnostics |
 
-The two small-suite failures expect schema version 34 while the current
-schema is 35. They are tracked separately from this search design so that
-search changes are not coupled to unrelated migration-test drift.
+The verification baseline is green. Broader medium and large runtime checks
+remain staged work when a rollout changes storage, daemon, or end-to-end
+behavior.
 
-### 2.2 Live search observations
+### 2.2 Deterministic benchmark and live observations
 
-The live daemon was restarted after the upgrade. Search results were strongest
-for queries with distinctive technical terms, exact identifiers, or explicit
-degraded-path language. These searches showed keyword/vector provenance and
-returned relevant top results.
+The versioned deterministic benchmark has 12 labeled queries. It covers exact,
+broad, historical-runtime, global and multi-workspace, and paraphrase cases,
+with stable labels as the evaluation oracle. Current benchmark metrics are
+Hit@1 = 1.0 and Hit@5 = 1.0. This is a passing baseline; no ranking change is
+justified by current evidence.
 
-Broader queries such as daemon/search-quality history and the expected
-"searchkernel core migration" record were noisier or failed to surface the
-expected historical memory. This is evidence of a recall/ranking gap, not
-evidence that the semantic backend is unhealthy.
+Benchmark observations now carry execution diagnostics. They can therefore
+distinguish a ranking outcome from planner lane selection, degradation,
+semantic abstention, and other execution behavior. The benchmark remains
+deterministic and privacy-safe; diagnostics are evidence for decisions, not a
+reason to change the ranking policy by themselves.
 
-Observed request times ranged from approximately 0.3 to 2.0 seconds during
-the dogfood session. Daemon logs also contained slow-transport warnings. The
-first action should therefore be measurement: identify whether time is spent
-in embedding, keyword retrieval, vector retrieval, graph expansion, ranking,
-hydration, transport, or queueing.
+Temporal search results expose objective `status`, `created_at`, and
+`updated_at` fields. No heuristic historical/current classification is part of
+the result contract; temporal interpretation remains grounded in those fields
+and the record's content or relationships.
+
+Earlier live dogfooding observed request times from approximately 0.3 to 2.0
+seconds and slow-transport warnings. The first action for any new latency
+report should therefore be measurement: identify whether time is spent in
+embedding, keyword retrieval, vector retrieval, graph expansion, ranking,
+hydration, transport, or queueing. The deterministic local baseline currently
+reports a maximum of roughly 7.8 ms.
 
 ## 3. Goals
 
@@ -85,7 +105,8 @@ hydration, transport, or queueing.
    technical retrieval.
 3. Bound and explain search latency, especially in shared Postgres mode.
 4. Make search diagnostics accurately describe what happened.
-5. Evaluate searchkernel's advanced scoring features safely and reversibly.
+5. Evaluate SearchKernel's advanced scoring features safely and reversibly,
+   only when evidence supplies a ranking hypothesis.
 6. Identify reusable, provider-neutral capabilities that belong upstream in
    searchkernel.
 7. Preserve the existing authority, workspace, degradation, and storage
@@ -181,8 +202,12 @@ The following are candidates for searchkernel when generalized:
 
 ### 7.1 Corpus shape
 
-Create a versioned, workspace-local corpus of approximately 30–50 queries.
-Each entry should include:
+The current versioned deterministic corpus contains 12 labeled queries. Keep
+it small and stable while it is the baseline; expand it only when a concrete
+failure class or rollout decision requires additional coverage. It covers
+exact, broad, historical-runtime, global and multi-workspace, and paraphrase
+cases, with additional degraded and relational coverage where those contracts
+are exercised. Each entry should include:
 
 ```yaml
 id: search-history-001
@@ -196,7 +221,7 @@ acceptable_top_k: 5
 query_class: broad | exact | historical | degraded | relational
 ```
 
-The initial corpus should cover:
+The corpus should continue to cover:
 
 - exact memory references and distinctive identifiers;
 - broad architecture concepts;
@@ -230,7 +255,10 @@ Track at least:
 
 The evaluation should report regressions by query class. An aggregate score
 must not hide a loss of exact-identifier precision behind gains on broad
-semantic queries.
+semantic queries. The current all-green Hit@1 and Hit@5 baseline means that a
+ranking change needs new, reproducible contrary evidence before implementation.
+Benchmark observations should retain execution diagnostics so acceptance can
+separate retrieval quality from execution-path behavior.
 
 ### 7.3 Test layers
 
@@ -334,12 +362,28 @@ latency, and corpus metrics. The default policy remains the rollback target.
 
 ### 9.3 Acceptance gates
 
-An advanced policy may become the default only if it:
+The baseline passes its current Hit@1 and Hit@5 gates at 1.0. A ranking or
+retrieval experiment may become the default only if it:
 
 - improves broad/historical hit@5 without reducing exact-identifier hit@1;
 - does not increase degraded or missing-ID results;
 - stays within the applicable latency target; and
 - has a documented rollback switch and focused regression coverage.
+
+For experiments that produce execution evidence, acceptance may opt into these
+additional stability gates:
+
+- **diagnostics completeness:** every benchmark observation reports the
+  required diagnostics for the selected execution mode;
+- **duplicate-result stability:** final duplicate IDs remain zero (or within a
+  separately documented contract), while lane overlap is measured separately;
+  and
+- **semantic-abstention stability:** abstention rate and abstention-related
+  outcomes do not regress beyond the configured threshold.
+
+These gates are opt-in because not every benchmark mode can observe every
+diagnostic or exercises semantic retrieval. A gate must state its mode,
+threshold, and baseline before it is enabled.
 
 ## 10. Workstream D: diagnostics ergonomics
 
@@ -401,21 +445,26 @@ product domain it is meant to serve.
 
 ### Phase 0 — Baseline and hygiene
 
-- preserve the searchkernel 0.21 upgrade;
-- add the versioned evaluation corpus;
-- reconcile the two schema-version tests in a separate migration-test commit;
-- capture current metrics and daemon health.
+- preserve the SearchKernel 0.22.0 upgrade;
+- preserve the landed daemon remediation and its 33-test lifecycle evidence;
+- preserve the 12-query labeled benchmark and record its 1.0 Hit@1 / 1.0 Hit@5
+  baseline;
+- capture current diagnostics and daemon health.
 
 ### Phase 1 — Observability
 
 - add phase timings;
 - clarify lane-overlap diagnostics;
 - expose planner lane decisions and candidate budgets;
-- run the corpus in-process and through the live daemon.
+- run the corpus in-process and through the live daemon, retaining execution
+  diagnostics;
+- enable diagnostics-completeness, duplicate-result, or semantic-abstention
+  gates only where the selected mode supports them.
 
 ### Phase 2 — Recall experiments
 
-- reproduce the historical-query miss;
+- investigate any newly observed miss or regression with its execution
+  diagnostics;
 - test one hypothesis at a time;
 - add regression cases for confirmed failures;
 - keep the default policy unchanged until gates pass.
@@ -440,8 +489,9 @@ product domain it is meant to serve.
 ## 13. Rollback and failure behavior
 
 Rollback must be possible by selecting the previous search policy and disabling
-experimental diagnostics or features. No search-quality experiment should
-require destructive data changes.
+experimental diagnostics or features. The current SearchKernel 0.22.0 policy
+and the passing 12-query benchmark remain the baseline rollback target. No
+search-quality experiment should require destructive data changes.
 
 If a semantic lane fails, the system should:
 
@@ -453,6 +503,11 @@ If a semantic lane fails, the system should:
 If phase instrumentation itself fails, it must not fail the search request.
 If a new upstream adapter changes storage ownership or lifecycle semantics, it
 must be rejected until those invariants are explicitly preserved.
+
+If an opt-in acceptance gate fails, keep the baseline policy, record the gate
+failure with its execution diagnostics, and do not reinterpret a clean ranking
+baseline as a reason to tune. If diagnostics are incomplete, the run may be
+used for investigation but cannot pass a diagnostics-completeness gate.
 
 Policy rollback must not serve a response produced by a different policy from
 the readthrough cache. The cache key/version or an explicit purge is part of
