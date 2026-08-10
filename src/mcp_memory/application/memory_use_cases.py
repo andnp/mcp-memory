@@ -467,7 +467,8 @@ def _search_memory_records(
             }
             timing_ms |= phase_timings_ms
             diagnostics_payload = diagnostics.to_payload()
-            diagnostics_payload["timing_ms"] = timing_ms
+            if "timing_ms" in diagnostics_payload:
+                diagnostics_payload["timing_ms"] = timing_ms
             payload["search_diagnostics"] = diagnostics_payload
         else:
             timing_ms |= phase_timings_ms
