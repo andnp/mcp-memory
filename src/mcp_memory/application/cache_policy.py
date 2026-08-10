@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextvars import ContextVar
 import logging
 from typing import Any
 
@@ -26,6 +27,9 @@ SEARCH_READ_GUIDANCE = (
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _CACHE_VALIDATION_TOKENS_FIELD = "_cache_validation_tokens"
 logger = logging.getLogger(__name__)
+_ACTIVE_INFLIGHT_SEARCH: ContextVar[SharedReadCacheInFlightSearch | None] = ContextVar(
+    "active_inflight_search", default=None
+)
 
 
 def build_search_cache_request(
@@ -301,6 +305,7 @@ def _store_cached_search_response(
         cache.store_search_response(
             request,
             payload | {_CACHE_VALIDATION_TOKENS_FIELD: validation_tokens},
+            inflight_search=_ACTIVE_INFLIGHT_SEARCH.get(),
         )
 
 
@@ -318,7 +323,10 @@ def _begin_inflight_search_coalescing(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    return cache.begin_inflight_search(request)
+    entry = cache.begin_inflight_search(request)
+    if entry.is_leader:
+        _ACTIVE_INFLIGHT_SEARCH.set(entry)
+    return entry
 
 
 def _finish_inflight_search_coalescing(
@@ -333,7 +341,11 @@ def _finish_inflight_search_coalescing(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return
-    cache.finish_inflight_search(entry, payload=payload, error=error)
+    try:
+        cache.finish_inflight_search(entry, payload=payload, error=error)
+    finally:
+        if _ACTIVE_INFLIGHT_SEARCH.get() is entry:
+            _ACTIVE_INFLIGHT_SEARCH.set(None)
 
 
 def _resolve_read_cache_validation_tokens(

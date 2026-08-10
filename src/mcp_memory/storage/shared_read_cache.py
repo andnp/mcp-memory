@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
 import json
@@ -76,10 +76,23 @@ class SharedReadCacheRecordThoughtOutboxEntry:
 
 @dataclass
 class _SharedReadCacheInFlightSearchState:
+    policy_version: str
+    feature_fingerprint: str | None
     created_at: float = field(default_factory=time)
     completed: Event = field(default_factory=Event)
     payload: dict[str, Any] | None = None
     error: Exception | None = None
+    purged: bool = False
+
+
+class SharedReadCacheSearchPurgedError(RuntimeError):
+    """Raised when a coalesced search is cancelled by cache policy purge."""
+
+
+@dataclass(frozen=True)
+class SharedReadCacheSearchPurgeResult:
+    deleted_search_responses: int = 0
+    cancelled_inflight_searches: int = 0
 
 
 @dataclass(frozen=True)
@@ -255,31 +268,55 @@ class SharedReadCache:
             return None
         return self._decode_payload(payload_json)
 
-    def store_search_response(self, request: SharedReadCacheSearchRequest, payload: dict[str, Any]) -> None:
+    def store_search_response(
+        self,
+        request: SharedReadCacheSearchRequest,
+        payload: dict[str, Any],
+        *,
+        inflight_search: SharedReadCacheInFlightSearch | None = None,
+    ) -> None:
         params_json = self._serialize_json(request.normalized_params())
-        self._execute(
-            """
-            INSERT INTO cached_search_results (cache_key, params_json, payload_json, cached_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(cache_key) DO UPDATE SET
-                params_json = excluded.params_json,
-                payload_json = excluded.payload_json,
-                cached_at = excluded.cached_at
-            """,
-            (
-                self._search_cache_key(request),
-                params_json,
-                self._serialize_json(payload),
-                time(),
-            ),
+        cache_key = self._search_cache_key(request)
+        lock_context = (
+            self._inflight_searches_lock
+            if inflight_search is not None
+            else nullcontext()
         )
+        with lock_context:
+            if inflight_search is not None:
+                current = self._inflight_searches.get(cache_key)
+                if (
+                    current is None
+                    or current is not inflight_search._state
+                    or current.purged
+                ):
+                    return
+            self._execute(
+                """
+                INSERT INTO cached_search_results (cache_key, params_json, payload_json, cached_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    params_json = excluded.params_json,
+                    payload_json = excluded.payload_json,
+                    cached_at = excluded.cached_at
+                """,
+                (
+                    cache_key,
+                    params_json,
+                    self._serialize_json(payload),
+                    time(),
+                ),
+            )
 
     def begin_inflight_search(self, request: SharedReadCacheSearchRequest) -> SharedReadCacheInFlightSearch:
         cache_key = self._search_cache_key(request)
         with self._inflight_searches_lock:
             state = self._inflight_searches.get(cache_key)
             if state is None:
-                state = _SharedReadCacheInFlightSearchState()
+                state = _SharedReadCacheInFlightSearchState(
+                    policy_version=request.policy_version,
+                    feature_fingerprint=request.feature_fingerprint,
+                )
                 self._inflight_searches[cache_key] = state
                 return SharedReadCacheInFlightSearch(cache_key=cache_key, is_leader=True, _state=state)
         return SharedReadCacheInFlightSearch(cache_key=cache_key, is_leader=False, _state=state)
@@ -311,13 +348,81 @@ class SharedReadCache:
         payload: dict[str, Any] | None = None,
         error: Exception | None = None,
     ) -> None:
-        entry._state.payload = payload
-        entry._state.error = error
-        entry._state.completed.set()
         with self._inflight_searches_lock:
+            if not entry._state.purged:
+                entry._state.payload = payload
+                entry._state.error = error
+                entry._state.completed.set()
             current = self._inflight_searches.get(entry.cache_key)
             if current is entry._state:
                 self._inflight_searches.pop(entry.cache_key, None)
+
+    def purge_search_responses(
+        self,
+        *,
+        policy_version: str | None = None,
+        feature_fingerprint: str | None = None,
+    ) -> SharedReadCacheSearchPurgeResult:
+        """Purge derivative search responses without touching read-side caches.
+
+        Omitting both identity fields purges every search response. Supplying a
+        policy version purges that exact policy identity, including its optional
+        feature fingerprint. A fingerprint without a policy version is invalid.
+        """
+        if policy_version is None and feature_fingerprint is not None:
+            raise ValueError("feature_fingerprint requires policy_version")
+
+        cancelled_inflight_searches = 0
+        with self._inflight_searches_lock:
+            matching_keys = [
+                cache_key
+                for cache_key, state in self._inflight_searches.items()
+                if _search_policy_matches(
+                    policy_version=policy_version,
+                    feature_fingerprint=feature_fingerprint,
+                    state_policy_version=state.policy_version,
+                    state_feature_fingerprint=state.feature_fingerprint,
+                )
+            ]
+            for cache_key in matching_keys:
+                state = self._inflight_searches.pop(cache_key)
+                state.purged = True
+                state.error = SharedReadCacheSearchPurgedError(
+                    "In-flight shared read-cache search purged by policy change"
+                )
+                state.completed.set()
+                cancelled_inflight_searches += 1
+
+            with self._connect() as connection:
+                if policy_version is None:
+                    cursor = connection.execute("DELETE FROM cached_search_results")
+                else:
+                    rows = connection.execute(
+                        "SELECT cache_key, params_json FROM cached_search_results"
+                    ).fetchall()
+                    keys = [
+                        str(row[0])
+                        for row in rows
+                        if _serialized_search_policy_matches(
+                            row[1],
+                            policy_version=policy_version,
+                            feature_fingerprint=feature_fingerprint,
+                        )
+                    ]
+                    if not keys:
+                        cursor = None
+                    else:
+                        placeholders = ",".join("?" for _ in keys)
+                        cursor = connection.execute(
+                            f"DELETE FROM cached_search_results WHERE cache_key IN ({placeholders})",
+                            tuple(keys),
+                        )
+                connection.commit()
+
+        return SharedReadCacheSearchPurgeResult(
+            deleted_search_responses=0 if cursor is None else max(cursor.rowcount, 0),
+            cancelled_inflight_searches=cancelled_inflight_searches,
+        )
 
     def load_read_entry(self, memory_id: str) -> SharedReadCacheReadEntry | None:
         row = self._fetchone(
@@ -780,6 +885,41 @@ def _projection_query_tokens(query: str) -> list[str]:
         seen.add(token)
         tokens.append(token)
     return tokens
+
+
+def _search_policy_matches(
+    *,
+    policy_version: str | None,
+    feature_fingerprint: str | None,
+    state_policy_version: str,
+    state_feature_fingerprint: str | None,
+) -> bool:
+    if policy_version is None:
+        return True
+    return (
+        state_policy_version == policy_version
+        and state_feature_fingerprint == feature_fingerprint
+    )
+
+
+def _serialized_search_policy_matches(
+    params_json: Any,
+    *,
+    policy_version: str,
+    feature_fingerprint: str | None,
+) -> bool:
+    if not isinstance(params_json, str):
+        return False
+    try:
+        params = json.loads(params_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(params, dict):
+        return False
+    return (
+        params.get("policy_version", DEFAULT_SEARCH_POLICY_VERSION) == policy_version
+        and params.get("feature_fingerprint") == feature_fingerprint
+    )
 
 
 def _projection_matches_request(
