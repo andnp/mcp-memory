@@ -7,10 +7,6 @@ from mcp_memory.application.payloads import (
     MAX_SEARCH_EVIDENCE_EXCERPT_CHARS,
 )
 from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
-from mcp_memory.mcp.payloads import (
-    build_read_payload as compatibility_build_read_payload,
-    build_search_result_payloads as compatibility_build_search_result_payloads,
-)
 from mcp_memory.relational.search import RelationalReadResult, RelationalSearchResult
 
 
@@ -75,9 +71,6 @@ def test_build_search_result_payloads_preserves_compact_and_debug_shapes() -> No
             "ranking_debug": {"source": "test"},
         }
     ]
-    assert compatibility_build_search_result_payloads is build_search_result_payloads
-
-
 def test_search_result_payloads_expose_temporal_metadata() -> None:
     result = RelationalSearchResult(
         memory_id="id-1",
@@ -329,4 +322,3 @@ def test_build_read_payload_applies_requested_relationship_and_metadata_flags() 
             }
         ],
     }
-    assert compatibility_build_read_payload is build_read_payload
