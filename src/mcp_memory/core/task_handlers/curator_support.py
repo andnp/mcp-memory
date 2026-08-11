@@ -33,6 +33,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
 from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 
@@ -1098,7 +1099,7 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
         "mcp_mcp-memory-internal_internal_get_next_curator_batch",
         "mcp_mcp-memory-internal_internal_get_compatible_work_batch",
         "mcp_mcp-memory-internal_internal_read_memory_record",
-        "mcp_mcp-memory-internal_internal_search_memory_records",
+        f"mcp_mcp-memory-internal_{INTERNAL_SEARCH_TOOL_NAME}",
         "mcp_mcp-memory-internal_internal_list_memory_records",
         "mcp_mcp-memory-internal_internal_task_complete",
     }

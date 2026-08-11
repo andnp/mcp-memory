@@ -21,6 +21,7 @@ from mcp_memory.core.direct_mutation_evidence import (
 )
 from mcp_memory.internal_tool_call_tracking import internal_tool_is_mutating
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 
 
 ToolService = Callable[..., Any]
@@ -252,7 +253,7 @@ def internal_tool_services() -> dict[str, ToolService]:
     )
 
     return {
-        "internal_search_memory_records": internal_search_memory_records_async_service,
+        INTERNAL_SEARCH_TOOL_NAME: internal_search_memory_records_async_service,
         "internal_read_memory_record": internal_read_memory_record_service,
         "internal_read_memory_records": internal_read_memory_records_service,
         "internal_peek_record": internal_peek_record_service,

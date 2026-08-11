@@ -42,6 +42,7 @@ from mcp_memory.core.task_handlers.constants import DEFAULT_INGEST_BATCH_SIZE
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_or_context_workspace_id
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 from searchkernel.ingestion import embed_in_batches
 from searchkernel.utils.similarity import cosine_similarity_lists
 
@@ -53,7 +54,7 @@ from searchkernel.utils.similarity import cosine_similarity_lists
 _INGEST_READ_ONLY_TOOL_NAMES = {
     "mcp_mcp-memory-internal_task_complete",
     "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
-    "mcp_mcp-memory-internal_internal_search_memory_records",
+    f"mcp_mcp-memory-internal_{INTERNAL_SEARCH_TOOL_NAME}",
     "mcp_mcp-memory-internal_internal_read_memory_record",
     "mcp_mcp-memory-internal_internal_list_memory_records",
     "mcp_mcp-memory-internal_internal_task_complete",
@@ -1315,7 +1316,7 @@ def build_ingest_agent_prompt(
         "Standing ingest jobs: append into the right canonical memory, create a new narrow memory when novelty warrants it, lightly rewrite or resummarize touched memories when the batch reveals a clearer durable shape, split bloated targets that would become mixed-topic blobs, merge or archive stale leftovers when consolidation makes them obsolete, and clean up links when structure is obviously misleading or incomplete.\n"
         "Treat one claimed batch as a small maintenance campaign, not a one-thought-to-one-memory conveyor belt. Multiple claimed thoughts may belong in one focused memory, and one thought may justify refactoring an existing cluster before the best durable landing spot is clear.\n"
         "Only process journal entries claimed for this task.\n"
-        "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
+        f"Use {INTERNAL_SEARCH_TOOL_NAME}, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
         "Copy the batch_id from each internal_get_next_ingest_batch response into every internal_ingest_append_memory or internal_ingest_create_memory mutation for that batch.\n"
         f"Tool mapping: prefer {INGEST_APPEND_TOOL_NAME} and {INGEST_CREATE_TOOL_NAME} whenever a mutation should consume claimed entry_ids directly. Use internal_update_memory_record for title/summary/content cleanup on touched memories, internal_split_memory_record for decompositions, internal_merge_memory_into_canonical for canonicalization, internal_archive_memory_record for safe cleanup, and internal_create_memory_link or internal_delete_memory_link when structural edge cleanup clearly improves retrieval. Include task_id='{task.id}' on those adjacent cleanup mutations so the run's telemetry stays attributable to the current ingest task.\n"
         f"When a thought clearly belongs in an existing canonical memory, prefer {INGEST_APPEND_TOOL_NAME} with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, the content to append, and a concise summary when you already understand the updated memory.\n"
@@ -1465,7 +1466,7 @@ async def _analyze_ingest_actions(
         provider,
         prompt=prompt,
         allowed_tool_names=[
-            "internal_search_memory_records",
+            INTERNAL_SEARCH_TOOL_NAME,
             "internal_read_memory_record",
             "internal_list_memory_records",
         ],

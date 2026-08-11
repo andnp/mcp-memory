@@ -1,10 +1,12 @@
 from mcp.types import Tool
 
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
+
 
 def get_internal_maintenance_tools() -> list[Tool]:
     return [
         Tool(
-            name="internal_search_memory_records",
+            name=INTERNAL_SEARCH_TOOL_NAME,
             description=(
                 "Search memory records for maintenance and organization tasks. "
                 "Use summaries to choose promising memory_ref values, then read only those records. "

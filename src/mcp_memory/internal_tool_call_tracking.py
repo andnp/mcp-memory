@@ -9,13 +9,14 @@ from mcp_memory.core.curator_evidence import (
     finalize_curator_execution,
     reset_curator_execution,
 )
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 
 
 _READ_ONLY_INTERNAL_TOOL_NAMES = frozenset(
     {
         "task_complete",
         "internal_task_complete",
-        "internal_search_memory_records",
+        INTERNAL_SEARCH_TOOL_NAME,
         "internal_read_memory_record",
         "internal_peek_record",
         "internal_maintenance_search",

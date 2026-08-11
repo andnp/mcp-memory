@@ -37,6 +37,7 @@ from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 from searchkernel.ingestion import embed_in_batches
 from searchkernel.utils.similarity import cosine_similarity_lists
 
@@ -359,7 +360,7 @@ _DEDUPLICATOR_READ_ONLY_TOOL_NAMES = {
     "mcp_mcp-memory-internal_task_complete",
     "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
     "mcp_mcp-memory-internal_internal_read_memory_record",
-    "mcp_mcp-memory-internal_internal_search_memory_records",
+    f"mcp_mcp-memory-internal_{INTERNAL_SEARCH_TOOL_NAME}",
     "mcp_mcp-memory-internal_internal_list_memory_records",
     "mcp_mcp-memory-internal_internal_task_complete",
 }

@@ -20,6 +20,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserver
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
 from mcp_memory.core.providers.interfaces import ProviderTokenUsage
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -359,7 +360,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
     _DEFAULT_INTERNAL_TOOL_NAMES = (
         "task_complete",
         "internal_task_complete",
-        "internal_search_memory_records",
+        INTERNAL_SEARCH_TOOL_NAME,
         "internal_read_memory_record",
         "internal_list_memory_records",
         "internal_get_next_dedup_batch",

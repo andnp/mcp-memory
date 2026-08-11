@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
+from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 
 # ---------------------------------------------------------------------------
 # relationship_proposal_support: prompt helpers and proposal normalization
@@ -115,7 +116,7 @@ async def propose_graph_links(
         provider=provider,
         prompt=_build_linker_prompt(candidates),
         allowed_tool_names=[
-            "internal_search_memory_records",
+            INTERNAL_SEARCH_TOOL_NAME,
             "internal_read_memory_record",
             "internal_list_memory_records",
         ],
@@ -141,7 +142,7 @@ async def propose_conflicts(
         provider=provider,
         prompt=_build_conflict_prompt(candidates),
         allowed_tool_names=[
-            "internal_search_memory_records",
+            INTERNAL_SEARCH_TOOL_NAME,
             "internal_read_memory_record",
             "internal_list_memory_records",
         ],
