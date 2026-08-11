@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections import Counter
-from collections.abc import Callable, Coroutine, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Protocol
@@ -21,6 +19,7 @@ from mcp_memory.core.retrieval import (
     RetrievalFailure,
     RetrievalRequest,
     RetrievalResult,
+    run_coroutine_sync,
 )
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
@@ -551,7 +550,7 @@ class MemoryRetrievalFacade:
         side_effect_free: bool = False,
     ) -> RetrievalResult[RecordSearchOutcome]:
         """Use the same typed retrieval envelope at synchronous process edges."""
-        return _run_async_safely(
+        return run_coroutine_sync(
             lambda: self.retrieve(
                 request,
                 filters=filters,
@@ -691,7 +690,7 @@ class MemoryRetrievalFacade:
         filters: dict[str, object] | None = None,
         side_effect_free: bool = False,
     ) -> RecordSearchOutcome:
-        return _run_async_safely(
+        return run_coroutine_sync(
             lambda: self.search(
                 request,
                 limit=limit,
@@ -723,7 +722,7 @@ class MemoryRetrievalFacade:
         side_effect_free: bool = False,
         debug: bool = False,
     ) -> tuple[RecordSearchOutcome, SearchExecutionDiagnostics]:
-        return _run_async_safely(
+        return run_coroutine_sync(
             lambda: self.search_with_diagnostics(
                 request,
                 limit=limit,
@@ -903,20 +902,6 @@ class MemoryRetrievalFacade:
         if not callable(method):
             raise AttributeError(f"native search does not provide {name}")
         return method
-
-
-def _run_async_safely(factory: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(factory())
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(_run_in_thread, factory).result()
-
-
-def _run_in_thread(factory: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
-    return asyncio.run(factory())
 
 
 def build_memory_retrieval_facade(

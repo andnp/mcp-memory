@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
@@ -176,7 +176,9 @@ class BoundedRetrievalService(Generic[T]):
         if self._sync_search is not None:
             raw = self._sync_search(normalized)
         else:
-            raw = _run_async_safely(self._async_search, normalized)
+            raw = run_coroutine_sync(
+                lambda: _invoke_async_search(self._async_search, normalized)
+            )
         return _bounded_result(raw, normalized.limit)
 
 
@@ -218,13 +220,17 @@ def _bool_value(value: object, name: str) -> bool:
     return value
 
 
-def _run_async_safely(async_search: AsyncSearch[T], request: RetrievalRequest) -> RetrievalResult[T] | Sequence[T]:
+R = TypeVar("R")
+
+
+def run_coroutine_sync(factory: Callable[[], Coroutine[object, object, R]]) -> R:
+    """Run a coroutine from sync code, isolating nested event loops."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(_invoke_async_search(async_search, request))
+        return asyncio.run(factory())
     with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(_run_async_search, async_search, request).result()
+        return executor.submit(_run_coroutine, factory).result()
 
 
 async def _invoke_async_search(
@@ -234,11 +240,8 @@ async def _invoke_async_search(
     return await async_search(request)
 
 
-def _run_async_search(
-    async_search: AsyncSearch[T],
-    request: RetrievalRequest,
-) -> RetrievalResult[T] | Sequence[T]:
-    return asyncio.run(_invoke_async_search(async_search, request))
+def _run_coroutine(factory: Callable[[], Coroutine[object, object, R]]) -> R:
+    return asyncio.run(factory())
 
 
 __all__ = [
@@ -251,4 +254,5 @@ __all__ = [
     "RetrievalFailure",
     "RetrievalRequest",
     "RetrievalResult",
+    "run_coroutine_sync",
 ]
