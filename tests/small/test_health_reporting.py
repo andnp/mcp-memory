@@ -205,3 +205,41 @@ def test_build_search_health_maps_relational_search_health_fields() -> None:
     assert payload.last_recovery_at == "2026-04-09T23:05:00+00:00"
     assert payload.last_integrity_check_at == "2026-04-09T23:10:00+00:00"
     assert payload.integrity_check_error == "checksum-mismatch"
+
+
+def test_build_search_health_prefers_typed_capability_over_legacy_search() -> None:
+    """Typed health capabilities win without invoking the legacy search service."""
+    typed_health = SimpleNamespace(
+        get_health=lambda: SimpleNamespace(
+            semantic_enabled=False,
+            available=False,
+            degraded=True,
+            fallback_count=11,
+            rebuild_count=12,
+            background_repair_enabled=False,
+            background_repair_wait_seconds=1.0,
+            queued_repair_backlog_count=13,
+            running_repair_count=14,
+            oldest_queued_repair_age_seconds=2.0,
+            repair_wait_count=15,
+            partial_semantic_search_count=16,
+            last_partial_semantic_at=None,
+            last_repair_wait_seconds=3.0,
+            last_repair_candidate_count=17,
+            last_repair_pending_count=18,
+            last_error="typed-health",
+            last_failure_at=None,
+            last_recovery_at=None,
+            last_integrity_check_at=None,
+            integrity_check_error=None,
+        )
+    )
+    legacy_search = SimpleNamespace(
+        get_health=lambda: pytest.fail("legacy search health should not be called")
+    )
+
+    payload = build_search_health(legacy_search, search_health=typed_health)
+
+    assert payload.available is False
+    assert payload.fallback_count == 11
+    assert payload.last_error == "typed-health"
