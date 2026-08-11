@@ -122,6 +122,7 @@ class SharedReadCacheMetricsSnapshot:
 class SharedReadCache:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
+        self._schema_ready = False
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._inflight_searches: dict[str, _SharedReadCacheInFlightSearchState] = {}
         self._inflight_searches_lock = Lock()
@@ -773,6 +774,11 @@ class SharedReadCache:
                 warmed_projection_rows INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS cache_schema_metadata (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                schema_version INTEGER NOT NULL
+            );
+
             INSERT INTO cache_metrics (singleton)
             VALUES (1)
             ON CONFLICT(singleton) DO NOTHING;
@@ -781,6 +787,32 @@ class SharedReadCache:
         self._ensure_column("cached_memory_records", "validation_token", "TEXT")
         self._ensure_column("cached_memory_projections", "validation_token", "TEXT")
         self._ensure_column("cached_search_results", "search_epochs_json", "TEXT")
+        self._ensure_schema_version()
+
+    def _ensure_schema_version(self) -> None:
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT schema_version FROM cache_schema_metadata WHERE singleton = 1"
+                ).fetchone()
+                if row is None or int(row[0]) != _CACHE_SCHEMA_VERSION:
+                    connection.execute("DELETE FROM cached_search_results")
+                    connection.execute("DELETE FROM cached_memory_records")
+                    connection.execute("DELETE FROM cached_memory_projections")
+                    connection.execute(
+                        """
+                        INSERT INTO cache_schema_metadata (singleton, schema_version)
+                        VALUES (1, ?)
+                        ON CONFLICT(singleton) DO UPDATE SET
+                            schema_version = excluded.schema_version
+                        """,
+                        (_CACHE_SCHEMA_VERSION,),
+                    )
+                connection.commit()
+        except Exception:
+            logger.warning("Shared read cache schema version check failed", exc_info=True)
+            return
+        self._schema_ready = True
 
     def _search_cache_key(self, request: SharedReadCacheSearchRequest) -> str:
         normalized = self._serialize_json(request.normalized_params())
@@ -821,6 +853,8 @@ class SharedReadCache:
             )
 
     def _execute(self, query: str, params: tuple[object, ...]) -> None:
+        if not self._schema_ready:
+            return
         try:
             with self._connect() as connection:
                 connection.execute(query, params)
@@ -829,6 +863,8 @@ class SharedReadCache:
             logger.warning("Shared read cache write failed", exc_info=True)
 
     def _executemany(self, query: str, params: Sequence[tuple[object, ...]]) -> None:
+        if not self._schema_ready:
+            return
         try:
             with self._connect() as connection:
                 connection.executemany(query, params)
@@ -837,6 +873,8 @@ class SharedReadCache:
             logger.warning("Shared read cache write failed", exc_info=True)
 
     def _fetchone(self, query: str, params: tuple[object, ...]) -> tuple[Any, ...] | None:
+        if not self._schema_ready:
+            return None
         try:
             with self._connect() as connection:
                 row = connection.execute(query, params).fetchone()
@@ -846,6 +884,8 @@ class SharedReadCache:
         return tuple(row) if row is not None else None
 
     def _fetchall(self, query: str, params: tuple[object, ...]) -> list[tuple[Any, ...]]:
+        if not self._schema_ready:
+            return []
         try:
             with self._connect() as connection:
                 rows = connection.execute(query, params).fetchall()

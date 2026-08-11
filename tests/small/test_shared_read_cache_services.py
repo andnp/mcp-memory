@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+from dataclasses import replace
 from pathlib import Path
 import sqlite3
 from threading import Event, Lock, Thread
@@ -10,7 +11,7 @@ import warnings
 
 import pytest
 
-from mcp_memory.application.ports import MemorySearchPort
+from mcp_memory.application.ports import CACHE_SCHEMA_VERSION, MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import JournalEntry
@@ -705,6 +706,74 @@ def test_shared_read_cache_policy_identity_isolates_fresh_stale_and_inflight_pat
     assert cache.wait_for_inflight_search(baseline_follower) == payload
 
 
+def test_shared_read_cache_identity_includes_schema_and_ranking_workspace(
+    tmp_path: Path,
+) -> None:
+    """Schema and ranking context keep persistent search responses isolated."""
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    base = SharedReadCacheSearchRequest(
+        query="ranked query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    workspace_a = replace(base, ranking_workspace_id="workspace-a")
+    workspace_b = replace(base, ranking_workspace_id="workspace-b")
+
+    cache.store_search_response(base, {"results": [{"memory_id": "base"}]})
+    cache.store_search_response(workspace_a, {"results": [{"memory_id": "a"}]})
+    cache.store_search_response(workspace_b, {"results": [{"memory_id": "b"}]})
+
+    base_payload = cache.load_search_response(base)
+    workspace_a_payload = cache.load_search_response(workspace_a)
+    workspace_b_payload = cache.load_search_response(workspace_b)
+
+    assert base_payload is not None
+    assert workspace_a_payload is not None
+    assert workspace_b_payload is not None
+    assert base_payload["results"][0]["memory_id"] == "base"
+    assert workspace_a_payload["results"][0]["memory_id"] == "a"
+    assert workspace_b_payload["results"][0]["memory_id"] == "b"
+    assert base.normalized_params()["cache_schema_version"] == CACHE_SCHEMA_VERSION
+
+
+def test_shared_read_cache_schema_change_invalidates_persistent_derivatives(
+    tmp_path: Path,
+) -> None:
+    """A persistent schema mismatch clears reusable cache derivatives."""
+    path = tmp_path / "shared_read_cache.sqlite3"
+    cache = SharedReadCache(path)
+    request = SharedReadCacheSearchRequest(
+        query="schema query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    cache.store_search_response(request, {"results": []})
+    cache.store_read_response("memory-1", {"memory_id": "memory-1"})
+    cache.store_projection_entries(
+        [SharedReadCacheProjectionUpsert(memory_id="memory-1", payload={"memory_id": "memory-1"})]
+    )
+
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE cache_schema_metadata SET schema_version = ? WHERE singleton = 1",
+            (CACHE_SCHEMA_VERSION - 1,),
+        )
+
+    reopened = SharedReadCache(path)
+
+    assert reopened.load_search_response(request) is None
+    assert reopened.load_read_response("memory-1") is None
+    assert reopened.load_projection_entry("memory-1") is None
+
+
 def test_shared_read_cache_invalidation_clears_exact_query_and_affected_entries(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     request = SharedReadCacheSearchRequest(
@@ -811,6 +880,31 @@ def test_shared_read_cache_purges_policy_identity_without_touching_other_derivat
     assert snapshot.cached_read_record_count == 1
     assert snapshot.cached_projection_count == 1
     assert cache.count_record_thought_outbox_entries() == 1
+
+
+def test_shared_read_cache_policy_rollback_persists_after_reopen(tmp_path: Path) -> None:
+    """Policy rollback remains invalidated across cache process boundaries."""
+    path = tmp_path / "shared_read_cache.sqlite3"
+    request = SharedReadCacheSearchRequest(
+        query="rollback query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+        policy_version="policy-v2",
+        feature_fingerprint="calibrated-fusion",
+    )
+    cache = SharedReadCache(path)
+    cache.store_search_response(request, {"results": [{"memory_id": "stale"}]})
+
+    cache.purge_search_responses(
+        policy_version=request.policy_version,
+        feature_fingerprint=request.feature_fingerprint,
+    )
+
+    assert SharedReadCache(path).load_search_response(request) is None
 
 
 def test_shared_read_cache_purge_cancels_inflight_response_before_rollback(
