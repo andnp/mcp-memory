@@ -130,7 +130,7 @@ def test_direct_quality_uses_durable_repository(db_manager) -> None:
     quality_store = SQLiteCurationQualityStore(db_manager)
     ctx = ApplicationContext(
         db_manager=db_manager,
-        relational_search=cast(Any, _Search()),
+        repository=cast(Any, _Search()),
         curation=SQLiteCurationStore(db_manager),
         curation_quality=quality_store,
     )
@@ -156,7 +156,7 @@ def test_direct_quality_uses_durable_repository(db_manager) -> None:
 
 def test_direct_quality_reports_missing_repository(db_manager) -> None:
     """Missing quality storage is explicit instead of empty success."""
-    ctx = ApplicationContext(db_manager=db_manager, relational_search=cast(Any, _Search()))
+    ctx = ApplicationContext(db_manager=db_manager, repository=cast(Any, _Search()))
 
     evaluation = _evaluate_direct_quality(
         ctx,

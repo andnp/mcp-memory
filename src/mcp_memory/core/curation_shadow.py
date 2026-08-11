@@ -25,6 +25,7 @@ from mcp_memory.core.ports.curation import (
     CurationRunOutcome,
     CurationRunState,
 )
+from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
@@ -192,18 +193,18 @@ def _evaluate_direct_quality(
 ) -> "_DirectQualityEvaluation":
     if not evidence:
         return _DirectQualityEvaluation((), "not_applicable")
-    repository = getattr(ctx, "curation_quality", None)
-    if repository is None:
+    quality_repository = getattr(ctx, "curation_quality", None)
+    if quality_repository is None:
         return _DirectQualityEvaluation((), "unavailable", "quality_repository_unavailable")
     if ctx.db_manager is None:
         return _DirectQualityEvaluation((), "unavailable", "database_unavailable")
-    search = ctx.relational_search
-    if search is None:
+    search_repository = cast(MemoryRepositoryPort | None, ctx.repository)
+    if search_repository is None:
         return _DirectQualityEvaluation((), "unavailable", "search_unavailable")
     sampler = CurationQualitySampler(
         db_manager=ctx.db_manager,
-        search=_DirectQualitySearch(search, ctx.repository),
-        repository=repository,
+        search=search_repository,
+        repository=quality_repository,
         candidate_repository=getattr(ctx, "curation", None),
         sample_rate=1.0,
     )
@@ -258,20 +259,6 @@ def _optional_task_uuid(task_id: str) -> UUID | None:
         return UUID(task_id)
     except ValueError:
         return None
-
-
-class _DirectQualitySearch:
-    def __init__(self, search: Any, repository: Any) -> None:
-        self._search = search
-        self._repository = repository
-
-    def search_memories_for_maintenance(self, query: str, *, limit: int = 50) -> Any:
-        return self._search.search_memories_for_maintenance(query, limit=limit)
-
-    def get_search_epochs(self) -> dict[str, int]:
-        reader = getattr(self._repository, "get_search_epochs", None)
-        values = reader() if callable(reader) else {}
-        return dict(values) if isinstance(values, dict) else {}
 
 
 @dataclass(frozen=True, slots=True)

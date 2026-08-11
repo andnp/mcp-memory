@@ -49,7 +49,10 @@ from mcp_memory.management.task_administration import (
     TaskAdministrationService,
     TaskAdministrationServiceDependencies,
 )
-from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalPort,
+    build_memory_retrieval_facade,
+)
 from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
@@ -134,8 +137,9 @@ class ManagementService:
         self._embedding_maintenance: EmbeddingMaintenancePort = (
             memory.embedding_maintenance or MemoryEmbeddingMaintenance.from_context(ctx)
         )
-        retrieval = (
-            build_memory_retrieval_facade(
+        retrieval = cast(MemoryRetrievalPort | None, getattr(ctx, "memory_retrieval", None))
+        if retrieval is None and self._repository is not None:
+            retrieval = build_memory_retrieval_facade(
                 self._repository,
                 config=memory.config,
                 vector_store=self._vector_store,
@@ -143,9 +147,6 @@ class ManagementService:
                 embedding_maintenance=self._embedding_maintenance,
                 native_search=self._relational_search,
             )
-            if self._repository is not None
-            else None
-        )
         self._retrieval = retrieval
         self.federation_source = (
             MemoryFederationSource(
