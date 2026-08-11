@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 import logging
-from typing import Any
+from typing import Any, cast
 
 from mcp_memory.application.ports import (
     DEFAULT_SEARCH_POLICY_VERSION,
@@ -32,6 +32,32 @@ logger = logging.getLogger(__name__)
 _ACTIVE_INFLIGHT_SEARCH: ContextVar[SharedReadCacheInFlightSearch | None] = ContextVar(
     "active_inflight_search", default=None
 )
+type MemoryIDResolver = Callable[[str], str | None]
+type ReadCacheValidationResolver = Callable[[list[str]], dict[str, str]]
+
+
+def _memory_id_resolver(ctx: MemoryReadPort) -> MemoryIDResolver | None:
+    for source in (
+        getattr(ctx, "memory_id_resolution", None),
+        getattr(ctx, "relational_search", None),
+    ):
+        resolver = getattr(source, "resolve_memory_id", None)
+        if callable(resolver):
+            return cast(MemoryIDResolver, resolver)
+    return None
+
+
+def _read_cache_validation_resolver(
+    ctx: MemoryReadPort,
+) -> ReadCacheValidationResolver | None:
+    for source in (
+        getattr(ctx, "read_cache_validation", None),
+        getattr(ctx, "relational_search", None),
+    ):
+        resolver = getattr(source, "get_read_cache_validation_tokens", None)
+        if callable(resolver):
+            return cast(ReadCacheValidationResolver, resolver)
+    return None
 
 
 def build_search_cache_request(
@@ -145,7 +171,7 @@ def _cached_result_memory_id(
     if isinstance(memory_id, str) and memory_id:
         return memory_id
     memory_ref = result.get("memory_ref")
-    resolver = getattr(getattr(ctx, "relational_search", None), "resolve_memory_id", None)
+    resolver = _memory_id_resolver(ctx)
     if not isinstance(memory_ref, str):
         return None
     if parse_memory_ref(memory_ref) is None:
@@ -250,7 +276,7 @@ def _load_projection_search_fallback(
     entries = cache.search_projection_entries(request, limit=None)
     if not entries:
         return None
-    resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
+    resolver = _read_cache_validation_resolver(ctx)
     if callable(resolver):
         entries = _validate_cached_projection_entries(ctx, entries)
     else:
@@ -394,7 +420,7 @@ def _resolve_read_cache_validation_tokens(
     ctx: MemoryReadPort,
     memory_ids: list[str],
 ) -> dict[str, str]:
-    resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
+    resolver = _read_cache_validation_resolver(ctx)
     if not callable(resolver) or not memory_ids:
         return {}
     normalized_ids: list[str] = []
@@ -450,7 +476,7 @@ def _resolve_search_epochs(ctx: MemoryReadPort) -> dict[str, int] | None:
 def _cached_search_payload_has_current_records(
     ctx: MemoryReadPort, payload: dict[str, object]
 ) -> bool:
-    resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
+    resolver = _read_cache_validation_resolver(ctx)
     if not callable(resolver):
         return True
     results = payload.get("results")
