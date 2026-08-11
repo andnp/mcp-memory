@@ -31,7 +31,7 @@ from mcp_memory.mcp.adapters import (
     parse_skill_review_ledger_arguments,
     parse_skill_observation_arguments,
 )
-from mcp_memory.mcp.cache_policy import (
+from mcp_memory.application.cache_policy import (
     _load_validated_cached_projection_entries,
 )
 from mcp_memory.mcp.telemetry import (
