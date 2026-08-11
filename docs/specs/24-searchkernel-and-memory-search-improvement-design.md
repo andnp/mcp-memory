@@ -720,3 +720,163 @@ The cutover is complete when:
 5. no caller depends on `MemoryRetrievalFacade` implementation details; and
 6. lifecycle, workspace, authorization, hydration, repair, cache freshness,
    and payload redaction remain demonstrably application-owned.
+
+## 13. Legacy removal sequence
+
+Legacy removal is a sequence of independently verifiable cutovers. Each phase
+must leave the repository runnable and must either remove a complete dead
+surface or make the next surface easier to remove. No phase may delete a
+compatibility path merely because its replacement passes unit tests; callers,
+serialized data, deployed databases, and rollback behavior must be accounted
+for first.
+
+### Phase 0 — Baseline and ownership ledger
+
+Freeze the current release, dependency versions, search-quality corpus,
+transport behavior, and supported storage versions. Generate a removal ledger
+with one row per compatibility surface:
+
+| Field | Required evidence |
+| --- | --- |
+| Surface and owner | Source path, runtime owner, and responsible team |
+| Current callers | Static references plus runtime/telemetry observations |
+| Replacement | Target module, port, or serialized contract |
+| Compatibility kind | Dead bridge, active compatibility, migration-only, or resilience fallback |
+| External contract | Public import, CLI/API, persisted field, or internal-only |
+| Removal gate | Exact zero-caller, release, migration, or benchmark condition |
+| Rollback | Configuration, package, or data rollback path |
+
+Static search is necessary but insufficient. Dynamic callers, plugin imports,
+old databases, serialized payload readers, and external scripts must be
+included in the review. Unknown consumers are treated as active compatibility
+until disproven.
+
+### Phase 1 — Establish one behavior contract
+
+Before moving callers, make the canonical async service behavior complete and
+observable:
+
+1. normalize all request forms into `MemorySearchRequest`;
+2. centralize workspace, lifecycle, supersession, memory-type, tag, and
+   ranking-scope interpretation;
+3. centralize standard/adaptive pipeline selection;
+4. centralize response-cache, epoch, freshness, and stale-fallback policy;
+5. serialize one diagnostic model for sync and async callers;
+6. expose semantic abstention, degraded execution, failures, missing records,
+   and lane provenance consistently; and
+7. prove that diagnostics are best effort and cannot fail retrieval.
+
+The existing facade and relational service remain in place during this phase,
+but their behavior delegates to the canonical implementation. This phase ends
+only when equivalent requests through public MCP, internal MCP, CLI,
+management, and direct application entry points have equivalent result and
+diagnostic semantics.
+
+### Phase 2 — Migrate callers to the canonical service
+
+Migrate callers in dependency order:
+
+1. public `search_memory_records` MCP service;
+2. internal maintenance search service;
+3. CLI search and administrative commands;
+4. management service and dashboard read models;
+5. curator and background task support;
+6. storage/runtime composition; and
+7. tests, fixtures, examples, and integration helpers.
+
+Each migration must remove one caller's dependency on facade or relational
+service implementation details. The caller may retain a local synchronous
+boundary when its public API is synchronous, but it must delegate to the same
+typed request and canonical async service. No caller may reconstruct a second
+SearchKernel pipeline or reimplement filter interpretation.
+
+During this phase, preserve compatibility adapters at the outermost boundary.
+They should emit bounded usage telemetry or a deprecation signal so the ledger
+can prove whether they still receive traffic. Do not emit query text or memory
+content solely to count compatibility use.
+
+### Phase 3 — Remove duplicate search seams
+
+Once callers have moved, remove duplication in this order:
+
+1. move `SearchMemoryRecordsOperation` behavior into the canonical application
+   request service while retaining a temporary type alias if needed;
+2. reduce `MemoryRetrievalFacade` to a thin adapter with no pipeline or
+   diagnostic logic;
+3. reduce `RelationalMemorySearchService` to a thin adapter over the same
+   service;
+4. remove direct `search_sync` and `search_sync_with_diagnostics` dependencies
+   from core application code;
+5. remove duplicate async MCP diagnostic projection; and
+6. delete the adapters once the zero-caller gate passes.
+
+The sync boundary may survive as a small process-edge utility. It is not a
+legacy retrieval system if it only converts a synchronous call into the
+canonical async request and returns the canonical response.
+
+### Phase 4 — Retire search compatibility names
+
+After a release window in which compatibility usage is zero or explicitly
+accepted by the product owner:
+
+- remove `MemoryRetrievalFacade` exports and implementation;
+- remove `RelationalMemorySearchService` from storage composition and package
+  exports;
+- remove the old search operation wrapper and direct service aliases;
+- remove `searchkernel_source.py` compatibility names after import consumers
+  have migrated;
+- remove old result constructors and payload aliases; and
+- delete tests that only protect removed names, retaining contract tests for
+  the canonical service.
+
+Every deletion must be accompanied by an import scan and a release note. If a
+downstream consumer is discovered after the window, restore the smallest
+boundary adapter rather than reintroducing a second search implementation.
+
+### Phase 5 — Retire runtime and protocol shims
+
+The same ledger-driven process applies to non-search compatibility:
+
+1. migrate legacy task-name aliases to canonical task names;
+2. migrate old configuration keys and remove implicit legacy defaults;
+3. migrate deprecated management and administrative endpoints;
+4. migrate ingress, curation, and work-item stage aliases;
+5. replace `Any` compatibility slots with typed capabilities;
+6. remove unused provider-policy and telemetry fallbacks; and
+7. remove dead re-exports and compatibility import paths.
+
+Aliases that are required to replay persisted work or read existing records
+remain until the relevant migration-only gate passes. A fallback that handles
+provider outage, unavailable embeddings, or bounded storage degradation is not
+removed as legacy without evidence that its replacement preserves availability
+and diagnostics.
+
+### Phase 6 — Retire migration-only runtime branches
+
+Migration-only code is removed last because it protects existing data rather
+than callers. For each database or serialized format:
+
+1. declare the oldest supported version;
+2. ship an idempotent upgrade, export, or backup path;
+3. measure adoption of versions requiring the old branch;
+4. announce the removal version and support-window end;
+5. verify restore and rollback procedures; and
+6. remove only the obsolete runtime branch while preserving immutable history
+   needed to understand prior migrations.
+
+Historical migration functions and tests may remain permanently if they are
+needed to build or audit supported upgrades. Their presence is not, by itself,
+evidence of active legacy behavior.
+
+### Phase 7 — Final deletion and release cutover
+
+The final legacy-removal release may delete a surface only after its gates pass
+and the complete verification suite is green. The release notes must identify
+removed imports, endpoints, task aliases, configuration keys, and storage
+support. The rollback package or configuration must be available before the
+release is published.
+
+The final target is not a repository with no word named `legacy`. It is a
+repository with one intentional canonical path per behavior, no unowned
+compatibility callers, no obsolete runtime branches, and explicit historical
+support where deletion would endanger existing data.
