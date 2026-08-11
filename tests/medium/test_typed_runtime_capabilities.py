@@ -1,5 +1,6 @@
 """Medium coverage for typed runtime capabilities and search parity."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,10 @@ from mcp_memory.core.agent_runtime import (
     build_runtime_task_worker,
 )
 from mcp_memory.mcp.runtime import create_runtime_composition, resolve_workspace_runtime_spec
+from mcp_memory.mcp.services import (
+    search_memory_records_async_service,
+    search_memory_records_service,
+)
 
 
 pytestmark = pytest.mark.medium
@@ -35,5 +40,34 @@ def test_runtime_composition_routes_typed_capabilities_to_consumers(tmp_path: Pa
 
         assert SYSTEM1_INGEST_TASK_NAME in worker._handlers  # noqa: SLF001
         assert composition.context.task_queue.count_by_status()["pending"] >= 1
+    finally:
+        composition.close()
+
+
+@pytest.mark.asyncio
+async def test_search_service_sync_and_async_paths_return_matching_payloads(tmp_path: Path) -> None:
+    """Verify sync and async search services share the same result contract.
+
+    The comparison intentionally uses normal output so timing diagnostics cannot vary.
+    """
+    composition = create_runtime_composition(resolve_workspace_runtime_spec(cwd=tmp_path))
+    try:
+        repository = composition.context.repository
+        assert repository is not None
+        record = repository.create_memory(
+            title="Typed capability parity",
+            content="Search parity should preserve the same record payload.",
+            summary="Sync and async search parity.",
+            workspace_ids=[composition.context.workspace_id or "workspace"],
+            memory_type="fact",
+            tags=["parity"],
+        )
+        assert record is not None
+        arguments = {"query": "search parity", "limit": 5}
+
+        sync_payload = search_memory_records_service(composition.context, arguments)
+        async_payload = await search_memory_records_async_service(composition.context, arguments)
+
+        assert json.loads(json.dumps(sync_payload)) == json.loads(json.dumps(async_payload))
     finally:
         composition.close()
