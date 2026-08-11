@@ -3,7 +3,7 @@
 **Status:** Evidence-led roadmap
 **Date:** 2026-08-09
 
-This document is the follow-up roadmap for the `andnp-searchkernel` 0.22.0
+This document is the follow-up roadmap for the `andnp-searchkernel` 0.23.0
 upgrade. It records the current evidence, the remaining staged search-quality,
 latency, diagnostics, and upstream-extraction work, and the acceptance and
 rollback rules for each stage. It is not the canonical description of current
@@ -12,7 +12,7 @@ authoritative.
 
 ## 1. Executive summary
 
-The SearchKernel 0.22.0 upgrade is landed. Daemon remediation is also landed
+The SearchKernel 0.23.0 upgrade is landed. Daemon remediation is also landed
 and verified by 33 lifecycle tests. The deterministic benchmark now has 12
 labeled queries covering exact, broad, historical-runtime, global and
 multi-workspace, and paraphrase cases. Current Hit@1 and Hit@5 are both 1.0,
@@ -48,8 +48,8 @@ layer; it should not become a second storage authority.
 
 ### 2.1 Upgrade and verification baseline
 
-The dependency now requires SearchKernel 0.22.0 and the lockfile resolves
-`andnp-searchkernel==0.22.0`. The integration uses SearchKernel's query-aware
+The dependency now requires SearchKernel >=0.23.0 and the lockfile resolves
+`andnp-searchkernel==0.23.0`. The integration uses SearchKernel's query-aware
 policy context for vector candidate selection, vector ordering, and score
 adjustment.
 
@@ -445,7 +445,7 @@ product domain it is meant to serve.
 
 ### Phase 0 — Baseline and hygiene
 
-- preserve the SearchKernel 0.22.0 upgrade;
+- preserve the SearchKernel 0.23.0 upgrade;
 - preserve the landed daemon remediation and its 33-test lifecycle evidence;
 - preserve the 12-query labeled benchmark and record its 1.0 Hit@1 / 1.0 Hit@5
   baseline;
@@ -489,7 +489,7 @@ product domain it is meant to serve.
 ## 13. Rollback and failure behavior
 
 Rollback must be possible by selecting the previous search policy and disabling
-experimental diagnostics or features. The current SearchKernel 0.22.0 policy
+experimental diagnostics or features. The current SearchKernel 0.23.0 policy
 and the passing 12-query benchmark remain the baseline rollback target. No
 search-quality experiment should require destructive data changes.
 
