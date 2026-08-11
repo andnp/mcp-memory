@@ -6,6 +6,13 @@ from typing import cast
 import pytest
 
 from mcp_memory.config import Config
+from mcp_memory.core.ports import (
+    EmbeddingMaintenancePort,
+    MemoryIDResolutionPort,
+    ReadCacheValidationPort,
+    SearchHealthPort,
+    StartupHealthPort,
+)
 from mcp_memory.core.search_ranking import RankingEngine, ScoringWeights
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.integrations.memory_retrieval import (
@@ -898,6 +905,29 @@ def test_maintenance_search_skips_missing_and_empty_hydration_ids(
     assert repository.search_memories_for_maintenance("ignored") == []
 
 
+def test_service_satisfies_search_health_capability(db_manager) -> None:
+    """Expose semantic health through the typed search health capability."""
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    assert isinstance(service, SearchHealthPort)
+    health = cast(SearchHealthPort, service).get_health()
+
+    assert health.available is False
+
+
+def test_service_satisfies_startup_health_capability(db_manager) -> None:
+    """Expose startup integrity checks through the typed startup capability."""
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    assert isinstance(service, StartupHealthPort)
+    health = cast(StartupHealthPort, service).run_startup_health_check()
+
+    assert health.available is False
+    assert health.last_integrity_check_at is not None
+
+
 def test_embedding_health_and_rebuild_remain_service_owned(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)
@@ -916,7 +946,8 @@ def test_embedding_health_and_rebuild_remain_service_owned(db_manager) -> None:
     )
     assert record is not None
 
-    result = service.rebuild_semantic_index()
+    assert isinstance(service, EmbeddingMaintenancePort)
+    result = cast(EmbeddingMaintenancePort, service).rebuild_semantic_index()
     health = service.get_health()
 
     assert result["rebuilt"] is True
@@ -944,7 +975,11 @@ def test_service_resolves_ids_and_cache_tokens_through_authoritative_repository(
     )
     assert record is not None
 
-    tokens = service.get_read_cache_validation_tokens([record.id])
+    assert isinstance(service, ReadCacheValidationPort)
+    assert isinstance(service, MemoryIDResolutionPort)
+    tokens = cast(ReadCacheValidationPort, service).get_read_cache_validation_tokens(
+        [record.id]
+    )
 
-    assert service.resolve_memory_id(record.id) == record.id
+    assert cast(MemoryIDResolutionPort, service).resolve_memory_id(record.id) == record.id
     assert record.id in tokens
