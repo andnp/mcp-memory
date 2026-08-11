@@ -10,6 +10,7 @@ from mcp_memory.application.ports import (
     MemorySearchPort,
     RetrievalTelemetryPort,
 )
+from mcp_memory.core.retrieval import RetrievalRequest, RetrievalResult
 from mcp_memory.mcp.adapters import parse_search_arguments
 from mcp_memory.mcp.tools import get_memory_tools
 
@@ -160,6 +161,39 @@ class _DebugSemanticRetrieval:
         return outcome, diagnostics
 
 
+class _AsyncFacade:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, RetrievalRequest, dict[str, object]]] = []
+        self.outcome = _DebugSemanticRetrieval().search_sync_with_diagnostics("query")[0]
+
+    async def retrieve(
+        self,
+        request: RetrievalRequest,
+        *,
+        filters: dict[str, object],
+    ) -> RetrievalResult[SimpleNamespace]:
+        self.calls.append(("retrieve", request, filters))
+        return RetrievalResult(items=(self.outcome,))
+
+    async def search_with_diagnostics(
+        self,
+        request: RetrievalRequest,
+        *,
+        filters: dict[str, object],
+        debug: bool,
+    ) -> tuple[SimpleNamespace, SimpleNamespace]:
+        self.calls.append(("search_with_diagnostics", request, filters))
+        assert debug is True
+        diagnostics = SimpleNamespace(
+            timing_ms={"total": 1.0, "search": 0.5},
+            to_payload=lambda: {
+                "timing_ms": {"total": 1.0, "search": 0.5},
+                "degraded": False,
+            },
+        )
+        return self.outcome, diagnostics
+
+
 def test_search_use_case_debug_includes_bounded_search_evidence() -> None:
     """Carry raw SearchKernel evidence into debug results without changing compact mode."""
     retrieval = _DebugSemanticRetrieval()
@@ -231,3 +265,59 @@ def test_search_use_case_propagates_non_default_mode_to_canonical_filters() -> N
     assert payload["status"] == "ok"
     assert payload["results"][0]["summary"] == "semantic summary"
     assert "timing_ms" not in payload
+
+
+@pytest.mark.asyncio
+async def test_async_search_service_uses_typed_facade_for_compact_and_debug_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route both public async response modes through the typed facade contract."""
+    facade = _AsyncFacade()
+    monkeypatch.setattr(
+        "mcp_memory.application.memory_use_cases.build_memory_retrieval_facade",
+        lambda *args, **kwargs: facade,
+    )
+    ctx = MemoryReadDependencies(
+        workspace_id="workspace-1",
+        repository=object(),
+        relational_search=cast(
+            MemorySearchPort,
+            SimpleNamespace(get_health=lambda: None),
+        ),
+    )
+    telemetry = cast(RetrievalTelemetryPort, SimpleNamespace(record_search=lambda **_: None))
+    use_case = SearchMemoryRecordsUseCase(ctx, telemetry)
+    arguments = {
+        "query": "semantic retrieval",
+        "workspace_id": None,
+        "limit": 5,
+        "adaptive_limit": True,
+        "memory_type": None,
+        "status": None,
+        "tags": (),
+        "include_superseded": False,
+        "retrieval_mode": "semantic",
+        "debug": False,
+    }
+
+    compact_payload = await use_case.execute_async(arguments)
+
+    assert facade.calls[0][0] == "retrieve"
+    assert facade.calls[0][1] == RetrievalRequest(
+        query="semantic retrieval",
+        limit=5,
+        adaptive_limit=True,
+    )
+    assert facade.calls[0][2] == {
+        "_ranking_workspace_id": "workspace-1",
+        "retrieval_mode": "semantic",
+    }
+    assert compact_payload["results"][0]["summary"] == "semantic summary"
+    assert "timing_ms" not in compact_payload
+
+    arguments["debug"] = True
+    debug_payload = await use_case.execute_async(arguments)
+
+    assert facade.calls[1][0] == "search_with_diagnostics"
+    assert debug_payload["search_diagnostics"]["degraded"] is False
+    assert debug_payload["search_diagnostics"]["timing_ms"] == debug_payload["timing_ms"]
