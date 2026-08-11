@@ -6,8 +6,10 @@ import time
 from typing import Any, cast
 
 from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
+from mcp_memory.core.ports import EmbeddingMaintenancePort
 from mcp_memory.management.analytics_service import AnalyticsService, AnalyticsServiceDependencies
 from mcp_memory.management.context_resources import (
     ManagementContextResources,
@@ -127,13 +129,11 @@ class ManagementService:
         self._read_cache = cast(Any, memory.read_cache)
         self._embedder = cast(Any, memory.embedder)
         self._vector_store = cast(Any, memory.vector_store)
-        self._relational_search = cast(Any, memory.relational_search)
+        self._relational_search: MemorySearchPort | None = memory.relational_search
         self._search_health = memory.search_health
-        self._embedding_maintenance = cast(Any, (
-            memory.embedding_maintenance
-            or getattr(self._relational_search, "_embedding_maintenance", None)
-            or MemoryEmbeddingMaintenance.from_context(ctx)
-        ))
+        self._embedding_maintenance: EmbeddingMaintenancePort = (
+            memory.embedding_maintenance or MemoryEmbeddingMaintenance.from_context(ctx)
+        )
         retrieval = (
             build_memory_retrieval_facade(
                 self._repository,

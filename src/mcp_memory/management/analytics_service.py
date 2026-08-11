@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.models import (
@@ -83,7 +84,7 @@ class AnalyticsServiceDependencies:
     ai_json_provider: Any
     ai_agent_provider: Any
     ai_provider_registry: Any
-    relational_search: Any
+    relational_search: MemorySearchPort | None
     search_health: SearchHealthPort | None = None
 
 

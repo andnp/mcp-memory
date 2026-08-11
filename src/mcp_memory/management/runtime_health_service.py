@@ -33,7 +33,8 @@ from mcp_memory.management.operator_health_reporting import (
 from mcp_memory.management.reporting_rows import count_recent_conversation_statuses, count_recent_memory_updates
 from mcp_memory.management.runtime_log_service import RuntimeLogService
 from mcp_memory.mcp.telemetry import search_diagnostics_snapshot
-from mcp_memory.core.ports import SearchHealthPort
+from mcp_memory.application.ports import MemorySearchPort
+from mcp_memory.core.ports import EmbeddingMaintenancePort, SearchHealthPort
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
@@ -50,9 +51,9 @@ class RuntimeHealthServiceDependencies:
     read_cache: Any
     embedder: Any
     vector_store: Any
-    relational_search: Any
+    relational_search: MemorySearchPort | None
     embedding_integrity_events: Any
-    embedding_maintenance: Any
+    embedding_maintenance: EmbeddingMaintenancePort | None
     repository: Any
     provider_usage: Any
     retrieval_telemetry: Any
@@ -323,7 +324,7 @@ class RuntimeHealthService:
         embedding_maintenance = self._dependencies.embedding_maintenance
         if embedding_maintenance is None:
             raise ValueError("search_not_initialized")
-        return embedding_maintenance.rebuild_semantic_index()
+        return dict(embedding_maintenance.rebuild_semantic_index())
 
 
 def _embedding_integrity_snapshot_payload(record: Any) -> EmbeddingIntegrityEventSnapshotPayload | None:

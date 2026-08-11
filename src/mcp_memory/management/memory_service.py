@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, cast
 from uuid import uuid4
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.management.models import (
     AIConversationListPayload,
@@ -62,7 +63,7 @@ class MemoryServiceDependencies:
     read_cache: Any
     memory_queries: Any
     repository: Any
-    relational_search: Any
+    relational_search: MemorySearchPort | None
     retrieval: Any
     provider_usage_repo: Any
     retrieval_telemetry: Any
