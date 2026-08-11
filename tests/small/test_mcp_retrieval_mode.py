@@ -11,6 +11,7 @@ from mcp_memory.application.ports import (
     RetrievalTelemetryPort,
 )
 from mcp_memory.core.retrieval import RetrievalRequest, RetrievalResult
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.mcp.adapters import parse_search_arguments
 from mcp_memory.mcp.tools import get_memory_tools
 
@@ -277,12 +278,31 @@ async def test_async_search_service_uses_typed_facade_for_compact_and_debug_payl
         "mcp_memory.application.memory_use_cases.build_memory_retrieval_facade",
         lambda *args, **kwargs: facade,
     )
-    ctx = MemoryReadDependencies(
-        workspace_id="workspace-1",
-        repository=object(),
-        relational_search=cast(
-            MemorySearchPort,
-            SimpleNamespace(get_health=lambda: None),
+    typed_health = SimpleNamespace(
+        get_health=lambda: SimpleNamespace(
+            repair_wait_count=0,
+            last_repair_wait_seconds=0.0,
+        )
+    )
+    legacy_search = SimpleNamespace(
+        get_health=lambda: pytest.fail("legacy search health should not be called")
+    )
+    ctx = cast(
+        MemoryReadDependencies,
+        SimpleNamespace(
+            workspace_id="workspace-1",
+            repository=object(),
+            relational_search=cast(MemorySearchPort, legacy_search),
+            search_health=cast(SearchHealthPort, typed_health),
+            memory_retrieval=None,
+            config=None,
+            read_cache=None,
+            read_cache_validation=None,
+            memory_id_resolution=None,
+            vector_store=None,
+            embedder=None,
+            embedding_maintenance=None,
+            surface_tracker=None,
         ),
     )
     telemetry = cast(RetrievalTelemetryPort, SimpleNamespace(record_search=lambda **_: None))

@@ -9,12 +9,16 @@ from typing import cast
 import pytest
 
 import mcp_memory.application.memory_use_cases as memory_use_cases
-from mcp_memory.application.memory_use_cases import SearchMemoryRecordsUseCase
+from mcp_memory.application.memory_use_cases import (
+    ReadMemoryRecordUseCase,
+    SearchMemoryRecordsUseCase,
+)
 from mcp_memory.application.ports import (
     MemoryReadDependencies,
     MemorySearchPort,
     RetrievalTelemetryPort,
 )
+from mcp_memory.core.ports import MemoryIDResolutionPort
 from mcp_memory.management.analytics_reporting import build_retrieval_analytics
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
@@ -53,13 +57,27 @@ def test_debug_search_reports_bounded_application_phase_timings(monkeypatch) -> 
         "execute_with_diagnostics",
         execute_with_diagnostics,
     )
-    ctx = MemoryReadDependencies(
-        workspace_id="workspace-1",
-        relational_search=cast(
-            MemorySearchPort,
-            SimpleNamespace(get_health=lambda: health),
+    typed_health = SimpleNamespace(get_health=lambda: health)
+    legacy_search = SimpleNamespace(
+        get_health=lambda: pytest.fail("legacy search health should not be called")
+    )
+    ctx = cast(
+        MemoryReadDependencies,
+        SimpleNamespace(
+            workspace_id="workspace-1",
+            relational_search=cast(MemorySearchPort, legacy_search),
+            search_health=typed_health,
+            memory_retrieval=object(),
+            config=None,
+            repository=None,
+            read_cache=None,
+            read_cache_validation=None,
+            memory_id_resolution=None,
+            vector_store=None,
+            embedder=None,
+            embedding_maintenance=None,
+            surface_tracker=None,
         ),
-        memory_retrieval=object(),
     )
     telemetry = cast(
         RetrievalTelemetryPort,
@@ -96,6 +114,61 @@ def test_debug_search_reports_bounded_application_phase_timings(monkeypatch) -> 
     assert all(isinstance(timing_ms[key], (int, float)) for key in phase_keys)
     assert all(0.0 <= timing_ms[key] <= 60_000.0 for key in phase_keys)
     assert payload["search_diagnostics"]["timing_ms"] == timing_ms
+
+
+def test_read_uses_typed_memory_id_resolution_before_legacy_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the typed resolver for telemetry while preserving the read payload."""
+    resolver_calls: list[str] = []
+    resolver = SimpleNamespace(
+        resolve_memory_id=lambda memory_id: resolver_calls.append(memory_id)
+        or "resolved-by-capability"
+    )
+    legacy_search = SimpleNamespace(
+        resolve_memory_id=lambda _memory_id: pytest.fail(
+            "legacy resolver should not be called"
+        )
+    )
+    record = SimpleNamespace(
+        id="resolved-by-capability",
+        memory_ref=1,
+        title="Typed resolver result",
+        content="content",
+        metadata={},
+        workspace_ids=[],
+    )
+    monkeypatch.setattr(
+        memory_use_cases.ReadMemoryRecordOperation,
+        "execute",
+        lambda _operation, _memory_id: SimpleNamespace(
+            record=record,
+            relationships={},
+            superseded=[],
+        ),
+    )
+    telemetry_calls: list[dict[str, object]] = []
+    telemetry = cast(
+        RetrievalTelemetryPort,
+        SimpleNamespace(record_read=lambda **kwargs: telemetry_calls.append(kwargs)),
+    )
+    ctx = MemoryReadDependencies(
+        relational_search=cast(MemorySearchPort, legacy_search),
+        memory_id_resolution=cast(MemoryIDResolutionPort, resolver),
+    )
+
+    payload = ReadMemoryRecordUseCase(ctx, telemetry).execute(
+        {
+            "memory_id": "mem-1",
+            "include_relationships": False,
+            "include_superseded": False,
+            "include_metadata": False,
+        }
+    )
+
+    assert payload["status"] == "ok"
+    assert resolver_calls == ["mem-1"]
+    assert telemetry_calls[0]["memory_id"] == "resolved-by-capability"
 
 
 def test_non_debug_search_does_not_add_phase_timings(monkeypatch) -> None:

@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import cast
 
 from mcp_memory.application.ports import (
     MemoryMutationDependencies,
@@ -12,6 +13,7 @@ from mcp_memory.application.ports import (
     RetrievalTelemetryPort,
 )
 from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.core.retrieval import RetrievalRequest
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalFacade,
@@ -97,11 +99,16 @@ def _new_search_phase_timings() -> dict[str, float]:
 def _embedding_repair_health_snapshot(
     ctx: MemoryReadDependencies,
 ) -> tuple[int, float] | None:
-    get_health = getattr(ctx.relational_search, "get_health", None)
-    if not callable(get_health):
+    health_provider = cast(
+        SearchHealthPort | None,
+        getattr(ctx, "search_health", None),
+    )
+    if health_provider is None:
+        health_provider = ctx.relational_search
+    if health_provider is None:
         return None
     try:
-        health = get_health()
+        health = health_provider.get_health()
     except Exception:
         return None
     repair_wait_count = getattr(health, "repair_wait_count", None)
@@ -704,12 +711,18 @@ def _read_memory_record(
     summary_only = arguments.get("summary_only", False)
     content_offset = arguments.get("content_offset", 0)
     content_limit = arguments.get("content_limit")
-    resolve_memory_id = getattr(ctx.relational_search, "resolve_memory_id", None)
     telemetry_memory_id = memory_id
-    if callable(resolve_memory_id):
-        resolved_memory_id = resolve_memory_id(memory_id)
+    memory_id_resolver = ctx.memory_id_resolution
+    if memory_id_resolver is not None:
+        resolved_memory_id = memory_id_resolver.resolve_memory_id(memory_id)
         if isinstance(resolved_memory_id, str) and resolved_memory_id:
             telemetry_memory_id = resolved_memory_id
+    else:
+        legacy_resolver = getattr(ctx.relational_search, "resolve_memory_id", None)
+        if callable(legacy_resolver):
+            resolved_memory_id = legacy_resolver(memory_id)
+            if isinstance(resolved_memory_id, str) and resolved_memory_id:
+                telemetry_memory_id = resolved_memory_id
     default_external_read_shape = (
         caller_kind == "external"
         and not include_relationships

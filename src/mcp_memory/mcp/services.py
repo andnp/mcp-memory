@@ -102,6 +102,8 @@ def _memory_read_dependencies(ctx: MemoryReadContext) -> MemoryReadDependencies:
         vector_store=_read_capability(ctx, "vector_store"),
         embedder=_read_capability(ctx, "embedder"),
         embedding_maintenance=_read_capability(ctx, "embedding_maintenance"),
+        read_cache_validation=_read_capability(ctx, "read_cache_validation"),
+        memory_id_resolution=_read_capability(ctx, "memory_id_resolution"),
     )
 
 
