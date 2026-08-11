@@ -880,3 +880,137 @@ The final target is not a repository with no word named `legacy`. It is a
 repository with one intentional canonical path per behavior, no unowned
 compatibility callers, no obsolete runtime branches, and explicit historical
 support where deletion would endanger existing data.
+
+## 14. Legacy removal gates
+
+No legacy surface is deleted until its specific gate is satisfied and recorded
+in the removal ledger. The gates are intentionally stronger than a green unit
+test run because compatibility can exist in imports, deployed data, serialized
+payloads, and external automation.
+
+### 14.1 Caller and import gates
+
+For each surface scheduled for deletion:
+
+- `rg` finds no production caller outside the replacement or migration test;
+- import-linter and package import checks show no dependency on the old module;
+- CLI, MCP, management, and internal tool registries expose only the canonical
+  name;
+- runtime composition constructs only the canonical service;
+- dynamic compatibility telemetry is zero for the declared observation
+  window; and
+- examples, scripts, documentation, and downstream integration fixtures have
+  been updated.
+
+An unknown external consumer blocks deletion. If the consumer cannot be
+identified, retain a narrow adapter and document the unresolved ownership.
+
+### 14.2 Behavioral parity gates
+
+Before removing an adapter, run the same request corpus through old and new
+entry points and compare:
+
+- result identity and ordering within the supported contract;
+- workspace and lifecycle filtering;
+- supersession and status behavior;
+- ranking workspace versus hard workspace scope;
+- semantic-only abstention and keyword-backed preservation;
+- failure, missing-hydration, and degraded-result behavior;
+- cache hits, invalidation, coalescing, and stale fallback; and
+- debug diagnostics, including unavailable versus measured-zero evidence.
+
+Differences must be classified as intentional contract changes or fixed before
+deletion. A compatibility test that only checks that a method still exists is
+not sufficient.
+
+### 14.3 Type and architecture gates
+
+The canonical path must pass structural checks before old types are removed:
+
+- `MemoryReadDependencies` uses typed retrieval capabilities;
+- no production retrieval caller requires `Any` to cross the application
+  boundary;
+- SearchKernel remains the only generic retrieval orchestrator;
+- mcp-memory remains the authority for lifecycle, authorization, hydration,
+  repair, freshness, and payload redaction;
+- the sync bridge is confined to explicit process edges; and
+- import-linter rules prevent the old relational or facade layer from being
+  reintroduced.
+
+The final architecture should be explainable from the dependency graph, not
+only from convention or code review memory.
+
+### 14.4 API and release gates
+
+Before removing public or semi-public compatibility:
+
+1. identify supported import, CLI, MCP, HTTP, and serialized contracts;
+2. publish the replacement contract and migration example;
+3. mark the old contract deprecated for at least one supported release;
+4. emit bounded usage telemetry without recording query or memory content;
+5. verify usage is zero or obtain an explicit exception; and
+6. publish release notes describing the breaking removal and rollback path.
+
+Internal-only names may use a shorter window when the caller/import gate is
+proven, but the decision belongs in the removal ledger.
+
+### 14.5 Persistence and migration gates
+
+Database and serialized-data compatibility is removable only when:
+
+- the oldest supported format is explicitly documented;
+- all supported installations can be upgraded or exported without the old
+  branch;
+- backups have been tested before and after the upgrade;
+- restore has been tested against the new release;
+- the support-window end has been announced; and
+- the release is allowed to make the corresponding storage break.
+
+Historical migration definitions may remain permanently. The gate concerns
+runtime support for obsolete formats, not deletion of audit history.
+
+### 14.6 Required verification ladder
+
+Every migration and deletion commit must pass the narrowest applicable checks,
+then the full repository gates:
+
+```bash
+uv run ruff check .
+uv run pyright
+uv run pytest tests/small/
+```
+
+Changes to MCP wiring, daemon lifecycle, management, storage, or search
+execution additionally require the relevant medium tests. Changes to
+transport, startup, shutdown, or end-to-end compatibility require the large
+tests. The final legacy-removal release must also pass:
+
+- import-linter and static zero-caller scans;
+- fresh SQLite bootstrap and supported legacy-database upgrade tests;
+- Postgres and vector/search parity tests where configured;
+- installed-tool verification from a clean environment;
+- daemon restart and health checks; and
+- the labeled search-quality corpus with no unexplained regression.
+
+### 14.7 Final deletion checklist
+
+The deletion owner must attach this evidence to the final change:
+
+- removal-ledger row with owner, replacement, and gate results;
+- `git grep`/`rg` caller and import scan;
+- compatibility telemetry window and decision;
+- API/config/task/endpoint migration notes;
+- database and serialized-format support decision;
+- parity and rollback test results;
+- focused, small, medium, and large QA results as applicable; and
+- confirmation that unrelated resilience fallbacks were not removed.
+
+If any item is missing, the change is a migration step, not a deletion step.
+
+### 14.8 Rollback
+
+Rollback must restore the previous adapter or package version without changing
+authoritative memory data. A failed cutover may disable the canonical feature
+flag, re-enable the thin compatibility adapter, or redeploy the previous
+package. It must not require reconstructing deleted records, rewriting
+historical migrations, or guessing which policy produced a cached response.
