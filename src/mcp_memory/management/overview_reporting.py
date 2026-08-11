@@ -130,6 +130,7 @@ def build_overview(
     relational_search,
     cache: CacheHealthPayload,
     embedding_integrity_summary: EmbeddingIntegrityEventSummaryPayload | None = None,
+    search_diagnostics: dict[str, object] | None = None,
     recent_limit: int = 10,
     failed_limit: int = 10,
 ) -> OverviewPayload:
@@ -202,7 +203,10 @@ def build_overview(
             vector_store=vector_store,
             integrity_event_summary=embedding_integrity_summary,
         ),
-        search=build_search_health(relational_search),
+        search=build_search_health(
+            relational_search,
+            search_diagnostics=search_diagnostics,
+        ),
         cache=cache,
         execution_attempts=build_execution_attempt_health(db_manager),
         memory_metrics=memory_metrics,

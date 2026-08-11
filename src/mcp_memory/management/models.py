@@ -33,6 +33,21 @@ class EmbeddingIntegrityEventSummaryPayload(BaseModel):
     last_blocked_fallback_write: EmbeddingIntegrityEventSnapshotPayload | None = None
 
 
+class SearchDiagnosticsPayload(BaseModel):
+    available: bool = False
+    sample_rate: float | None = None
+    observed_searches: int = 0
+    sampled_searches: int = 0
+    serialized_diagnostics: int = 0
+    sampled_rate: float | None = None
+    degraded_count: int | None = None
+    degraded_rate: float | None = None
+    planner_decisions: dict[str, int] | None = None
+    cache_status: dict[str, int] | None = None
+    failure_stages: dict[str, int] | None = None
+    diagnostic_serialization_failures: int = 0
+
+
 class SearchHealthPayload(BaseModel):
     semantic_enabled: bool = False
     available: bool = False
@@ -55,6 +70,7 @@ class SearchHealthPayload(BaseModel):
     last_recovery_at: str | None = None
     last_integrity_check_at: str | None = None
     integrity_check_error: str | None = None
+    search_diagnostics: SearchDiagnosticsPayload = Field(default_factory=SearchDiagnosticsPayload)
 
 
 class ExecutionAttemptHealthPayload(BaseModel):

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import time
 from time import perf_counter
+from collections.abc import Callable, Iterable
 from typing import Any, cast
 from uuid import uuid4
 
@@ -16,7 +17,9 @@ from mcp_memory.management.models import (
     MemorySearchPayload,
     MemorySearchResultPayload,
 )
+from mcp_memory.mcp.telemetry import record_search_diagnostics
 from mcp_memory.relational.operations import SearchMemoryRecordsOperation
+from mcp_memory.relational.search import RelationalSearchResult
 from mcp_memory.runtime_log_store import _AllWorkspacesSentinel
 from mcp_memory.serialization import (
     compact_memory_record_payload,
@@ -130,18 +133,43 @@ class MemoryService:
         if dependencies.relational_search is None or dependencies.retrieval is None:
             return MemorySearchPayload()
         started_at = perf_counter()
-        results = SearchMemoryRecordsOperation(dependencies.retrieval).execute(
-            query=query,
-            # Management search is global; workspace context must not filter results.
-            workspace_id=None,
-            limit=limit,
-            adaptive_limit=False,
-            ranking_workspace_id=workspace_id,
-            memory_type=memory_type,
-            status=status,
-            include_superseded=include_superseded,
-            debug=debug,
+        operation = SearchMemoryRecordsOperation(dependencies.retrieval)
+        diagnostics: object | None = None
+        execute_with_diagnostics = getattr(operation, "execute_with_diagnostics", None)
+        retrieval_supports_diagnostics = callable(
+            getattr(dependencies.retrieval, "search_sync_with_diagnostics", None)
         )
+        if debug and callable(execute_with_diagnostics) and retrieval_supports_diagnostics:
+            typed_execute_with_diagnostics = cast(
+                Callable[..., tuple[Iterable[RelationalSearchResult], object]],
+                execute_with_diagnostics,
+            )
+            raw_results, diagnostics = typed_execute_with_diagnostics(
+                query=query,
+                # Management search is global; workspace context must not filter results.
+                workspace_id=None,
+                limit=limit,
+                adaptive_limit=False,
+                ranking_workspace_id=workspace_id,
+                memory_type=memory_type,
+                status=status,
+                include_superseded=include_superseded,
+                debug=True,
+            )
+            results = list(raw_results)
+        else:
+            results = operation.execute(
+                query=query,
+                # Management search is global; workspace context must not filter results.
+                workspace_id=None,
+                limit=limit,
+                adaptive_limit=False,
+                ranking_workspace_id=workspace_id,
+                memory_type=memory_type,
+                status=status,
+                include_superseded=include_superseded,
+                debug=debug,
+            )
         surfaced_memory_ids = [result.memory_id for result in results]
         touch_last_surfaced = getattr(dependencies.repository, "touch_last_surfaced", None)
         if surfaced_memory_ids and callable(touch_last_surfaced):
@@ -151,13 +179,20 @@ class MemoryService:
                 best_effort=True,
             )
         duration_ms = (perf_counter() - started_at) * 1000.0
+        invocation_id = str(uuid4())
         dependencies.retrieval_telemetry.record_search(
-            invocation_id=str(uuid4()),
+            invocation_id=invocation_id,
             caller_kind="operator",
             query=query,
             surfaced_memory_ids=[result.memory_id for result in results],
             duration_ms=duration_ms,
         )
+        if diagnostics is not None:
+            record_search_diagnostics(
+                dependencies.retrieval_telemetry,
+                invocation_id=invocation_id,
+                diagnostics=diagnostics,
+            )
         self._log_slow_memory_tool_operation(
             tool_name="management.search_memories",
             duration_ms=duration_ms,

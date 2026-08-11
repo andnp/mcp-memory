@@ -32,6 +32,7 @@ from mcp_memory.management.operator_health_reporting import (
 )
 from mcp_memory.management.reporting_rows import count_recent_conversation_statuses, count_recent_memory_updates
 from mcp_memory.management.runtime_log_service import RuntimeLogService
+from mcp_memory.mcp.telemetry import search_diagnostics_snapshot
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
@@ -53,6 +54,7 @@ class RuntimeHealthServiceDependencies:
     embedding_maintenance: Any
     repository: Any
     provider_usage: Any
+    retrieval_telemetry: Any
     runtime_log_service: RuntimeLogService
     list_ai_conversations: Callable[..., Any]
     list_memories: Callable[..., Any]
@@ -120,7 +122,12 @@ class RuntimeHealthService:
             ),
             task_queue_enabled=dependencies.runtime_info.task_queue_enabled,
             embeddings=embedder_status,
-            search=build_search_health(dependencies.relational_search),
+            search=build_search_health(
+                dependencies.relational_search,
+                search_diagnostics=search_diagnostics_snapshot(
+                    dependencies.retrieval_telemetry
+                ),
+            ),
             cache=self._build_cache_health(),
             transport_diagnostics=self._build_transport_diagnostics(),
             execution_attempts=build_execution_attempt_health(dependencies.db_manager),

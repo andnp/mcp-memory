@@ -10,6 +10,7 @@ from mcp_memory.management.models import (
     OverviewPayload,
 )
 from mcp_memory.management.overview_reporting import build_overview
+from mcp_memory.mcp.telemetry import search_diagnostics_snapshot
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class OverviewServiceDependencies:
     storage_backend: str | None
     vector_store: Any
     relational_search: Any
+    retrieval_telemetry: Any
     cache_health: Callable[[], CacheHealthPayload]
     embedding_integrity_summary: Callable[[], EmbeddingIntegrityEventSummaryPayload]
 
@@ -52,6 +54,7 @@ class OverviewService:
             storage_backend=dependencies.storage_backend,
             vector_store=dependencies.vector_store,
             relational_search=dependencies.relational_search,
+            search_diagnostics=search_diagnostics_snapshot(dependencies.retrieval_telemetry),
             cache=dependencies.cache_health(),
             embedding_integrity_summary=dependencies.embedding_integrity_summary(),
             recent_limit=recent_limit,

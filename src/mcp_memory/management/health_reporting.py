@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from mcp_memory.core.ports.tasks import is_process_alive
 import time
+from typing import TypedDict
 
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
@@ -10,6 +11,7 @@ from mcp_memory.management.models import (
     EmbeddingStatusPayload,
     ExecutionAttemptHealthPayload,
     SearchHealthPayload,
+    SearchDiagnosticsPayload,
 )
 from mcp_memory.management.reporting_rows import fetch_running_task_attempt_rows
 from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
@@ -17,6 +19,61 @@ from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
 
 type RunningTaskAttemptRowFetcher = Callable[[object], Sequence[RunningTaskAttemptRow]]
 type ProcessAliveChecker = Callable[[int], bool]
+
+
+class _SearchDiagnosticsValues(TypedDict, total=False):
+    available: bool
+    sample_rate: float | None
+    observed_searches: int
+    sampled_searches: int
+    serialized_diagnostics: int
+    sampled_rate: float | None
+    degraded_count: int | None
+    degraded_rate: float | None
+    planner_decisions: dict[str, int] | None
+    cache_status: dict[str, int] | None
+    failure_stages: dict[str, int] | None
+    diagnostic_serialization_failures: int
+
+
+def _narrow_search_diagnostics(
+    values: dict[str, object] | None,
+) -> _SearchDiagnosticsValues:
+    if values is None:
+        return {}
+    narrowed: _SearchDiagnosticsValues = {}
+    available = values.get("available")
+    if isinstance(available, bool):
+        narrowed["available"] = available
+    for key in ("sample_rate", "sampled_rate", "degraded_rate"):
+        value = values.get(key)
+        if value is None or isinstance(value, (float, int)) and not isinstance(value, bool):
+            narrowed[key] = None if value is None else float(value)
+    for key in (
+        "observed_searches",
+        "sampled_searches",
+        "serialized_diagnostics",
+        "degraded_count",
+        "diagnostic_serialization_failures",
+    ):
+        value = values.get(key)
+        if value is None and key == "degraded_count":
+            narrowed[key] = None
+        elif isinstance(value, int) and not isinstance(value, bool):
+            narrowed[key] = value
+    for key in ("planner_decisions", "cache_status", "failure_stages"):
+        value = values.get(key)
+        if value is None:
+            narrowed[key] = None
+        elif isinstance(value, Mapping):
+            narrowed[key] = {
+                label: count
+                for label, count in value.items()
+                if isinstance(label, str)
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+            }
+    return narrowed
 
 
 def build_embedding_status(
@@ -58,9 +115,17 @@ def build_embedding_status(
     return payload
 
 
-def build_search_health(relational_search) -> SearchHealthPayload:
+def build_search_health(
+    relational_search,
+    *,
+    search_diagnostics: dict[str, object] | None = None,
+) -> SearchHealthPayload:
     if relational_search is None:
-        return SearchHealthPayload()
+        return SearchHealthPayload(
+            search_diagnostics=SearchDiagnosticsPayload(
+                **_narrow_search_diagnostics(search_diagnostics)
+            )
+        )
     health = relational_search.get_health()
     return SearchHealthPayload(
         semantic_enabled=health.semantic_enabled,
@@ -84,6 +149,9 @@ def build_search_health(relational_search) -> SearchHealthPayload:
         last_recovery_at=health.last_recovery_at,
         last_integrity_check_at=health.last_integrity_check_at,
         integrity_check_error=health.integrity_check_error,
+        search_diagnostics=SearchDiagnosticsPayload(
+            **_narrow_search_diagnostics(search_diagnostics)
+        ),
     )
 
 

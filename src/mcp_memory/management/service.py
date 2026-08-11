@@ -241,6 +241,7 @@ class ManagementService:
                 embedding_maintenance=self._embedding_maintenance,
                 repository=self._repository,
                 provider_usage=self._provider_usage,
+                retrieval_telemetry=self._retrieval_telemetry,
                 runtime_log_service=self._runtime_log_service,
                 list_ai_conversations=self._memory_service.list_ai_conversations,
                 list_memories=self._memory_service.list_memories,
@@ -259,6 +260,7 @@ class ManagementService:
                 storage_backend=self._storage_backend,
                 vector_store=self._vector_store,
                 relational_search=self._relational_search,
+                retrieval_telemetry=self._retrieval_telemetry,
                 cache_health=self._runtime_health_service._build_cache_health,
                 embedding_integrity_summary=lambda: self._runtime_health_service._embedding_integrity_summary(
                     workspace_id=None
