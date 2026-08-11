@@ -26,6 +26,14 @@ _DEFAULT_MAINTENANCE_ADJACENCY_LIMIT = 10
 _MAX_MAINTENANCE_READ_LIMIT = 50
 
 
+def _read_capability(ctx: MemoryReadContext, name: str, default=None):
+    memory = getattr(ctx, "memory", None)
+    value = getattr(memory, name, None) if memory is not None else None
+    if value is not None:
+        return value
+    return getattr(ctx, name, default)
+
+
 def _bounded_limit(arguments: dict, field_name: str, default: int) -> tuple[int, int]:
     requested = optional_positive_int(arguments, field_name, default)
     return requested, min(requested, _MAX_MAINTENANCE_READ_LIMIT)
@@ -38,9 +46,10 @@ def _record_payload(record: Any, *, include_metadata: bool) -> dict:
 
 
 def _maintenance_context(ctx: MemoryReadContext) -> MemorySearchPort | None:
-    if ctx.relational_search is None:
+    search = _read_capability(ctx, "relational_search")
+    if search is None:
         return None
-    return ctx.relational_search
+    return search
 
 
 def _not_initialized() -> dict[str, str]:

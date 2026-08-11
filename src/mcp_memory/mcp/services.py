@@ -82,18 +82,26 @@ class _ContextBoundRetrievalTelemetry:
         )
 
 
+def _read_capability(ctx: MemoryReadContext, name: str, default=None):
+    memory = getattr(ctx, "memory", None)
+    value = getattr(memory, name, None) if memory is not None else None
+    if value is not None:
+        return value
+    return getattr(ctx, name, default)
+
+
 def _memory_read_dependencies(ctx: MemoryReadContext) -> MemoryReadDependencies:
     return MemoryReadDependencies(
-        config=ctx.config,
-        workspace_id=ctx.workspace_id,
-        repository=ctx.repository,
-        surface_tracker=ctx.repository,
-        relational_search=ctx.relational_search,
-        memory_retrieval=getattr(ctx, "memory_retrieval", None),
-        read_cache=getattr(ctx, "read_cache", None),
-        vector_store=ctx.vector_store,
-        embedder=ctx.embedder,
-        embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+        config=_read_capability(ctx, "config"),
+        workspace_id=_read_capability(ctx, "workspace_id"),
+        repository=_read_capability(ctx, "repository"),
+        surface_tracker=_read_capability(ctx, "repository"),
+        relational_search=_read_capability(ctx, "relational_search"),
+        memory_retrieval=_read_capability(ctx, "memory_retrieval"),
+        read_cache=_read_capability(ctx, "read_cache"),
+        vector_store=_read_capability(ctx, "vector_store"),
+        embedder=_read_capability(ctx, "embedder"),
+        embedding_maintenance=_read_capability(ctx, "embedding_maintenance"),
     )
 
 

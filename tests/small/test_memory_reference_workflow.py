@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
 
+from mcp_memory.application.ports import MemoryReadContext, MemorySearchPort
 from mcp_memory.config import Config
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import ApplicationContext, MemoryReadCapabilities
 from mcp_memory.mcp.services import (
+    _memory_read_dependencies,
     read_memory_record_service,
     read_memory_records_service,
     search_memory_records_service,
@@ -14,6 +19,35 @@ from mcp_memory.relational.search import RelationalMemorySearchService
 
 
 pytestmark = pytest.mark.small
+
+
+def test_services_prefer_composed_memory_read_capabilities() -> None:
+    """Read services use typed memory capabilities before legacy context fields."""
+    repository = object()
+    relational_search = cast(MemorySearchPort, object())
+    capabilities = MemoryReadCapabilities(
+        config=Config(),
+        workspace_id="typed-workspace",
+        repository=repository,
+        relational_search=relational_search,
+    )
+    context = cast(MemoryReadContext, SimpleNamespace(
+        memory=capabilities,
+        config=None,
+        workspace_id="legacy-workspace",
+        repository=None,
+        relational_search=None,
+        memory_retrieval="retrieval",
+    ))
+
+    dependencies = _memory_read_dependencies(context)
+
+    assert dependencies.config is capabilities.config
+    assert dependencies.workspace_id == "typed-workspace"
+    assert dependencies.repository is repository
+    assert dependencies.surface_tracker is repository
+    assert dependencies.relational_search is relational_search
+    assert dependencies.memory_retrieval == "retrieval"
 
 
 def _context(db_manager) -> tuple[ApplicationContext, RelationalMemoryRepository]:
