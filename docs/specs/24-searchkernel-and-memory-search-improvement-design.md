@@ -536,3 +536,88 @@ The governing rule is:
 
 > Improve retrieval with evidence, preserve authority, and keep every change
 > reversible.
+
+## 11. Legacy surface inventory
+
+The legacy-removal program must distinguish obsolete implementation paths from
+compatibility that still protects existing installations, callers, or data.
+The inventory below is the starting removal ledger. A surface is not eligible
+for deletion merely because a newer implementation exists; it must also have
+no supported callers, a migration path, and a rollback story.
+
+### 11.1 Search execution compatibility
+
+| Surface | Current role | Target replacement | Removal risk |
+| --- | --- | --- | --- |
+| `MemoryRetrievalFacade` | Stable async/sync retrieval port, pipeline lifetime, and safe sync bridge | One canonical application retrieval service with a thin boundary adapter | High: CLI, management, maintenance, and compatibility callers still use sync methods |
+| `RelationalMemorySearchService` | Older relational search service exposed by storage composition and management code | Canonical application retrieval service plus explicit storage/query ports | High: constructed by SQLite and Postgres resources; widely covered by tests |
+| `SearchMemoryRecordsOperation` | Compatibility use-case wrapper around synchronous retrieval | Typed application search request/response service | Medium: preserves operation-level diagnostics and legacy call signatures |
+| `search_memory_records_service` | Synchronous MCP/CLI adapter | Async MCP service plus a deliberately narrow sync boundary | Medium: direct CLI, tests, and internal compatibility callers remain |
+| `searchkernel_source.py` compatibility factory | Backward-compatible name for the memory federation adapter | Canonical memory federation source export | Low to medium: public import compatibility must be measured before removal |
+| Separate async/sync diagnostic projections | Async MCP returns a reduced shape while sync/debug retrieval is richer | One serializer over one normalized outcome context | High: behavioral drift can hide failures or abstention evidence |
+
+The facade and relational service are migration surfaces, not dead code. Their
+removal depends on moving every supported caller to the canonical service and
+proving equivalent scope, lifecycle, cache, failure, and diagnostic behavior.
+
+### 11.2 Runtime and API compatibility
+
+| Surface | Current role | Target replacement | Removal condition |
+| --- | --- | --- | --- |
+| `MemoryReadDependencies.memory_retrieval: Any` | Optional compatibility injection for old retrieval implementations | Typed retrieval capability or canonical service dependency | All runtime composition and test doubles satisfy the typed port |
+| Sync methods on `MemoryRetrievalPort` | Synchronous callers avoid owning an event loop | Boundary-only `run_sync` adapter outside the core retrieval port | No core service depends on sync methods |
+| Legacy result/payload constructors | Preserve direct construction and older serialized fields | Canonical application payload builders | Consumer inventory and one deprecation window complete |
+| Compatibility aliases and re-exports | Preserve imports across internal refactors | Canonical module paths | Repository and downstream import scans are empty |
+| Fallback telemetry fields | Read old telemetry or preserve older payloads | Versioned telemetry schema with explicit migration | Old readers are retired and schema version is advanced |
+
+These surfaces must be tracked by caller, not removed by a broad search-and-
+replace. A compatibility alias with an external consumer is an API contract;
+an unused internal re-export is a safe cleanup candidate.
+
+### 11.3 Operational compatibility
+
+The repository also contains legacy task names, configuration keys, endpoint
+aliases, and compatibility dispatch. These are separate from search and must
+be inventoried before deletion:
+
+- legacy maintenance task-name aliases and migration dispatch;
+- old configuration switches such as legacy provider-routing inputs;
+- deprecated management or administrative endpoint aliases;
+- compatibility groups and work-item claim aliases;
+- old ingress or curation stage names accepted during replay; and
+- fallback provider, embedding, or storage paths that may still protect
+  availability rather than represent obsolete behavior.
+
+The removal program must classify each item as one of:
+
+1. **Dead bridge** — no supported caller and no persisted-data dependency;
+2. **Active compatibility** — a caller or external artifact still depends on
+   it;
+3. **Migration-only** — required to read or transform older persisted data;
+   or
+4. **Resilience fallback** — intentionally retained because the primary path
+   can be unavailable or degraded.
+
+Only dead bridges are immediate deletion candidates. Active compatibility and
+migration-only surfaces require an announced support window. Resilience
+fallbacks require operational evidence before they can be reclassified as
+legacy.
+
+### 11.4 Persistence compatibility
+
+`apply_legacy_additive_migrations` and historical schema migration tests are
+not equivalent to dead application code. Existing databases may require them
+to start successfully. The removal plan must therefore preserve immutable
+migration history while separately deciding whether old migration execution
+paths can be retired in a future storage-format release.
+
+Before removing a migration path, record:
+
+- the oldest supported database/schema version;
+- an idempotent upgrade or export path for older installations;
+- evidence that supported deployments have crossed the migration window;
+- backup and rollback instructions; and
+- a major-version or explicit release note for the breaking storage change.
+
+The target is zero obsolete runtime branches, not deletion of historical facts
+needed to reconstruct or upgrade a supported database.
