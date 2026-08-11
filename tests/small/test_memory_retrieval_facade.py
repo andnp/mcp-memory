@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -262,6 +263,126 @@ def test_diagnostic_projection_failure_falls_back_to_successful_outcome(
     assert diagnostics.degraded is False
     assert diagnostics.failure_count == 0
     assert "diagnostics projection failed" in caplog.text
+
+
+def test_typed_diagnostic_evidence_populates_application_diagnostics() -> None:
+    """Prefer newer typed evidence for planner, degradation, provenance, and timing."""
+    result = SimpleNamespace(
+        record_id="memory-a",
+        storage_key="workspace:memory-a",
+        provenance=SimpleNamespace(strategies=("keyword",)),
+    )
+    failure = SimpleNamespace(
+        stage="vector",
+        message="vector unavailable",
+        exception_type="RuntimeError",
+    )
+    outcome = cast(
+        RecordSearchOutcome,
+        SimpleNamespace(
+            results=(result,),
+            diagnostics=(
+                "query_plan:lanes:legacy",
+                "query_plan:budgets:legacy=1",
+            ),
+            cache_diagnostics=(),
+            candidate_count=1,
+            candidate_counts={"keyword": 1},
+            stage_timings_ms={"legacy": 1.0},
+            failures=(),
+            missing_record_ids=(),
+            degraded=False,
+            trace=None,
+            diagnostic_evidence=SimpleNamespace(
+                enabled_lanes=("keyword", "vector"),
+                lane_budgets={"keyword": 5, "vector": 3},
+                skipped_lanes=(SimpleNamespace(lane="graph", reason="disabled"),),
+                failures=(failure,),
+                missing_record_ids=("missing-memory",),
+                stage_timings_ms={"search": 2.5},
+                result_provenance={
+                    "workspace:memory-a": ("keyword", "vector"),
+                },
+                final_duplicate_count=4,
+                raw_pre_fusion_overlap=SimpleNamespace(available=True, count=0),
+            ),
+        ),
+    )
+
+    diagnostics = memory_retrieval.build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+
+    assert diagnostics.timing_ms == {"search": 2.5}
+    assert diagnostics.lane_decisions == {
+        "enabled": ["keyword", "vector"],
+        "budgets": {"keyword": 5, "vector": 3},
+        "skipped": ["graph:disabled"],
+    }
+    assert diagnostics.failures == [
+        {
+            "stage": "vector",
+            "message": "vector unavailable",
+            "exception_type": "RuntimeError",
+        }
+    ]
+    assert diagnostics.missing_record_ids == ["missing-memory"]
+    assert diagnostics.multi_lane_candidate_ids == ["memory-a"]
+    assert diagnostics.raw_lane_overlap_count == 0
+    assert diagnostics.final_duplicate_count == 4
+    overlap = cast(dict[str, object], diagnostics.to_payload()["overlap"])
+    assert overlap["final_duplicate_count"] == 4
+
+
+@pytest.mark.parametrize(
+    ("available", "count", "expected"),
+    [(False, None, None), (True, 0, 0), (True, 2, 2)],
+)
+def test_typed_raw_overlap_preserves_capability_semantics(
+    available: bool,
+    count: int | None,
+    expected: int | None,
+) -> None:
+    """Keep unavailable overlap distinct from available empty or positive evidence."""
+    outcome = cast(
+        RecordSearchOutcome,
+        SimpleNamespace(
+            results=(),
+            diagnostics=(),
+            cache_diagnostics=(),
+            candidate_count=0,
+            candidate_counts={},
+            stage_timings_ms={},
+            failures=(),
+            missing_record_ids=(),
+            degraded=False,
+            trace=None,
+            diagnostic_evidence=SimpleNamespace(
+                enabled_lanes=(),
+                lane_budgets={},
+                skipped_lanes=(),
+                failures=(),
+                missing_record_ids=(),
+                stage_timings_ms={},
+                result_provenance={},
+                final_duplicate_count=0,
+                raw_pre_fusion_overlap=SimpleNamespace(
+                    available=available,
+                    count=count,
+                ),
+            ),
+        ),
+    )
+
+    diagnostics = memory_retrieval.build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+
+    assert diagnostics.raw_lane_overlap_count == expected
 
 
 def test_diagnostics_preserve_missing_hydration_and_degraded_state() -> None:

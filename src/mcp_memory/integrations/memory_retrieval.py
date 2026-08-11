@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -69,6 +69,7 @@ class SearchExecutionDiagnostics:
     multi_lane_candidate_ids: list[str] | None = None
     duplicate_candidate_ids: list[str] | None = None
     final_duplicate_ids: list[str] | None = None
+    final_duplicate_count: int | None = None
 
     def to_payload(self) -> dict[str, object]:
         candidate_counts = dict(self.candidate_counts or {})
@@ -79,6 +80,11 @@ class SearchExecutionDiagnostics:
         multi_lane_ids = list(self.multi_lane_candidate_ids or [])
         duplicate_ids = list(self.duplicate_candidate_ids or [])
         final_duplicate_ids = list(self.final_duplicate_ids or [])
+        final_duplicate_count = (
+            len(final_duplicate_ids)
+            if self.final_duplicate_count is None
+            else self.final_duplicate_count
+        )
         lane_decisions = self.lane_decisions or {}
         enabled = lane_decisions.get("enabled")
         budgets = lane_decisions.get("budgets")
@@ -120,7 +126,7 @@ class SearchExecutionDiagnostics:
             "overlap": {
                 "raw_lane_overlap_count": self.raw_lane_overlap_count,
                 "multi_lane_result_count": len(multi_lane_ids),
-                "final_duplicate_count": len(final_duplicate_ids),
+                "final_duplicate_count": final_duplicate_count,
             },
             "duplicate_candidate_ids": duplicate_ids,
             "multi_lane_candidate_ids": multi_lane_ids,
@@ -138,12 +144,26 @@ def build_search_execution_diagnostics(
     debug: bool = False,
 ) -> SearchExecutionDiagnostics:
     """Project one kernel outcome into the application diagnostic contract."""
+    evidence = getattr(outcome, "diagnostic_evidence", None)
+    typed_timing_ms = _typed_timing_ms(evidence)
     timing_ms = {
-        stage: round(float(duration), 3)
-        for stage, duration in outcome.stage_timings_ms.items()
+        stage: round(float(duration), 3) for stage, duration in (
+            typed_timing_ms
+            if typed_timing_ms is not None
+            else outcome.stage_timings_ms
+        ).items()
     }
     if total_ms is not None:
         timing_ms = {"total": round(total_ms, 3), **timing_ms}
+    typed_failures = _typed_sequence(evidence, "failures")
+    failures = outcome.failures if typed_failures is None else typed_failures
+    typed_missing_record_ids = _typed_string_sequence(evidence, "missing_record_ids")
+    missing_record_ids = (
+        outcome.missing_record_ids
+        if typed_missing_record_ids is None
+        else typed_missing_record_ids
+    )
+    degraded = outcome.degraded or bool(failures or missing_record_ids)
     semantic_candidate_count, semantic_only_count, abstention_count = (
         _semantic_abstention_counts(outcome.diagnostics)
     )
@@ -152,19 +172,37 @@ def build_search_execution_diagnostics(
     )
     semantic_abstained = (
         None
-        if outcome.degraded or semantic_candidate_count == 0
+        if degraded or semantic_candidate_count == 0
         else abstention_count > 0
     )
     result_counts = Counter(result.record_id for result in outcome.results)
     final_duplicate_ids = sorted(
         record_id for record_id, count in result_counts.items() if count > 1
     )
+    result_ids_by_storage_key = {
+        _result_storage_key(result): result.record_id for result in outcome.results
+    }
+    result_provenance = _typed_mapping(evidence, "result_provenance")
     multi_lane_candidate_ids = sorted(
         {
-            result.record_id
-            for result in outcome.results
-            if len(result.provenance.strategies) > 1
+            result_ids_by_storage_key.get(storage_key, storage_key)
+            for storage_key, strategies in (
+                result_provenance.items()
+                if result_provenance is not None
+                else (
+                    (_result_storage_key(result), result.provenance.strategies)
+                    for result in outcome.results
+                )
+            )
+            if _has_multiple_strategies(strategies)
         }
+    )
+    final_duplicate_count = _typed_nonnegative_int(
+        evidence, "final_duplicate_count", len(final_duplicate_ids)
+    )
+    raw_lane_overlap_count = _typed_overlap_count(evidence)
+    lane_decisions = _typed_lane_decisions(evidence) or _lane_decisions(
+        outcome.diagnostics
     )
     trace = None
     if debug and outcome.trace is not None:
@@ -196,24 +234,121 @@ def build_search_execution_diagnostics(
                     failure, "exception_type", type(failure).__name__
                 ),
             }
-            for failure in outcome.failures
+            for failure in failures
         ],
-        missing_record_ids=list(outcome.missing_record_ids),
-        failure_count=len(outcome.failures),
-        missing_record_count=len(outcome.missing_record_ids),
-        degraded=outcome.degraded,
+        missing_record_ids=list(missing_record_ids),
+        failure_count=len(failures),
+        missing_record_count=len(missing_record_ids),
+        degraded=degraded,
         trace=trace,
         scope={
             "mode": "filtered" if workspace_id is not None else "global",
             "workspace_filter": workspace_id,
             "ranking_workspace_id": ranking_workspace_id,
         },
-        lane_decisions=_lane_decisions(outcome.diagnostics),
-        raw_lane_overlap_count=None,
+        lane_decisions=lane_decisions,
+        raw_lane_overlap_count=raw_lane_overlap_count,
         multi_lane_candidate_ids=multi_lane_candidate_ids,
         duplicate_candidate_ids=[],
         final_duplicate_ids=final_duplicate_ids,
+        final_duplicate_count=final_duplicate_count,
     )
+
+
+def _typed_mapping(evidence: object, name: str) -> dict[str, object] | None:
+    value = getattr(evidence, name, None)
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str)
+    }
+
+
+def _typed_timing_ms(evidence: object) -> dict[str, float] | None:
+    value = _typed_mapping(evidence, "stage_timings_ms")
+    if value is None:
+        return None
+    timing_ms: dict[str, float] = {}
+    for stage, duration in value.items():
+        if not isinstance(duration, (int, float)):
+            return None
+        timing_ms[stage] = float(duration)
+    return timing_ms
+
+
+def _typed_sequence(evidence: object, name: str) -> tuple[object, ...] | None:
+    value = getattr(evidence, name, None)
+    if not isinstance(value, (list, tuple)):
+        return None
+    return tuple(value)
+
+
+def _typed_string_sequence(evidence: object, name: str) -> tuple[str, ...] | None:
+    value = _typed_sequence(evidence, name)
+    if value is None:
+        return None
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        items.append(item)
+    return tuple(items)
+
+
+def _typed_nonnegative_int(evidence: object, name: str, fallback: int) -> int:
+    value = getattr(evidence, name, None)
+    return value if isinstance(value, int) and value >= 0 else fallback
+
+
+def _typed_overlap_count(evidence: object) -> int | None:
+    capability = getattr(evidence, "raw_pre_fusion_overlap", None)
+    if not getattr(capability, "available", False):
+        return None
+    count = getattr(capability, "count", None)
+    return count if isinstance(count, int) and count >= 0 else None
+
+
+def _has_multiple_strategies(strategies: object) -> bool:
+    if not isinstance(strategies, (list, tuple)):
+        return False
+    return len(strategies) > 1
+
+
+def _result_storage_key(result: object) -> str:
+    storage_key = getattr(result, "storage_key", None)
+    if isinstance(storage_key, str):
+        return storage_key
+    record = getattr(result, "record", None)
+    record_storage_key = getattr(record, "storage_key", None)
+    return str(record_storage_key)
+
+
+def _typed_lane_decisions(evidence: object) -> dict[str, object] | None:
+    if evidence is None:
+        return None
+    enabled = _typed_sequence(evidence, "enabled_lanes")
+    budgets = _typed_mapping(evidence, "lane_budgets")
+    skipped = _typed_sequence(evidence, "skipped_lanes")
+    if enabled is None or budgets is None or skipped is None:
+        return None
+    typed_budgets: dict[str, int] = {}
+    for name, budget in budgets.items():
+        if not isinstance(budget, int):
+            return None
+        typed_budgets[name] = budget
+    skipped_values = [
+        f"{lane}:{reason}"
+        for skip in skipped
+        if (lane := getattr(skip, "lane", None)) is not None
+        and (reason := getattr(skip, "reason", None)) is not None
+    ]
+    return {
+        "enabled": [str(lane) for lane in enabled],
+        "budgets": typed_budgets,
+        "skipped": skipped_values,
+    }
 
 
 def _semantic_abstention_counts(
