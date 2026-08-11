@@ -41,6 +41,11 @@ def build_search_cache_request(
     policy_version: str = DEFAULT_SEARCH_POLICY_VERSION,
     feature_fingerprint: str | None = None,
 ) -> SharedReadCacheSearchRequest:
+    retrieval_mode = arguments.get("retrieval_mode", "hybrid")
+    if retrieval_mode != "hybrid":
+        feature_fingerprint = (
+            f"{feature_fingerprint or 'default'}|retrieval_mode={retrieval_mode}"
+        )
     return SharedReadCacheSearchRequest(
         query=str(arguments["query"]),
         workspace_id=(

@@ -260,7 +260,6 @@ def _search_memory_records(
             embedding_maintenance=ctx.embedding_maintenance,
             native_search=ctx.relational_search,
         )
-    operation = SearchMemoryRecordsOperation(retrieval)
     started_at = perf_counter()
     debug_enabled = arguments["debug"]
     phase_timings_ms = _new_search_phase_timings()
@@ -275,6 +274,7 @@ def _search_memory_records(
         "tags": arguments["tags"],
         "include_superseded": arguments["include_superseded"],
         "debug": debug_enabled,
+        "retrieval_mode": arguments.get("retrieval_mode", "hybrid"),
     }
     cache_request = build_search_cache_request(
         ctx,
@@ -367,12 +367,48 @@ def _search_memory_records(
     repair_health_before = _embedding_repair_health_snapshot(ctx)
     authoritative_search_started = perf_counter()
     try:
-        if debug_enabled:
-            results, diagnostics = operation.execute_with_diagnostics(
-                **execution_arguments
+        if execution_arguments["retrieval_mode"] == "hybrid":
+            operation = SearchMemoryRecordsOperation(retrieval)
+            operation_arguments = {
+                key: value
+                for key, value in execution_arguments.items()
+                if key != "retrieval_mode"
+            }
+            if debug_enabled:
+                results, diagnostics = operation.execute_with_diagnostics(
+                    **operation_arguments
+                )
+            else:
+                results = operation.execute(**operation_arguments)
+        elif debug_enabled:
+            outcome, diagnostics = retrieval.search_sync_with_diagnostics(
+                query,
+                limit=execution_arguments["limit"],
+                adaptive_limit=execution_arguments["adaptive_limit"],
+                workspace_id=execution_arguments["workspace_id"],
+                memory_type=execution_arguments["memory_type"],
+                status=execution_arguments["status"],
+                tags=execution_arguments["tags"],
+                include_superseded=execution_arguments["include_superseded"],
+                ranking_workspace_id=execution_arguments["ranking_workspace_id"],
+                filters={"retrieval_mode": execution_arguments["retrieval_mode"]},
+                debug=True,
             )
+            results = [_to_relational_search_result(result) for result in outcome.results]
         else:
-            results = operation.execute(**execution_arguments)
+            outcome = retrieval.search_sync(
+                query,
+                limit=execution_arguments["limit"],
+                adaptive_limit=execution_arguments["adaptive_limit"],
+                workspace_id=execution_arguments["workspace_id"],
+                memory_type=execution_arguments["memory_type"],
+                status=execution_arguments["status"],
+                tags=execution_arguments["tags"],
+                include_superseded=execution_arguments["include_superseded"],
+                ranking_workspace_id=execution_arguments["ranking_workspace_id"],
+                filters={"retrieval_mode": execution_arguments["retrieval_mode"]},
+            )
+            results = [_to_relational_search_result(result) for result in outcome.results]
     except Exception as error:
         _finish_inflight_search_coalescing(ctx, inflight_search, error=error)
         if _shared_read_cache_enabled(
@@ -547,6 +583,7 @@ async def _search_memory_records_async(
             "memory_type": arguments["memory_type"],
             "status": arguments["status"],
             "include_superseded": arguments["include_superseded"],
+            "retrieval_mode": arguments.get("retrieval_mode", "hybrid"),
         },
     )
     phase_timings_ms["authoritative_search"] = _elapsed_timing_ms(

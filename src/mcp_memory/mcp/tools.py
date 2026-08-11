@@ -11,6 +11,7 @@ SKILL_REVIEW_READ_ONLY_TOOLS = frozenset(
 )
 SKILL_REVIEW_WRITER_SCOPE = "skill_review_writer"
 SKILL_REVIEW_WRITER_TOOLS = frozenset({"commit_skill_review"})
+RETRIEVAL_MODES = ("keyword", "semantic", "hybrid")
 
 
 def allowed_memory_tool_names(tool_scope: str | None = None) -> frozenset[str] | None:
@@ -184,6 +185,12 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
                     },
                     "include_superseded": {"type": "boolean"},
                     "debug": {"type": "boolean"},
+                    "retrieval_mode": {
+                        "type": "string",
+                        "enum": list(RETRIEVAL_MODES),
+                        "default": "hybrid",
+                        "description": "Optional retrieval strategy. Defaults to hybrid.",
+                    },
                 },
                 "required": ["query"],
             },

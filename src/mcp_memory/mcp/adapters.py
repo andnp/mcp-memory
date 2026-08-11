@@ -14,6 +14,7 @@ from mcp_memory.application.skill_review_contract import (
     parse_skill_review_commit_request,
     parse_skill_review_ledger_request,
 )
+from mcp_memory.mcp.tools import RETRIEVAL_MODES
 
 
 def parse_record_thought_arguments(arguments: dict) -> str:
@@ -54,6 +55,11 @@ def parse_skill_review_ledger_arguments(arguments: dict) -> SkillReviewLedgerReq
 
 
 def parse_search_arguments(arguments: dict) -> dict:
+    retrieval_mode = arguments.get("retrieval_mode", "hybrid")
+    if not isinstance(retrieval_mode, str):
+        raise TypeError("retrieval_mode must be a string")
+    if retrieval_mode not in RETRIEVAL_MODES:
+        raise ValueError("retrieval_mode must be keyword, semantic, or hybrid")
     return {
         "query": require_string(arguments, "query"),
         "limit": optional_positive_int(arguments, "limit", 5),
@@ -64,6 +70,7 @@ def parse_search_arguments(arguments: dict) -> dict:
         "tags": tuple(string_list(arguments, "tags")),
         "include_superseded": optional_bool(arguments, "include_superseded", False),
         "debug": optional_bool(arguments, "debug", False),
+        "retrieval_mode": retrieval_mode,
     }
 
 
