@@ -65,7 +65,14 @@ class FakeNativeSearch:
     def peek_memory(self, memory_id: str) -> tuple[str, str]:
         return ("peek", memory_id)
 
-    def search_memories_for_maintenance(self, query: str, **kwargs: Any) -> tuple[str, dict[str, Any]]:
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        kwargs.update(workspace_id=workspace_id, limit=limit)
         return (query, kwargs)
 
     def resolve_memory_id(self, memory_id: str) -> str:
@@ -212,7 +219,7 @@ def test_read_peek_and_maintenance_delegate_to_native_service() -> None:
     assert facade.search_memories_for_maintenance(
         "query",
         workspace_id="workspace-1",
-    ) == ("query", {"workspace_id": "workspace-1"})
+    ) == ("query", {"workspace_id": "workspace-1", "limit": 50})
     assert facade.resolve_memory_id("mem-1") == "resolved:mem-1"
 
 
