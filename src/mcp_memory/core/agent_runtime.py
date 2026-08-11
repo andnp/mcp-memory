@@ -10,6 +10,7 @@ from mcp_memory.context import (
     BackgroundTaskCapabilities,
     ProviderCapabilities,
     ProviderSelectionContext,
+    TaskQueueProtocol,
     TaskRuntimeCapabilities,
     TaskRuntimeContext,
 )
@@ -49,6 +50,8 @@ from mcp_memory.core.task_handlers import (
 )
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.curation_reconciliation import CurationReconciler
+from mcp_memory.core.ports.curation import CurationRepository
+from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
@@ -101,6 +104,9 @@ def build_runtime_task_worker(
             "Runtime task worker handler registry ready",
             extra={"handler_names": sorted(handlers), "handler_count": len(handlers)},
         )
+    curation_store = cast(CurationRepository | None, capabilities.mutation.curation)
+    maintenance_reads = _maintenance_reads_for_reconciliation(capabilities)
+    task_queue = cast(TaskQueueProtocol | None, capabilities.mutation.task_queue)
     return RuntimeTaskWorker(
         runtime_context,
         handlers=handlers,
@@ -109,14 +115,25 @@ def build_runtime_task_worker(
         retry_delay_seconds=DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS,
         curation_reconciler=(
             CurationReconciler(
-                cast(Any, capabilities.mutation.curation),
-                cast(Any, capabilities.mutation.relational_search),
-                task_queue=cast(Any, capabilities.mutation.task_queue),
+                curation_store,
+                maintenance_reads,
+                task_queue=task_queue,
             )
-            if capabilities.mutation.curation is not None
-            and capabilities.mutation.relational_search is not None
+            if curation_store is not None and maintenance_reads is not None
             else None
         ),
+    )
+
+
+def _maintenance_reads_for_reconciliation(
+    capabilities: TaskRuntimeCapabilities,
+) -> MaintenanceReadRepositoryLike | None:
+    retrieval = getattr(capabilities.memory, "memory_retrieval", None)
+    if callable(getattr(retrieval, "peek_memory", None)):
+        return cast(MaintenanceReadRepositoryLike, retrieval)
+    return cast(
+        MaintenanceReadRepositoryLike | None,
+        capabilities.mutation.relational_search,
     )
 
 
