@@ -156,14 +156,10 @@ def test_read_uses_typed_memory_id_resolution_before_legacy_search(
         metadata={},
         workspace_ids=[],
     )
-    monkeypatch.setattr(
-        memory_use_cases.ReadMemoryRecordOperation,
-        "execute",
-        lambda _operation, _memory_id: SimpleNamespace(
-            record=record,
-            relationships={},
-            superseded=[],
-        ),
+    legacy_search.read_memory = lambda _memory_id: SimpleNamespace(
+        record=record,
+        relationships={},
+        superseded=[],
     )
     telemetry_calls: list[dict[str, object]] = []
     telemetry = cast(

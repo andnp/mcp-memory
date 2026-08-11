@@ -61,7 +61,6 @@ from mcp_memory.application.skill_review_contract import (
     skill_review_ledger_entry,
     skill_review_ledger_snapshot_id,
 )
-from mcp_memory.relational.operations import ReadMemoryRecordOperation
 from mcp_memory.relational.search import (
     _to_relational_search_result,
 )
@@ -729,7 +728,6 @@ def _read_memory_record(
     if ctx.relational_search is None:
         return {"status": "error", "error": "relational_search_not_initialized"}
 
-    operation = ReadMemoryRecordOperation(ctx.relational_search)
     memory_id = arguments["memory_id"]
     include_relationships = arguments["include_relationships"]
     include_superseded = arguments["include_superseded"]
@@ -790,7 +788,7 @@ def _read_memory_record(
         )
         return cached_payload
     try:
-        result = operation.execute(memory_id)
+        result = ctx.relational_search.read_memory(memory_id)
     except Exception as error:
         if _shared_read_cache_enabled(ctx, caller_kind=caller_kind):
             cached_payload = _load_cached_read_fallback(ctx, memory_id, error=error)
