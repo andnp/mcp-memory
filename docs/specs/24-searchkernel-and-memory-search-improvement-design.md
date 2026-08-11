@@ -621,3 +621,102 @@ Before removing a migration path, record:
 
 The target is zero obsolete runtime branches, not deletion of historical facts
 needed to reconstruct or upgrade a supported database.
+
+## 12. Canonical retrieval target
+
+Legacy removal should converge on one application-owned retrieval service. The
+service owns request normalization, scope policy, SearchKernel pipeline
+composition, authoritative hydration, payload shaping, and structured
+diagnostics. SearchKernel remains responsible for provider-neutral retrieval
+orchestration; mcp-memory remains responsible for memory policy and authority.
+
+### 12.1 Target request path
+
+```text
+MCP / CLI / management request
+  -> typed MemorySearchRequest
+  -> canonical async application retrieval service
+  -> memory policy and scope filters
+  -> SearchKernel RecordSearchPipeline
+  -> authoritative hydration and redaction
+  -> one SearchExecutionDiagnostics serializer
+  -> caller-specific compact or debug payload
+```
+
+The canonical service must be usable by public MCP tools, internal
+maintenance tools, management views, CLI commands, and background workers.
+Those callers may choose different authorization, caching, or payload policies,
+but they must not construct independent retrieval pipelines or interpret
+SearchKernel outcomes through separate diagnostic grammars.
+
+### 12.2 Async core and sync boundary
+
+The retrieval core is asynchronous. It may await embedding, vector, graph,
+hydration, or provider work without blocking the daemon event loop. A single
+small `run_sync` adapter may remain at process boundaries that are inherently
+synchronous, such as a legacy CLI entry point or a synchronous management
+interface. That adapter:
+
+- accepts the same typed request as the async service;
+- invokes the canonical async service;
+- preserves the same result and diagnostic semantics;
+- runs through `asyncio.run` when no loop exists; and
+- uses a bounded worker bridge when called from an active loop.
+
+The sync adapter is a boundary mechanism, not a second retrieval
+implementation. It must not own a separate pipeline factory, cache policy,
+filter interpretation, or result serializer.
+
+### 12.3 Compatibility transition
+
+During migration, `MemoryRetrievalFacade` may remain as a thin adapter that
+implements the old port by delegating to the canonical service. It must stop
+owning behavior that belongs in the canonical service. In particular, the
+following must have one implementation:
+
+- request normalization and filter precedence;
+- standard and adaptive pipeline selection;
+- workspace, lifecycle, supersession, and ranking scope;
+- query embedding and derivative-cache ownership;
+- failure, missing-hydration, and degraded-result handling;
+- semantic-abstention calculation; and
+- debug and sampled diagnostic serialization.
+
+`RelationalMemorySearchService` should become a compatibility adapter over the
+same service before it is removed. Storage composition must expose the typed
+repository and canonical retrieval capability directly rather than constructing
+an older relational search object as the primary runtime service.
+
+### 12.4 One diagnostic contract
+
+Every caller that requests debug or operator evidence receives the same
+application-facing diagnostic semantics. The serializer must preserve at least:
+
+- candidate counts by lane;
+- enabled, budgeted, and skipped lanes;
+- failures, missing records, and degraded state;
+- semantic candidates, semantic-only candidates, abstention count, and
+  `semantic_abstained` where measurable;
+- raw lane overlap, multi-lane provenance, and final duplicates as separate
+  concepts;
+- cache and phase timings; and
+- hard workspace scope versus ranking workspace context.
+
+Caller-specific payloads may omit fields for compactness, but omission must be
+an explicit projection of the canonical contract rather than a second
+calculation. Diagnostic projection failure must never turn a successful search
+into a failed request.
+
+### 12.5 Target ownership boundary
+
+The cutover is complete when:
+
+1. SearchKernel is the only retrieval orchestrator;
+2. mcp-memory has one application retrieval service and one diagnostic
+   serializer;
+3. storage composition exposes typed repositories and capabilities rather
+   than `RelationalMemorySearchService`;
+4. sync callers use only the narrow boundary adapter;
+5. no caller depends on `MemoryRetrievalFacade` implementation details; and
+6. lifecycle, workspace, authorization, hydration, repair, cache freshness,
+   and payload redaction remain demonstrably application-owned.
