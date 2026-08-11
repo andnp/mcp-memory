@@ -12,10 +12,13 @@ from mcp_memory.application.ports import (
     RetrievalTelemetryPort,
 )
 from mcp_memory.core.journal_operations import RecordThoughtOperation
-from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.core.retrieval import RetrievalRequest
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalFacade,
+    build_memory_retrieval_facade,
+)
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEARCH_POLICY_VERSION,
-    build_memory_record_pipeline,
 )
 from mcp_memory.application.cache_policy import (
     _CACHE_SEARCH_EPOCHS_FIELD,
@@ -58,7 +61,6 @@ from mcp_memory.relational.operations import (
 )
 from mcp_memory.relational.search import (
     _to_relational_search_result,
-    build_search_scope_diagnostics,
 )
 from mcp_memory.storage.skill_review import (
     PostgresSkillReviewCommitStore,
@@ -593,26 +595,43 @@ async def _search_memory_records_async(
     phase_timings_ms = _new_search_phase_timings()
     repair_health_before = _embedding_repair_health_snapshot(ctx)
     authoritative_search_started = perf_counter()
-    pipeline = build_memory_record_pipeline(
-        ctx.repository,
-        vector_store=ctx.vector_store,
-        embedder=ctx.embedder,
-        embedding_maintenance=ctx.embedding_maintenance,
-        adaptive_enabled=arguments.get("adaptive_limit", "limit" not in arguments),
-        config=ctx.config,
-    )
-    outcome = await pipeline.search(
-        query,
+    retrieval = ctx.memory_retrieval
+    if not isinstance(retrieval, MemoryRetrievalFacade):
+        retrieval = build_memory_retrieval_facade(
+            ctx.repository,
+            config=ctx.config,
+            vector_store=ctx.vector_store,
+            embedder=ctx.embedder,
+            embedding_maintenance=ctx.embedding_maintenance,
+            native_search=ctx.relational_search,
+        )
+    retrieval_request = RetrievalRequest(
+        query=query,
         limit=limit,
-        filters={
-            "workspace_id": arguments.get("workspace_id"),
-            "_ranking_workspace_id": ctx.workspace_id,
-            "memory_type": arguments["memory_type"],
-            "status": arguments["status"],
-            "include_superseded": arguments["include_superseded"],
-            "retrieval_mode": arguments.get("retrieval_mode", "hybrid"),
-        },
+        adaptive_limit=arguments.get("adaptive_limit", "limit" not in arguments),
+        workspace_id=arguments.get("workspace_id"),
+        memory_type=arguments["memory_type"],
+        status=arguments["status"],
+        tags=arguments["tags"],
+        include_superseded=arguments["include_superseded"],
     )
+    retrieval_filters = {
+        "_ranking_workspace_id": ctx.workspace_id,
+        "retrieval_mode": arguments.get("retrieval_mode", "hybrid"),
+    }
+    diagnostics = None
+    if arguments["debug"]:
+        outcome, diagnostics = await retrieval.search_with_diagnostics(
+            retrieval_request,
+            filters=retrieval_filters,
+            debug=True,
+        )
+    else:
+        typed_result = await retrieval.retrieve(
+            retrieval_request,
+            filters=retrieval_filters,
+        )
+        outcome = typed_result.items[0]
     phase_timings_ms["authoritative_search"] = _elapsed_timing_ms(
         authoritative_search_started
     )
@@ -644,31 +663,18 @@ async def _search_memory_records_async(
     }
     if arguments["debug"]:
         timing_ms = {"total": round(duration_ms, 3)}
-        timing_ms.update(
-            {
-                stage: round(duration, 3)
-                for stage, duration in outcome.stage_timings_ms.items()
+        if diagnostics is not None:
+            timing_ms |= {
+                key: value
+                for key, value in diagnostics.timing_ms.items()
+                if key != "total"
             }
-        )
-        timing_ms.update(phase_timings_ms)
-        payload["search_diagnostics"] = {
-            "kernel_failures": [
-                {
-                    "stage": failure.stage,
-                    "message": failure.message,
-                    "exception_type": failure.exception_type,
-                }
-                for failure in outcome.failures
-            ],
-            "missing_record_ids": list(outcome.missing_record_ids),
-            "degraded": outcome.degraded,
-            "pipeline_diagnostics": list(pipeline.diagnostics.reasons),
-            "timing_ms": timing_ms,
-            "scope": build_search_scope_diagnostics(
-                workspace_id=arguments.get("workspace_id"),
-                ranking_workspace_id=ctx.workspace_id,
-            ),
-        }
+            timing_ms |= phase_timings_ms
+            diagnostics_payload = diagnostics.to_payload()
+            diagnostics_payload["timing_ms"] = timing_ms
+            payload["search_diagnostics"] = diagnostics_payload
+        else:
+            timing_ms |= phase_timings_ms
         payload["timing_ms"] = timing_ms
         payload["adaptive_limit_enabled"] = arguments.get(
             "adaptive_limit",
