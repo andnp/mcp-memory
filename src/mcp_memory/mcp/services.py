@@ -40,7 +40,6 @@ from mcp_memory.mcp.telemetry import (
     _record_search_invocation,
     _retrieval_telemetry_repository,
 )
-from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
@@ -235,5 +234,4 @@ __all__ = [
     "_record_search_invocation",
     "_retrieval_telemetry_repository",
     "_load_validated_cached_projection_entries",
-    "SearchMemoryRecordsOperation",
 ]

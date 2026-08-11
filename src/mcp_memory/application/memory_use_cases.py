@@ -19,6 +19,8 @@ from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalFacade,
     MemoryRetrievalPort,
     MemorySearchRequest,
+    SearchExecutionDiagnostics,
+    build_search_execution_diagnostics,
     build_memory_retrieval_facade,
 )
 from mcp_memory.integrations.searchkernel_record_pipeline import (
@@ -59,10 +61,7 @@ from mcp_memory.application.skill_review_contract import (
     skill_review_ledger_entry,
     skill_review_ledger_snapshot_id,
 )
-from mcp_memory.relational.operations import (
-    ReadMemoryRecordOperation,
-    SearchMemoryRecordsOperation,
-)
+from mcp_memory.relational.operations import ReadMemoryRecordOperation
 from mcp_memory.relational.search import (
     _to_relational_search_result,
 )
@@ -410,30 +409,36 @@ def _search_memory_records(
                             in (getattr(diagnostics, "final_duplicate_ids", None) or [])
                         )
             elif debug_enabled:
-                operation = SearchMemoryRecordsOperation(retrieval)
-                operation_arguments = {
-                    key: value
-                    for key, value in execution_arguments.items()
-                    if key != "retrieval_mode"
-                }
-                if debug_enabled:
-                    results, diagnostics = operation.execute_with_diagnostics(
-                        **operation_arguments
+                started_at = perf_counter()
+                outcome = retrieval_port.search_sync(request)
+                raw_search_results = outcome.results
+                total_ms = (perf_counter() - started_at) * 1000.0
+                try:
+                    diagnostics = build_search_execution_diagnostics(
+                        outcome,
+                        workspace_id=request.workspace_id,
+                        ranking_workspace_id=request.ranking_workspace_id,
+                        total_ms=total_ms,
+                        debug=True,
                     )
-                else:
-                    results = operation.execute(**operation_arguments)
+                except AttributeError:
+                    diagnostics = SearchExecutionDiagnostics(
+                        timing_ms={"total": round(total_ms, 3)},
+                    )
+                results = [_to_relational_search_result(result) for result in outcome.results]
+                for result in results:
+                    if result.ranking_debug is not None:
+                        result.ranking_debug["final_duplicate"] = (
+                            result.memory_id in (diagnostics.final_duplicate_ids or [])
+                        )
             elif typed_search:
                 outcome = retrieval_port.search_sync(request)
                 raw_search_results = outcome.results
                 results = [_to_relational_search_result(result) for result in outcome.results]
             else:
-                operation = SearchMemoryRecordsOperation(retrieval)
-                operation_arguments = {
-                    key: value
-                    for key, value in execution_arguments.items()
-                    if key != "retrieval_mode"
-                }
-                results = operation.execute(**operation_arguments)
+                outcome = retrieval_port.search_sync(request)
+                raw_search_results = outcome.results
+                results = [_to_relational_search_result(result) for result in outcome.results]
         elif debug_enabled:
             outcome, diagnostics = retrieval.search_sync_with_diagnostics(
                 query,

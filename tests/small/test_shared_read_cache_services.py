@@ -1642,32 +1642,11 @@ def test_search_memory_records_service_debug_bypasses_fresh_cache_hit(
     )
     search_service = CountingSearchService()
     ctx = _build_context(read_cache=cache, relational_search=search_service)
-    original_execute_with_diagnostics = services_module.SearchMemoryRecordsOperation.execute_with_diagnostics
-
-    def _fake_execute_with_diagnostics(self, **kwargs):
-        del self
-        results = search_service.search_memories(**kwargs)
-        diagnostics = SimpleNamespace(timing_ms={"total": 1.0}, to_payload=lambda: {"mode": "debug"})
-        return results, diagnostics
-
-    monkeypatch.setattr(
-        services_module.SearchMemoryRecordsOperation,
-        "execute_with_diagnostics",
-        _fake_execute_with_diagnostics,
-    )
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
-
-    try:
-        response = search_memory_records_service(ctx, {"query": "warm cache", "debug": True})
-    finally:
-        monkeypatch.setattr(
-            services_module.SearchMemoryRecordsOperation,
-            "execute_with_diagnostics",
-            original_execute_with_diagnostics,
-        )
+    response = search_memory_records_service(ctx, {"query": "warm cache", "debug": True})
 
     assert response["status"] == "ok"
-    assert response["search_diagnostics"] == {"mode": "debug"}
+    assert "timing_ms" in response["search_diagnostics"]
     assert search_service.calls == 1
 
 
@@ -1678,31 +1657,10 @@ def test_search_memory_records_service_debug_call_does_not_warm_projection_rows(
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     search_service = ProjectionAwareSearchService(token_by_memory_id={"memory-1": "token-1"})
     ctx = _build_context(read_cache=cache, relational_search=search_service)
-    original_execute_with_diagnostics = services_module.SearchMemoryRecordsOperation.execute_with_diagnostics
-
-    def _fake_execute_with_diagnostics(self, **kwargs):
-        del self
-        results = search_service.search_memories(**kwargs)
-        diagnostics = SimpleNamespace(timing_ms={"total": 1.0}, to_payload=lambda: {"mode": "debug"})
-        return results, diagnostics
-
-    monkeypatch.setattr(
-        services_module.SearchMemoryRecordsOperation,
-        "execute_with_diagnostics",
-        _fake_execute_with_diagnostics,
-    )
-
-    try:
-        response = search_memory_records_service(ctx, {"query": "warm cache", "debug": True})
-    finally:
-        monkeypatch.setattr(
-            services_module.SearchMemoryRecordsOperation,
-            "execute_with_diagnostics",
-            original_execute_with_diagnostics,
-        )
+    response = search_memory_records_service(ctx, {"query": "warm cache", "debug": True})
 
     assert response["status"] == "ok"
-    assert response["search_diagnostics"] == {"mode": "debug"}
+    assert "timing_ms" in response["search_diagnostics"]
     assert search_service.validation_calls == []
     assert cache.load_projection_entry("memory-1") is None
 
@@ -1958,26 +1916,8 @@ def test_search_memory_records_service_projection_fallback_is_disabled_for_inter
     with pytest.raises(TimeoutError, match="authoritative search timed out"):
         search_memory_records_service(ctx, {"query": "warm cache"}, caller_kind="internal")
 
-    original_execute_with_diagnostics = services_module.SearchMemoryRecordsOperation.execute_with_diagnostics
-
-    def _failing_execute_with_diagnostics(self, **kwargs):
-        del self, kwargs
-        raise TimeoutError("authoritative search timed out")
-
-    monkeypatch.setattr(
-        services_module.SearchMemoryRecordsOperation,
-        "execute_with_diagnostics",
-        _failing_execute_with_diagnostics,
-    )
-    try:
-        with pytest.raises(TimeoutError, match="authoritative search timed out"):
-            search_memory_records_service(ctx, {"query": "warm cache", "debug": True})
-    finally:
-        monkeypatch.setattr(
-            services_module.SearchMemoryRecordsOperation,
-            "execute_with_diagnostics",
-            original_execute_with_diagnostics,
-        )
+    with pytest.raises(TimeoutError, match="authoritative search timed out"):
+        search_memory_records_service(ctx, {"query": "warm cache", "debug": True})
 
 
 def test_shared_read_cache_projection_search_respects_filters_and_ignores_tokenless_rows(

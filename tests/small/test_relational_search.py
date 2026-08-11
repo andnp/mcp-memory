@@ -20,7 +20,6 @@ from mcp_memory.integrations.memory_retrieval import (
     build_search_execution_diagnostics,
 )
 from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.relational.search import (
     RelationalMemorySearchService,
     SearchExecutionDiagnostics,
@@ -242,15 +241,8 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
             return SimpleNamespace(results=[search_result])
 
     expected = _to_relational_search_result(cast(RecordSearchResult, search_result))
-    actual = SearchMemoryRecordsOperation(cast(MemoryRetrievalPort, _Retrieval())).execute(
-        query="mapped result",
-        workspace_id=None,
-        limit=5,
-        adaptive_limit=False,
-        memory_type=None,
-        status=None,
-        include_superseded=False,
-    )[0]
+    outcome = cast(MemoryRetrievalPort, _Retrieval()).search_sync("mapped result")
+    actual = _to_relational_search_result(outcome.results[0])
 
     assert actual == expected
     assert actual.memory_ref == 42
