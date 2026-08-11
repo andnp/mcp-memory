@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from mcp_memory.context import MemoryPipelineContext, MemoryReadCapabilities
+from mcp_memory.context import MemoryReadCapabilities
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.utils.db import DatabaseManager
@@ -19,23 +19,6 @@ class RuntimeInfoFacade:
     runtime_active: bool
     client_count: int
     task_queue_enabled: bool
-
-    @classmethod
-    def from_context(
-        cls,
-        ctx: MemoryReadCapabilities | MemoryPipelineContext,
-        controller: Any | None = None,
-    ) -> RuntimeInfoFacade:
-        capabilities = (
-            ctx
-            if isinstance(ctx, MemoryReadCapabilities)
-            else MemoryReadCapabilities.from_context(ctx)
-        )
-        return cls.from_capabilities(
-            capabilities,
-            task_queue=getattr(ctx, "task_queue", None),
-            controller=controller,
-        )
 
     @classmethod
     def from_capabilities(
@@ -61,11 +44,6 @@ class RuntimeInfoFacade:
 class JournalFacade:
     journal: System1Journal | None
 
-    @classmethod
-    def from_context(cls, ctx: MemoryReadCapabilities | MemoryPipelineContext) -> JournalFacade:
-        journal = None if isinstance(ctx, MemoryReadCapabilities) else ctx.journal
-        return cls(journal=cast(System1Journal | None, journal))
-
     def count_by_status(self) -> dict[str, int]:
         if self.journal is None:
             return {}
@@ -75,10 +53,6 @@ class JournalFacade:
 @dataclass(frozen=True)
 class TaskQueueFacade:
     task_queue: TaskQueue | None
-
-    @classmethod
-    def from_context(cls, ctx: MemoryPipelineContext) -> TaskQueueFacade:
-        return cls(task_queue=cast(TaskQueue | None, ctx.task_queue))
 
     def count_by_status(self) -> dict[str, int]:
         if self.task_queue is None:
