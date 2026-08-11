@@ -364,6 +364,7 @@ def _search_memory_records(
         )
         return _compact_cached_search_payload(coalesced_payload)
     diagnostics = None
+    raw_search_results: Sequence[object] | None = None
     repair_health_before = _embedding_repair_health_snapshot(ctx)
     authoritative_search_started = perf_counter()
     try:
@@ -374,7 +375,30 @@ def _search_memory_records(
                 for key, value in execution_arguments.items()
                 if key != "retrieval_mode"
             }
-            if debug_enabled:
+            if debug_enabled and callable(
+                getattr(retrieval, "search_sync_with_diagnostics", None)
+            ):
+                outcome, diagnostics = retrieval.search_sync_with_diagnostics(
+                    query,
+                    limit=execution_arguments["limit"],
+                    adaptive_limit=execution_arguments["adaptive_limit"],
+                    workspace_id=execution_arguments["workspace_id"],
+                    memory_type=execution_arguments["memory_type"],
+                    status=execution_arguments["status"],
+                    tags=execution_arguments["tags"],
+                    include_superseded=execution_arguments["include_superseded"],
+                    ranking_workspace_id=execution_arguments["ranking_workspace_id"],
+                    debug=True,
+                )
+                raw_search_results = outcome.results
+                results = [_to_relational_search_result(result) for result in outcome.results]
+                for result in results:
+                    if result.ranking_debug is not None:
+                        result.ranking_debug["final_duplicate"] = (
+                            result.memory_id
+                            in (getattr(diagnostics, "final_duplicate_ids", None) or [])
+                        )
+            elif debug_enabled:
                 results, diagnostics = operation.execute_with_diagnostics(
                     **operation_arguments
                 )
@@ -394,6 +418,7 @@ def _search_memory_records(
                 filters={"retrieval_mode": execution_arguments["retrieval_mode"]},
                 debug=True,
             )
+            raw_search_results = outcome.results
             results = [_to_relational_search_result(result) for result in outcome.results]
         else:
             outcome = retrieval.search_sync(
@@ -469,7 +494,9 @@ def _search_memory_records(
         duration_ms=duration_ms,
     )
     result_payloads = build_search_result_payloads(
-        results, debug_enabled=debug_enabled
+        results,
+        debug_enabled=debug_enabled,
+        raw_results=raw_search_results,
     )
     payload: dict[str, object] = {
         "status": "ok",
@@ -597,6 +624,7 @@ async def _search_memory_records_async(
         _to_relational_search_result(result)
         for result in outcome.results
     ]
+    raw_search_results: Sequence[object] | None = outcome.results
     surfaced_memory_ids = [result.memory_id for result in results]
     duration_ms = (perf_counter() - started_at) * 1000.0
     telemetry.record_search(
@@ -611,6 +639,7 @@ async def _search_memory_records_async(
         "results": build_search_result_payloads(
             results,
             debug_enabled=arguments["debug"],
+            raw_results=raw_search_results,
         ),
     }
     if arguments["debug"]:

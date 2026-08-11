@@ -184,7 +184,10 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
                         "description": "Return records that have every listed tag.",
                     },
                     "include_superseded": {"type": "boolean"},
-                    "debug": {"type": "boolean"},
+                    "debug": {
+                        "type": "boolean",
+                        "description": "Opt-in diagnostics with bounded per-result evidence.",
+                    },
                     "retrieval_mode": {
                         "type": "string",
                         "enum": list(RETRIEVAL_MODES),

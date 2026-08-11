@@ -120,6 +120,82 @@ class _SemanticRetrieval:
         return SimpleNamespace(results=[SimpleNamespace(record=record, score=0.9, provenance=provenance)])
 
 
+class _DebugSemanticRetrieval:
+    def search_sync_with_diagnostics(self, query: str, **kwargs: object) -> tuple[SimpleNamespace, SimpleNamespace]:
+        _ = query, kwargs
+        record = SimpleNamespace(
+            source_id="memory-1",
+            title="Semantic result",
+            body="semantic body",
+            metadata={
+                "memory_ref": 1,
+                "summary": "semantic summary",
+                "memory_type": "fact",
+                "memory_status": "active",
+                "tags": [],
+                "workspace_ids": [],
+            },
+            status=SimpleNamespace(value="active"),
+            storage_key="memory:memory-1",
+        )
+        provenance = SimpleNamespace(
+            strategies=("keyword", "vector"),
+            community_boost=1.2,
+            project_uplift=None,
+            to_dict=lambda: {"strategies": ["keyword", "vector"]},
+        )
+        result = SimpleNamespace(
+            record=record,
+            score=0.9,
+            normalized_score=0.75,
+            provenance=provenance,
+            chunk_matches=(SimpleNamespace(score=0.8, content="x" * 400),),
+        )
+        outcome = SimpleNamespace(results=(result,))
+        diagnostics = SimpleNamespace(
+            timing_ms={"total": 1.0},
+            final_duplicate_ids=[],
+            to_payload=lambda: {"timing_ms": {"total": 1.0}},
+        )
+        return outcome, diagnostics
+
+
+def test_search_use_case_debug_includes_bounded_search_evidence() -> None:
+    """Carry raw SearchKernel evidence into debug results without changing compact mode."""
+    retrieval = _DebugSemanticRetrieval()
+    ctx = MemoryReadDependencies(
+        workspace_id="workspace-1",
+        relational_search=cast(
+            MemorySearchPort,
+            SimpleNamespace(get_health=lambda: None),
+        ),
+        memory_retrieval=retrieval,
+    )
+    telemetry = cast(RetrievalTelemetryPort, SimpleNamespace(record_search=lambda **_: None))
+
+    payload = SearchMemoryRecordsUseCase(ctx, telemetry).execute(
+        {
+            "query": "semantic retrieval",
+            "workspace_id": None,
+            "limit": 5,
+            "adaptive_limit": True,
+            "memory_type": None,
+            "status": None,
+            "tags": (),
+            "include_superseded": False,
+            "debug": True,
+            "retrieval_mode": "semantic",
+        }
+    )
+
+    evidence = payload["results"][0]["ranking_debug"]["evidence"]
+    assert evidence["lanes"] == ["keyword", "semantic"]
+    assert evidence["normalized_score"] == 0.75
+    assert evidence["score_adjustments"] == {"community_boost": 1.2}
+    assert len(evidence["excerpts"]) == 1
+    assert len(evidence["excerpts"][0]["content"]) == 240
+
+
 def test_search_use_case_propagates_non_default_mode_to_canonical_filters() -> None:
     """Pass an opt-in retrieval mode through the canonical SearchKernel filters.
 
