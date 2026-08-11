@@ -6,13 +6,13 @@ from typing import Any
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.mcp.transport import dispatch_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
-from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 
 pytestmark = pytest.mark.medium
 

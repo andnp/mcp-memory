@@ -20,7 +20,7 @@ from mcp_memory.embeddings import EmbeddingRecord, SQLiteVectorStore
 from mcp_memory.management.health_reporting import build_search_health
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
-from mcp_memory.work_item_store import SQLiteWorkItemRepository
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 
 pytestmark = pytest.mark.small
 

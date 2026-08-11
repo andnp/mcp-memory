@@ -6,6 +6,7 @@ import json
 import pytest
 
 from mcp_memory.core.journal import _ALL_WORKSPACES
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC
 from mcp_memory.embedding_integrity_event_store import (
     EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
     EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
@@ -15,7 +16,6 @@ from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbedding
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
-from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC
 from searchkernel.utils.similarity import cosine_similarity_lists
 from tests.small.work_item_repository_contract import (
     assert_claim_batch_orders_ready_items,

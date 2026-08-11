@@ -12,16 +12,16 @@ from mcp_memory.core.curation_models import (
 )
 from mcp_memory.core.curation_routing import MaintenanceFamily
 from mcp_memory.core.curation_validation import CurationSpecialistRoute
+from mcp_memory.core.ports.work_items import (
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_GRAPH_LINK_REVIEW,
+    WORK_FAMILY_OPERATOR_REVIEW,
+)
 from mcp_memory.core.task_handlers.maintenance_work_items import (
     enqueue_specialist_route,
     enqueue_specialist_routes,
 )
-from mcp_memory.work_item_store import (
-    EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_GRAPH_LINK_REVIEW,
-    WORK_FAMILY_OPERATOR_REVIEW,
-    SQLiteWorkItemRepository,
-)
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 
 pytestmark = pytest.mark.small
 

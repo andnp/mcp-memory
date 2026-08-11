@@ -102,6 +102,36 @@ async def test_source_uses_canonical_retrieval_and_preserves_provenance() -> Non
 
 
 @pytest.mark.asyncio
+async def test_source_returns_canonical_identity_and_contract() -> None:
+    """The memory source answers the federation request with its v1 identity."""
+    source = MemoryFederationSource(cast(Any, RetrievalDouble([])))
+
+    response = await source.search(SearchRequest(query="query"))
+
+    assert response.source == source.source_identity
+    assert response.contract_version == "v1"
+
+
+@pytest.mark.asyncio
+async def test_source_propagates_side_effect_free_retrieval_control() -> None:
+    """Side-effect-free federation searches stay side-effect-free in retrieval."""
+    retrieval = RetrievalDouble([])
+    source = MemoryFederationSource(cast(Any, retrieval), side_effect_free=True)
+
+    await source.search(SearchRequest(query="query"))
+
+    assert retrieval.request == {
+        "query": "query",
+        "limit": 10,
+        "workspace_id": None,
+        "memory_type": None,
+        "status": None,
+        "include_superseded": False,
+        "side_effect_free": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_source_authorization_filters_hits_before_text_exposure() -> None:
     retrieval = RetrievalDouble([_result("allowed"), _result("denied")])
     source = MemoryFederationSource(

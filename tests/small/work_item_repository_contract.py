@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WorkItemRecord
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC, WorkItemRecord
 
 
 class WorkItemRepositoryLike(Protocol):

@@ -11,7 +11,6 @@ FORBIDDEN = {
     "mcp_memory.storage",
     "mcp_memory.runtime",
     "mcp_memory.runtime_facades",
-    "mcp_memory.work_item_store",
     "mcp_memory.provider_usage_store",
     "mcp_memory.task_execution_store",
 }
@@ -49,10 +48,6 @@ ALLOWED_COMPATIBILITY_IMPORTS = {
     ("curation.py", "mcp_memory.curation_action_store", "CurationActionTransientError"),
     ("curation.py", "mcp_memory.curation_action_store", "MutationResult"),
     ("maintenance.py", "mcp_memory.relational.search", "MaintenanceReadRepositoryLike"),
-    ("work_items.py", "mcp_memory.work_item_store", "COMPATIBILITY_GROUP_STRUCTURAL_REVIEW"),
-    ("work_items.py", "mcp_memory.work_item_store", "EXECUTION_LANE_AGENTIC"),
-    ("work_items.py", "mcp_memory.work_item_store", "WORK_FAMILY_MEMORY_CURATION_REVIEW"),
-    ("work_items.py", "mcp_memory.work_item_store", "compatibility_group_families"),
 }
 
 

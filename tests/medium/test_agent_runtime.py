@@ -38,6 +38,7 @@ from mcp_memory.core.agent_runtime import (
 from mcp_memory.core.maintenance_schedule import RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.task_handlers.curator_support import (
     CURATOR_MAX_MEMORY_CHARS,
@@ -64,10 +65,6 @@ from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.work_item_store import (
-    EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_MEMORY_CURATION_REVIEW,
-)
 from tests.sdk.providers import FakeAIProvider
 
 

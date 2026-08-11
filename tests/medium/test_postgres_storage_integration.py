@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC
 from mcp_memory.core.direct_mutation_evidence import DirectMutationEntityDelta, DirectMutationEvidence
 from mcp_memory.core.agent_runtime import (
     FACT_CHECKER_TASK_NAME,
@@ -46,7 +47,6 @@ from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecuti
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
-from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC
 from tests.small.work_item_repository_contract import (
     assert_claim_batch_orders_ready_items,
     assert_enqueue_unique_deduplicates_idempotency_keys,

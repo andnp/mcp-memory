@@ -33,7 +33,7 @@ from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 from mcp_memory.storage.shared_read_cache import SharedReadCache
-from mcp_memory.work_item_store import SQLiteWorkItemRepository
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 
 
 pytestmark = pytest.mark.small

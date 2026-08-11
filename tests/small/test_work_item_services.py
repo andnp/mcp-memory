@@ -3,16 +3,13 @@ from __future__ import annotations
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_TAGGING
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, TAXONOMIST_TASK_NAME
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.transport import internal_tool_services
 from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.work_item_store import (
-    EXECUTION_LANE_AGENTIC,
-    SQLiteWorkItemRepository,
-    WORK_FAMILY_MEMORY_TAGGING,
-)
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 from tests.small.work_item_repository_contract import (
     assert_claim_batch_orders_ready_items,
     assert_enqueue_unique_deduplicates_idempotency_keys,
