@@ -28,6 +28,13 @@ if TYPE_CHECKING:
         TaskExecutionAttemptPort,
         TaskExecutionAttemptRecordLike,
     )
+    from .search import (
+        EmbeddingMaintenancePort,
+        MemoryIDResolutionPort,
+        ReadCacheValidationPort,
+        SearchHealthPort,
+        StartupHealthPort,
+    )
     from .work_items import WorkItemRecord, WorkItemRecordLike, WorkItemRepository
     from .tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 
