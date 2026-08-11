@@ -16,6 +16,7 @@ from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
+from searchkernel.runtime import QueryEmbeddingCache
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
@@ -52,6 +53,7 @@ def build_sqlite_runtime_components(
     task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
     work_items = SQLiteWorkItemRepository(db_manager)
     embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
+    query_embedding_cache = QueryEmbeddingCache()
     embedding_maintenance = MemoryEmbeddingMaintenance(
         repository,
         spec.config,
@@ -74,6 +76,7 @@ def build_sqlite_runtime_components(
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
         embedding_maintenance=embedding_maintenance,
+        query_embedding_cache=query_embedding_cache,
         background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
     )
     embedding_maintenance.run_startup_health_check()

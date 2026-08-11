@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchResult
 
 from mcp_memory.config import Config
@@ -183,6 +184,7 @@ class RelationalMemorySearchService(
         embedding_repair_queue=None,
         background_repair_wait_seconds: float = 0.0,
         embedding_maintenance: MemoryEmbeddingMaintenance | None = None,
+        query_embedding_cache: QueryEmbeddingCache | None = None,
     ) -> None:
         if embedding_maintenance is None:
             from mcp_memory.application.memory_embedding_maintenance import (
@@ -206,6 +208,7 @@ class RelationalMemorySearchService(
         self._vector_store = vector_store
         self._db_manager = db_manager
         self._embedding_maintenance = embedding_maintenance
+        self._query_embedding_cache = query_embedding_cache or QueryEmbeddingCache()
         memory_repository = cast(MemoryRepositoryPort, repository)
         self._health = SearchHealthStatus(
             semantic_enabled=embedder is not None and vector_store is not None,
@@ -219,12 +222,14 @@ class RelationalMemorySearchService(
         )
         self._retrieval_facade = MemoryRetrievalFacade(
             memory_repository,
+            query_embedding_cache=self._query_embedding_cache,
             native_search=self,
             pipeline_factory=lambda adaptive_enabled: build_memory_record_pipeline(
                 memory_repository,
                 vector_store=self._vector_store,
                 embedder=self._embedder,
                 embedding_maintenance=self._embedding_maintenance,
+                query_embedding_cache=self._query_embedding_cache,
                 adaptive_enabled=adaptive_enabled,
                 config=self._config,
             ),

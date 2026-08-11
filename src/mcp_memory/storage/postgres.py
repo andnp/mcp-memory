@@ -38,6 +38,7 @@ from mcp_memory.storage.postgres_ingress_quality_store import PostgresIngressQua
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
+from searchkernel.runtime import QueryEmbeddingCache
 
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,7 @@ def build_postgres_runtime_components(
     task_execution_attempts = PostgresTaskExecutionAttemptRepository(connection_manager, workspace_id=spec.workspace_id)
     work_items = PostgresWorkItemRepository(connection_manager)
     embedding_repair_queue = PostgresEmbeddingRepairQueue(connection_manager)
+    query_embedding_cache = QueryEmbeddingCache()
     mutation_history = PostgresMutationHistoryStore(connection_manager)
     curation = PostgresCurationStore(connection_manager)
     curation_action_store = PostgresCurationActionStore(connection_manager)
@@ -200,6 +202,7 @@ def build_postgres_runtime_components(
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
         embedding_maintenance=embedding_maintenance,
+        query_embedding_cache=query_embedding_cache,
     )
     read_cache = None
     if spec.config.storage.cache.enabled and spec.config.storage.cache.mode in {"readonly", "writeback"}:
