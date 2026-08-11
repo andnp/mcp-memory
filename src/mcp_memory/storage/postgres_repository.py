@@ -608,12 +608,11 @@ class PostgresRelationalMemoryRepository:
 
     def list_skill_review_observations(
         self,
-        workspace_id: str,
         *,
         limit: int,
         offset: int,
     ) -> list[RelationalMemoryRecord]:
-        """List the authoritative open skill-observation ledger slice."""
+        """List the authoritative global open skill-observation ledger slice."""
         if limit <= 0 or offset < 0:
             raise ValueError("ledger limit and offset are invalid")
         query = """
@@ -622,9 +621,7 @@ class PostgresRelationalMemoryRepository:
                 memories.read_count, memories.access_score, memories.last_accessed_at,
                 memories.last_surfaced_at, memories.metadata, memories.memory_ref, memories.archived_at
             FROM memories
-            JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id
-            WHERE memory_workspaces.workspace_id = %s
-              AND memories.status = 'active'
+            WHERE memories.status = 'active'
               AND memories.type = 'observation'
               AND EXISTS (
                   SELECT 1
@@ -638,7 +635,7 @@ class PostgresRelationalMemoryRepository:
         """
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(query, (workspace_id, limit, offset))
+                cursor.execute(query, (limit, offset))
                 rows = cursor.fetchall()
                 memory_ids = [str(row[0]) for row in rows]
                 workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, memory_ids)

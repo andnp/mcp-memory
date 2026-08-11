@@ -1276,12 +1276,11 @@ class RelationalMemoryRepository:
 
     def list_skill_review_observations(
         self,
-        workspace_id: str,
         *,
         limit: int,
         offset: int,
     ) -> list[RelationalMemoryRecord]:
-        """List the authoritative open skill-observation ledger slice."""
+        """List the authoritative global open skill-observation ledger slice."""
         if limit <= 0 or offset < 0:
             raise ValueError("ledger limit and offset are invalid")
         conn = self._db.get_connection()
@@ -1289,9 +1288,7 @@ class RelationalMemoryRepository:
             """
             SELECT DISTINCT memories.*
             FROM memories
-            JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id
-            WHERE memory_workspaces.workspace_id = ?
-              AND memories.status = 'active'
+            WHERE memories.status = 'active'
               AND memories.type = 'observation'
               AND EXISTS (
                   SELECT 1
@@ -1303,7 +1300,7 @@ class RelationalMemoryRepository:
             ORDER BY memories.updated_at ASC, memories.created_at ASC, memories.id ASC
             LIMIT ? OFFSET ?
             """,
-            (workspace_id, limit, offset),
+            (limit, offset),
         ).fetchall()
         return [self._hydrate_record(conn, row) for row in rows]
 

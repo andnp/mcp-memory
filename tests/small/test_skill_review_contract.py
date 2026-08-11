@@ -89,7 +89,7 @@ def test_parse_skill_review_request_rejects_untouched_outcome() -> None:
 
 
 def test_parse_skill_review_ledger_request_accepts_bounded_cursor() -> None:
-    """Parse a bounded ledger page and preserve its snapshot cursor."""
+    """Parse a bounded global ledger page and preserve its snapshot cursor."""
     request = parse_skill_review_ledger_request(
         {
             "protocol_version": 1,
@@ -101,6 +101,13 @@ def test_parse_skill_review_ledger_request_accepts_bounded_cursor() -> None:
 
     assert request.page_size == 4
     assert ledger_token_parts(request.page_token) == ("a" * 64, 4)
+
+
+def test_parse_skill_review_ledger_request_allows_global_scope() -> None:
+    """Allow the shared ledger request to omit legacy workspace routing."""
+    request = parse_skill_review_ledger_request({"protocol_version": 1})
+
+    assert request.workspace_id is None
 
 
 def test_parse_skill_review_ledger_request_rejects_unbounded_cursor() -> None:

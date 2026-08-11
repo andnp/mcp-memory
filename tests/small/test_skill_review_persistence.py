@@ -122,7 +122,6 @@ def test_commit_skill_review_marks_bad_observation_stale_with_evidence(tmp_path:
 @pytest.mark.parametrize(
     ("override", "error"),
     [
-        ({"workspace_id": "other-workspace"}, "workspace_mismatch"),
         ({"memory_type": "fact", "tags": []}, "not_skill_observation"),
         ({"status": "stale"}, "observation_not_active"),
     ],
@@ -140,6 +139,16 @@ def test_commit_skill_review_rejects_ineligible_records(
     record = repository.get_memory("mem-1")
     assert record is not None
     assert record.status == str(override.get("status", "active"))
+
+
+def test_commit_skill_review_accepts_observations_from_any_workspace(tmp_path: Path) -> None:
+    """Treat ordinary memory workspaces as metadata, not ledger boundaries."""
+    _manager, repository, store = _store(tmp_path)
+    _observation(repository, "mem-1", workspace_id="other-workspace")
+
+    response = store.commit(_request("mem-1"))
+
+    assert response.dispositions[0].status == "archived"
 
 
 def test_commit_skill_review_rolls_back_when_a_later_update_fails(tmp_path: Path) -> None:

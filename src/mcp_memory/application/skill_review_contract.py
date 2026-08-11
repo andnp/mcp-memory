@@ -56,7 +56,7 @@ class SkillReviewDisposition:
 @dataclass(frozen=True)
 class SkillReviewCommitRequest:
     review_run_id: str
-    workspace_id: str
+    workspace_id: str | None
     evidence: SkillReviewEvidence
     dispositions: tuple[SkillReviewDisposition, ...]
     protocol_version: int = PROTOCOL_VERSION
@@ -109,7 +109,7 @@ class SkillReviewCommitResponse:
 
 @dataclass(frozen=True)
 class SkillReviewLedgerRequest:
-    workspace_id: str
+    workspace_id: str | None
     page_size: int
     page_token: str | None = None
     protocol_version: int = LEDGER_PROTOCOL_VERSION
@@ -120,7 +120,11 @@ def parse_skill_review_ledger_request(arguments: Mapping[str, object]) -> SkillR
     version = arguments.get("protocol_version")
     if isinstance(version, bool) or version != LEDGER_PROTOCOL_VERSION:
         raise ValueError("unsupported_ledger_protocol_version")
-    workspace_id = _required_text(arguments, "workspace_id")
+    workspace_id_value = arguments.get("workspace_id")
+    if workspace_id_value is None:
+        workspace_id = None
+    else:
+        workspace_id = _required_text(arguments, "workspace_id")
     page_size_value = arguments.get("page_size", LEDGER_PAGE_SIZE_MAX)
     if isinstance(page_size_value, bool) or not isinstance(page_size_value, int):
         raise ValueError("page_size must be an integer")
@@ -174,7 +178,11 @@ def parse_skill_review_commit_request(arguments: Mapping[str, object]) -> SkillR
             raise ValueError
     except ValueError as error:
         raise ValueError("review_run_id must be a UUID") from error
-    workspace_id = _required_text(arguments, "workspace_id")
+    workspace_id_value = arguments.get("workspace_id")
+    if workspace_id_value is None:
+        workspace_id = None
+    else:
+        workspace_id = _required_text(arguments, "workspace_id")
     evidence_value = arguments.get("evidence")
     if not isinstance(evidence_value, Mapping):
         raise ValueError("evidence must be an object")

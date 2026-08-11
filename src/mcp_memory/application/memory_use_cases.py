@@ -887,11 +887,7 @@ class ReadSkillReviewLedgerUseCase:
         repository = self._ctx.repository
         if repository is None:
             return {"status": "error", "error": "repository_not_initialized"}
-        records = repository.list_skill_review_observations(
-            request.workspace_id,
-            limit=100_000,
-            offset=0,
-        )
+        records = repository.list_skill_review_observations(limit=100_000, offset=0)
         entries = [skill_review_ledger_entry(record) for record in records]
         snapshot_id = skill_review_ledger_snapshot_id(entries)
         token_snapshot, offset = ledger_token_parts(request.page_token)

@@ -121,7 +121,7 @@ def _create_ledger_record(
 
 @pytest.mark.asyncio
 async def test_skill_review_ledger_filters_and_orders_authoritative_records(tmp_path: Path) -> None:
-    """Return only active observations carrying the required tag and workspace."""
+    """Return all active observations carrying the required global-ledger tag."""
     context = _context(tmp_path)
     _create_ledger_record(
         context,
@@ -171,12 +171,13 @@ async def test_skill_review_ledger_filters_and_orders_authoritative_records(tmp_
     payload = json.loads(contents[0].text)
 
     assert [record["memory_id"] for record in payload["records"]] == [
+        "wrong-workspace",
         "valid-early",
         "valid-late",
         "mem-123",
     ]
     assert all("content" not in record for record in payload["records"])
-    assert payload["total_count"] == 3
+    assert payload["total_count"] == 4
     assert payload["next_page_token"] is None
 
 

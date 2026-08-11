@@ -20,7 +20,6 @@ from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepos
 from mcp_memory.storage.skill_review import (
     PostgresSkillReviewCommitStore,
     SkillReviewCommitConflict,
-    SkillReviewCommitRejected,
 )
 
 
@@ -149,21 +148,18 @@ def test_postgres_skill_review_replays_identical_request_and_rejects_conflicts(p
         manager.close()
 
 
-def test_postgres_skill_review_rejects_ineligible_observation_without_mutation(postgres_storage_config) -> None:
-    """Reject a workspace mismatch before changing the observation.
-
-    Postgres must retain the same tenant-boundary validation as SQLite.
-    """
+def test_postgres_skill_review_accepts_observation_from_any_workspace(postgres_storage_config) -> None:
+    """Treat ordinary memory workspaces as metadata, not ledger boundaries."""
     manager, repository, store = _database(postgres_storage_config)
     try:
         _observation(repository, "mem-1", workspace_id="other-workspace")
 
-        with pytest.raises(SkillReviewCommitRejected, match="workspace_mismatch"):
-            store.commit(_request("mem-1"))
+        response = store.commit(_request("mem-1"))
 
         record = repository.get_memory("mem-1")
         assert record is not None
-        assert record.status == "active"
+        assert response.dispositions[0].status == "archived"
+        assert record.status == "archived"
     finally:
         manager.close()
 

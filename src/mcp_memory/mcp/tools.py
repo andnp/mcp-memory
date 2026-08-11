@@ -88,18 +88,18 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
         Tool(
             name="get_skill_review_ledger",
             description=(
-                "Return a deterministic, summary-first page of every open skill observation for one workspace. "
+                "Return a deterministic, summary-first page of the global open skill-observation ledger. "
                 "Use the returned next_page_token until it is null; page tokens are bound to the snapshot_id."
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "protocol_version": {"type": "integer", "const": 1},
-                    "workspace_id": {"type": "string"},
+                    "workspace_id": {"type": "string", "description": "Legacy field; ignored."},
                     "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
                     "page_token": {"type": "string"},
                 },
-                "required": ["protocol_version", "workspace_id"],
+                "required": ["protocol_version"],
             },
         ),
         Tool(
@@ -110,7 +110,7 @@ def get_memory_tools(tool_scope: str | None = None, *, include_writer_tools: boo
                 "properties": {
                     "protocol_version": {"type": "integer", "const": 2},
                     "review_run_id": {"type": "string"},
-                    "workspace_id": {"type": "string"},
+                    "workspace_id": {"type": "string", "description": "Legacy field; ignored."},
                     "evidence": {
                         "type": "object",
                         "properties": {

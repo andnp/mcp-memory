@@ -180,8 +180,6 @@ def _eligible_record(
         raise SkillReviewCommitRejected("not_skill_observation")
     if record.status != "active":
         raise SkillReviewCommitRejected("observation_not_active")
-    if request.workspace_id not in record.workspace_ids:
-        raise SkillReviewCommitRejected("workspace_mismatch")
     if record.metadata.get("skill") not in request.evidence.skills:
         raise SkillReviewCommitRejected("skill_mismatch")
     return record
