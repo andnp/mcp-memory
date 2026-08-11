@@ -4,12 +4,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import time
 from time import perf_counter
-from collections.abc import Callable, Iterable
 from typing import Any, cast
 from uuid import uuid4
 
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalPort,
+    MemorySearchRequest,
+    SearchExecutionDiagnostics,
+)
 from mcp_memory.management.models import (
     AIConversationListPayload,
     AIConversationPayload,
@@ -19,8 +23,7 @@ from mcp_memory.management.models import (
     MemorySearchResultPayload,
 )
 from mcp_memory.mcp.telemetry import record_search_diagnostics
-from mcp_memory.relational.operations import SearchMemoryRecordsOperation
-from mcp_memory.relational.search import RelationalSearchResult
+from mcp_memory.relational.search import _to_relational_search_result
 from mcp_memory.runtime_log_store import _AllWorkspacesSentinel
 from mcp_memory.serialization import (
     compact_memory_record_payload,
@@ -64,7 +67,7 @@ class MemoryServiceDependencies:
     memory_queries: Any
     repository: Any
     relational_search: MemorySearchPort | None
-    retrieval: Any
+    retrieval: MemoryRetrievalPort | None
     provider_usage_repo: Any
     retrieval_telemetry: Any
     runtime_logs: Any
@@ -134,43 +137,32 @@ class MemoryService:
         if dependencies.relational_search is None or dependencies.retrieval is None:
             return MemorySearchPayload()
         started_at = perf_counter()
-        operation = SearchMemoryRecordsOperation(dependencies.retrieval)
-        diagnostics: object | None = None
-        execute_with_diagnostics = getattr(operation, "execute_with_diagnostics", None)
-        retrieval_supports_diagnostics = callable(
-            getattr(dependencies.retrieval, "search_sync_with_diagnostics", None)
+        request = MemorySearchRequest(
+            query=query,
+            # Management search is global; workspace context must not filter results.
+            workspace_id=None,
+            limit=limit,
+            adaptive_limit=False,
+            ranking_workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
         )
-        if debug and callable(execute_with_diagnostics) and retrieval_supports_diagnostics:
-            typed_execute_with_diagnostics = cast(
-                Callable[..., tuple[Iterable[RelationalSearchResult], object]],
-                execute_with_diagnostics,
-            )
-            raw_results, diagnostics = typed_execute_with_diagnostics(
-                query=query,
-                # Management search is global; workspace context must not filter results.
-                workspace_id=None,
-                limit=limit,
-                adaptive_limit=False,
-                ranking_workspace_id=workspace_id,
-                memory_type=memory_type,
-                status=status,
-                include_superseded=include_superseded,
+        diagnostics: SearchExecutionDiagnostics | None = None
+        if debug:
+            outcome, diagnostics = dependencies.retrieval.search_sync_with_diagnostics(
+                request,
                 debug=True,
             )
-            results = list(raw_results)
+            results = [_to_relational_search_result(result) for result in outcome.results]
+            for result in results:
+                if result.ranking_debug is not None:
+                    result.ranking_debug["final_duplicate"] = result.memory_id in (
+                        diagnostics.final_duplicate_ids or []
+                    )
         else:
-            results = operation.execute(
-                query=query,
-                # Management search is global; workspace context must not filter results.
-                workspace_id=None,
-                limit=limit,
-                adaptive_limit=False,
-                ranking_workspace_id=workspace_id,
-                memory_type=memory_type,
-                status=status,
-                include_superseded=include_superseded,
-                debug=debug,
-            )
+            outcome = dependencies.retrieval.search_sync(request)
+            results = [_to_relational_search_result(result) for result in outcome.results]
         surfaced_memory_ids = [result.memory_id for result in results]
         touch_last_surfaced = getattr(dependencies.repository, "touch_last_surfaced", None)
         if surfaced_memory_ids and callable(touch_last_surfaced):
