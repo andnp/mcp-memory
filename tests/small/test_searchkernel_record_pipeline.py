@@ -428,8 +428,8 @@ async def test_missing_vector_or_embedder_degrades_to_keyword_pipeline() -> None
 
 
 @pytest.mark.asyncio
-async def test_diagnostic_planner_reports_keyword_only_lane() -> None:
-    """Expose the planner's keyword-only decision when semantic retrieval is absent."""
+async def test_diagnostic_planner_reports_keyword_graph_lanes() -> None:
+    """Expose keyword and graph lanes when semantic retrieval is absent."""
     pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", FakeRepository(keyword_ids=["active"]))
     )
@@ -442,14 +442,16 @@ async def test_diagnostic_planner_reports_keyword_only_lane() -> None:
     )
 
     assert diagnostics.lane_decisions is not None
-    assert diagnostics.lane_decisions["enabled"] == ["keyword"]
+    assert diagnostics.lane_decisions["enabled"] == ["keyword", "graph"]
     assert diagnostics.lane_decisions["budgets"] == {
         "keyword": 50,
         "vector": 50,
-        "graph_seeds": 3,
-        "rerank": 0,
+        "graph": 3,
     }
-    assert diagnostics.lane_decisions["skipped"] == ["vector:unavailable"]
+    assert diagnostics.lane_decisions["skipped"] == [
+        "vector:unavailable",
+        "graph:awaiting_seed_confidence",
+    ]
     assert diagnostics.candidate_counts == {"keyword": 1}
 
 
