@@ -6,7 +6,26 @@ from typing import Any, Mapping, Protocol
 from mcp_memory.core.ports import MemoryIDResolutionPort, ReadCacheValidationPort
 
 
-class MemorySearchPort(Protocol):
+class LegacyNativeSearchPort(Protocol):
+    def read_memory(self, memory_id: str) -> object: ...
+
+    def peek_memory(self, memory_id: str) -> object: ...
+
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> object: ...
+
+    def resolve_memory_id(self, memory_id: str) -> str | None: ...
+
+
+class MemorySearchPort(LegacyNativeSearchPort, Protocol):
     def get_health(self) -> Any: ...
 
     def read_memory(self, memory_id: str) -> Any: ...
