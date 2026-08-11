@@ -592,8 +592,3 @@ def _scope_conflict(scope: RestoreScope, inverse: InverseDescription) -> tuple[R
     if scope is RestoreScope.LINKS and inverse.link_changes and not inverse.record_changes:
         return None
     return RestoreConflictCode.UNSUPPORTED_OPERATION, "requested restore scope does not match the supported inverse"
-
-
-describe_inverse = build_inverse
-build_inverse_operation = build_inverse
-build_inverse_description = build_inverse
