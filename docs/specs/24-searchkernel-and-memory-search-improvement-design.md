@@ -721,6 +721,46 @@ The cutover is complete when:
 6. lifecycle, workspace, authorization, hydration, repair, cache freshness,
    and payload redaction remain demonstrably application-owned.
 
+### 12.6 Verified review findings
+
+The design review verified five constraints that sharpen the migration order.
+They are release gates, not optional implementation preferences:
+
+1. **Extract typed capabilities from `RelationalMemorySearchService`.** The
+   replacement must expose explicit retrieval, hydration, freshness, and
+   diagnostics capabilities at the application boundary. It must not move the
+   service's untyped database knowledge into a new facade or reproduce the
+   current `Any`-shaped dependency slot under another name.
+2. **Migrate asynchronous callers before delegating the facade.** Public MCP,
+   maintenance, management, CLI, and worker callers must first use the
+   canonical async request/response contract. Only after those callers are
+   migrated may `MemoryRetrievalFacade` delegate to it; otherwise the facade
+   hides unfinished caller migration and preserves a second behavior path.
+3. **Treat internal prompts and tool registration as contracts.** Curator,
+   maintenance, and other internal agents need versioned prompt/tool
+   registrations, allowed-tool sets, completion semantics, and compatibility
+   tests. Search migration cannot assume that an internal caller is safe to
+   change merely because it is not a public MCP method.
+4. **Gate cache schema and version changes with rollback evidence.** Cache
+   keys, payloads, freshness snapshots, policy versions, feature fingerprints,
+   and schema versions must be explicit. A cache-version change requires
+   invalidation or dual-read behavior, a rollback test, and proof that the
+   previous release can bypass or ignore the new derivative entries without
+   affecting authoritative memory data.
+5. **Prove async/sync parity and medium runtime behavior.** Equivalent async
+   and sync requests must produce equivalent identities, ordering, failures,
+   degradation, cache semantics, and diagnostics. Unit coverage is not enough:
+   caller migration and runtime composition require focused medium tests for
+   SQLite and configured Postgres/vector paths before a compatibility adapter
+   is removed.
+
+The resulting dependency rule is: establish typed capabilities and internal
+contracts, migrate async callers, prove parity in medium runtime tests, then
+delegate and eventually remove compatibility facades. Cache schema/version
+work must pass its rollback gate before any caller is switched to a new cache
+owner. The complete 83-commit sequence is recorded in
+[25-searchkernel-legacy-removal-commit-plan.md](25-searchkernel-legacy-removal-commit-plan.md).
+
 ## 13. Legacy removal sequence
 
 Legacy removal is a sequence of independently verifiable cutovers. Each phase
