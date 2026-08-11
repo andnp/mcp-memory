@@ -37,9 +37,6 @@ from mcp_memory.storage.factory import StorageBackendResources, build_storage_ru
 from mcp_memory.storage.types import StorageBootstrapSpec
 
 
-MCPRuntime = ApplicationContext
-
-
 @dataclass(frozen=True)
 class WorkspaceRuntimeSpec:
     memory_path: Path
