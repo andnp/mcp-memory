@@ -16,6 +16,12 @@ from searchkernel.search.record_pipeline import RecordSearchOutcome
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
+from mcp_memory.core.retrieval import (
+    RetrievalDiagnostics,
+    RetrievalFailure,
+    RetrievalRequest,
+    RetrievalResult,
+)
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     _ACTIVE_QUERY_EMBEDDING_CACHE,
@@ -411,7 +417,7 @@ def _lane_decisions(diagnostics: tuple[str, ...]) -> dict[str, object]:
 class MemoryRetrievalPort(Protocol):
     async def search(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -427,7 +433,7 @@ class MemoryRetrievalPort(Protocol):
 
     async def search_with_diagnostics(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -444,7 +450,7 @@ class MemoryRetrievalPort(Protocol):
 
     def search_sync(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -460,7 +466,7 @@ class MemoryRetrievalPort(Protocol):
 
     def search_sync_with_diagnostics(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -522,9 +528,40 @@ class MemoryRetrievalFacade:
         self._pipeline_factory = factory
         self._adaptive_pipeline: MemoryRecordSearchPipeline | None = None
 
+    async def retrieve(
+        self,
+        request: RetrievalRequest | str | Mapping[str, object],
+        *,
+        filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
+    ) -> RetrievalResult[RecordSearchOutcome]:
+        """Return the shared typed envelope without changing legacy search results."""
+        normalized = RetrievalRequest.normalize(request)
+        return await self._retrieve_typed(
+            normalized,
+            filters=filters,
+            side_effect_free=side_effect_free,
+        )
+
+    def retrieve_sync(
+        self,
+        request: RetrievalRequest | str | Mapping[str, object],
+        *,
+        filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
+    ) -> RetrievalResult[RecordSearchOutcome]:
+        """Use the same typed retrieval envelope at synchronous process edges."""
+        return _run_async_safely(
+            lambda: self.retrieve(
+                request,
+                filters=filters,
+                side_effect_free=side_effect_free,
+            )
+        )
+
     async def search(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -537,7 +574,7 @@ class MemoryRetrievalFacade:
         filters: dict[str, object] | None = None,
         side_effect_free: bool = False,
     ) -> RecordSearchOutcome:
-        request = self._normalize_request(
+        normalized_request = self._normalize_request(
             request,
             limit=limit,
             adaptive_limit=adaptive_limit,
@@ -548,6 +585,20 @@ class MemoryRetrievalFacade:
             include_superseded=include_superseded,
             ranking_workspace_id=ranking_workspace_id,
         )
+        typed_result = await self._retrieve_legacy_request(
+            normalized_request,
+            filters=filters,
+            side_effect_free=side_effect_free,
+        )
+        return typed_result.items[0]
+
+    async def _search_outcome(
+        self,
+        request: MemorySearchRequest,
+        *,
+        filters: dict[str, object] | None,
+        side_effect_free: bool,
+    ) -> RecordSearchOutcome:
         pipeline = self._resolve_pipeline(request.adaptive_limit)
         active_filters = dict(filters or {})
         if request.workspace_id is not None:
@@ -572,7 +623,7 @@ class MemoryRetrievalFacade:
 
     async def search_with_diagnostics(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -598,11 +649,12 @@ class MemoryRetrievalFacade:
             ranking_workspace_id=ranking_workspace_id,
         )
         started_at = perf_counter()
-        outcome = await self.search(
+        typed_result = await self._retrieve_legacy_request(
             normalized_request,
             filters=filters,
             side_effect_free=side_effect_free,
         )
+        outcome = typed_result.items[0]
         try:
             diagnostics = build_search_execution_diagnostics(
                 outcome,
@@ -618,15 +670,15 @@ class MemoryRetrievalFacade:
             )
             diagnostics = SearchExecutionDiagnostics(
                 timing_ms={"total": round((perf_counter() - started_at) * 1000.0, 3)},
-                failure_count=len(outcome.failures),
-                missing_record_count=len(outcome.missing_record_ids),
-                degraded=outcome.degraded,
+                failure_count=len(typed_result.diagnostics.failures),
+                missing_record_count=len(typed_result.diagnostics.missing_ids),
+                degraded=typed_result.diagnostics.degraded,
             )
         return outcome, diagnostics
 
     def search_sync(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -657,7 +709,7 @@ class MemoryRetrievalFacade:
 
     def search_sync_with_diagnostics(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -723,7 +775,7 @@ class MemoryRetrievalFacade:
 
     def _normalize_request(
         self,
-        request: MemorySearchRequest | str,
+        request: MemorySearchRequest | RetrievalRequest | str | Mapping[str, object],
         *,
         limit: int,
         adaptive_limit: bool,
@@ -736,6 +788,30 @@ class MemoryRetrievalFacade:
     ) -> MemorySearchRequest:
         if isinstance(request, MemorySearchRequest):
             return request
+        if isinstance(request, RetrievalRequest):
+            return MemorySearchRequest(
+                query=request.query,
+                limit=request.limit,
+                adaptive_limit=request.adaptive_limit,
+                workspace_id=request.workspace_id,
+                memory_type=request.memory_type,
+                status=request.status,
+                tags=request.tags,
+                include_superseded=request.include_superseded,
+            )
+        if isinstance(request, Mapping):
+            request = RetrievalRequest.normalize(request)
+            return self._normalize_request(
+                request,
+                limit=limit,
+                adaptive_limit=adaptive_limit,
+                workspace_id=workspace_id,
+                memory_type=memory_type,
+                status=status,
+                tags=tags,
+                include_superseded=include_superseded,
+                ranking_workspace_id=ranking_workspace_id,
+            )
         return MemorySearchRequest(
             query=request,
             limit=limit,
@@ -747,6 +823,78 @@ class MemoryRetrievalFacade:
             include_superseded=include_superseded,
             ranking_workspace_id=ranking_workspace_id,
         )
+
+    async def _retrieve_legacy_request(
+        self,
+        request: MemorySearchRequest,
+        *,
+        filters: dict[str, object] | None,
+        side_effect_free: bool,
+    ) -> RetrievalResult[RecordSearchOutcome]:
+        typed_request = RetrievalRequest(
+            query=request.query,
+            limit=request.limit,
+            workspace_id=request.workspace_id,
+            memory_type=request.memory_type,
+            status=request.status,
+            tags=request.tags,
+            include_superseded=request.include_superseded,
+            adaptive_limit=request.adaptive_limit,
+        )
+        active_filters = dict(filters or {})
+        if request.ranking_workspace_id is not None:
+            active_filters["_ranking_workspace_id"] = request.ranking_workspace_id
+        return await self._retrieve_typed(
+            typed_request,
+            filters=active_filters,
+            side_effect_free=side_effect_free,
+        )
+
+    async def _retrieve_typed(
+        self,
+        request: RetrievalRequest,
+        *,
+        filters: dict[str, object] | None,
+        side_effect_free: bool,
+    ) -> RetrievalResult[RecordSearchOutcome]:
+        started_at = perf_counter()
+        legacy_request = MemorySearchRequest(
+            query=request.query,
+            limit=request.limit,
+            adaptive_limit=request.adaptive_limit,
+            workspace_id=request.workspace_id,
+            memory_type=request.memory_type,
+            status=request.status,
+            tags=request.tags,
+            include_superseded=request.include_superseded,
+        )
+        outcome = await self._search_outcome(
+            legacy_request,
+            filters=filters,
+            side_effect_free=side_effect_free,
+        )
+        outcome_failures = getattr(outcome, "failures", ())
+        outcome_missing_ids = getattr(outcome, "missing_record_ids", ())
+        failures = tuple(
+            RetrievalFailure(
+                stage=getattr(failure, "stage", "unknown"),
+                message=getattr(failure, "message", str(failure)),
+                exception_type=getattr(
+                    failure, "exception_type", type(failure).__name__
+                ),
+            )
+            for failure in outcome_failures
+        )
+        diagnostics = RetrievalDiagnostics(
+            elapsed_ms=max((perf_counter() - started_at) * 1000.0, 0.0),
+            candidate_count=max(int(getattr(outcome, "candidate_count", 0)), 0),
+            returned_count=1,
+            degraded=bool(getattr(outcome, "degraded", False)),
+            failures=failures,
+            missing_ids=tuple(outcome_missing_ids),
+            details={"result_count": str(len(getattr(outcome, "results", ())))},
+        )
+        return RetrievalResult(items=(outcome,), diagnostics=diagnostics)
 
     def _native_method(self, name: str) -> Callable[..., Any]:
         if self._native_search is None:
