@@ -18,6 +18,13 @@ from mcp_memory.core.ports.memory import (
     MemoryRepositoryPort,
     parse_memory_ref,
 )
+from mcp_memory.core.ports.search import (
+    EmbeddingMaintenancePort,
+    MemoryIDResolutionPort,
+    ReadCacheValidationPort,
+    SearchHealthPort,
+    StartupHealthPort,
+)
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalFacade,
     SearchExecutionDiagnostics,
@@ -149,7 +156,13 @@ class SearchHealthStatus:
     integrity_check_error: str | None = None
 
 
-class RelationalMemorySearchService:
+class RelationalMemorySearchService(
+    SearchHealthPort,
+    StartupHealthPort,
+    EmbeddingMaintenancePort,
+    ReadCacheValidationPort,
+    MemoryIDResolutionPort,
+):
     """Application compatibility boundary around authoritative memory services.
 
     Retrieval orchestration belongs to searchkernel. This service retains the
