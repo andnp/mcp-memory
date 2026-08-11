@@ -8,7 +8,10 @@ import pytest
 from mcp_memory.config import Config
 from mcp_memory.core.search_ranking import RankingEngine, ScoringWeights
 from mcp_memory.embeddings import SQLiteVectorStore
-from mcp_memory.integrations.memory_retrieval import MemoryRetrievalPort
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalPort,
+    build_search_execution_diagnostics,
+)
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.relational.search import (
@@ -279,7 +282,7 @@ def test_search_diagnostics_signal_multi_strategy_candidates_without_merging() -
     )
     mapped = _to_relational_search_result(cast(RecordSearchResult, result))
     diagnostics = SearchExecutionDiagnostics(
-        duplicate_candidate_ids=["memory-a"],
+        duplicate_candidate_ids=[],
         multi_lane_candidate_ids=["memory-a"],
     )
 
@@ -287,7 +290,7 @@ def test_search_diagnostics_signal_multi_strategy_candidates_without_merging() -
     assert mapped.ranking_debug["duplicate_candidate"] is True
     assert mapped.ranking_debug["multi_lane_provenance"] is True
     assert mapped.ranking_debug["final_duplicate"] is False
-    assert diagnostics.to_payload()["duplicate_candidate_ids"] == ["memory-a"]
+    assert diagnostics.to_payload()["duplicate_candidate_ids"] == []
     assert diagnostics.to_payload()["multi_lane_candidate_ids"] == ["memory-a"]
     assert diagnostics.to_payload()["final_duplicate_ids"] == []
 
@@ -328,6 +331,7 @@ def test_service_search_diagnostics_separate_final_duplicates(db_manager) -> Non
         RecordSearchOutcome,
         SimpleNamespace(
             results=results,
+            candidate_count=2,
             stage_timings_ms={},
             candidate_counts={},
             diagnostics=(),
@@ -338,8 +342,14 @@ def test_service_search_diagnostics_separate_final_duplicates(db_manager) -> Non
             trace=None,
         ),
     )
-    service._retrieval_facade.search_sync = cast(
-        Callable[..., RecordSearchOutcome], lambda *args, **kwargs: outcome
+    diagnostic_payload = build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+    service._retrieval_facade.search_sync_with_diagnostics = cast(
+        Callable[..., tuple[RecordSearchOutcome, SearchExecutionDiagnostics]],
+        lambda *args, **kwargs: (outcome, diagnostic_payload),
     )
 
     mapped, diagnostics = service.search_memories_with_diagnostics(
@@ -348,7 +358,15 @@ def test_service_search_diagnostics_separate_final_duplicates(db_manager) -> Non
     )
 
     assert diagnostics.multi_lane_candidate_ids == ["memory-a"]
+    assert diagnostics.duplicate_candidate_ids == []
     assert diagnostics.final_duplicate_ids == ["memory-a"]
+    assert diagnostics.raw_lane_overlap_count is None
+    assert diagnostics.to_payload()["duplicate_candidate_ids"] == []
+    assert diagnostics.to_payload()["overlap"] == {
+        "raw_lane_overlap_count": None,
+        "multi_lane_result_count": 1,
+        "final_duplicate_count": 1,
+    }
     assert all(
         result.ranking_debug is not None
         and result.ranking_debug.get("final_duplicate") is True
@@ -615,19 +633,29 @@ def test_service_search_diagnostics_expose_semantic_abstention(
     """Map bounded outcome diagnostics to benchmark-safe semantic signals."""
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
-    outcome = SimpleNamespace(
-        results=(),
-        stage_timings_ms={},
-        candidate_counts={},
-        diagnostics=(diagnostic,),
-        cache_diagnostics=(),
-        failures=(RuntimeError("degraded"),) if degraded else (),
-        missing_record_ids=(),
-        degraded=degraded,
-        trace=None,
+    outcome = cast(
+        RecordSearchOutcome,
+        SimpleNamespace(
+            results=(),
+            candidate_count=0,
+            stage_timings_ms={},
+            candidate_counts={},
+            diagnostics=(diagnostic,),
+            cache_diagnostics=(),
+            failures=(RuntimeError("degraded"),) if degraded else (),
+            missing_record_ids=(),
+            degraded=degraded,
+            trace=None,
+        ),
     )
-    service._retrieval_facade.search_sync = cast(
-        Callable[..., RecordSearchOutcome], lambda *args, **kwargs: outcome
+    diagnostic_payload = build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+    service._retrieval_facade.search_sync_with_diagnostics = cast(
+        Callable[..., tuple[RecordSearchOutcome, SearchExecutionDiagnostics]],
+        lambda *args, **kwargs: (outcome, diagnostic_payload),
     )
 
     _, diagnostics = service.search_memories_with_diagnostics(

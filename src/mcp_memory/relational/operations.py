@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from time import perf_counter
-
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalPort,
     MemorySearchRequest,
@@ -9,8 +7,6 @@ from mcp_memory.integrations.memory_retrieval import (
 from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
-    build_search_scope_diagnostics,
-    _is_duplicate_candidate,
     _to_relational_search_result,
 )
 
@@ -62,7 +58,6 @@ class SearchMemoryRecordsOperation:
         ranking_workspace_id: str | None = None,
         debug: bool = False,
     ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
-        started_at = perf_counter()
         request = MemorySearchRequest(
             query=query,
             workspace_id=workspace_id,
@@ -74,38 +69,17 @@ class SearchMemoryRecordsOperation:
             include_superseded=include_superseded,
             ranking_workspace_id=ranking_workspace_id,
         )
-        outcome = self._retrieval.search_sync(request)
+        outcome, diagnostics = self._retrieval.search_sync_with_diagnostics(
+            request,
+            debug=debug,
+        )
         results = [_to_relational_search_result(result) for result in outcome.results]
-        trace = outcome.trace.to_dict() if debug and outcome.trace is not None else None
-        timing_ms = {"total": round((perf_counter() - started_at) * 1000.0, 3)}
-        timing_ms.update(
-            {
-                stage: round(duration, 3)
-                for stage, duration in outcome.stage_timings_ms.items()
-            }
-        )
-        return results, SearchExecutionDiagnostics(
-            timing_ms=timing_ms,
-            candidate_counts={
-                str(stage): int(count)
-                for stage, count in outcome.candidate_counts.items()
-            },
-            kernel_diagnostics=list(outcome.diagnostics),
-            cache_diagnostics=list(outcome.cache_diagnostics),
-            failure_count=len(outcome.failures),
-            missing_record_count=len(outcome.missing_record_ids),
-            degraded=bool(outcome.failures or outcome.degraded),
-            scope=build_search_scope_diagnostics(
-                workspace_id=workspace_id,
-                ranking_workspace_id=ranking_workspace_id,
-            ),
-            duplicate_candidate_ids=[
-                result.record_id
-                for result in outcome.results
-                if _is_duplicate_candidate(result)
-            ],
-            trace=trace,
-        )
+        for result in results:
+            if result.ranking_debug is not None:
+                result.ranking_debug["final_duplicate"] = (
+                    result.memory_id in (diagnostics.final_duplicate_ids or [])
+                )
+        return results, diagnostics
 
 
 class ReadMemoryRecordOperation:

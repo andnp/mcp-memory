@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
-from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -20,7 +18,10 @@ from mcp_memory.core.ports.memory import (
     MemoryRepositoryPort,
     parse_memory_ref,
 )
-from mcp_memory.integrations.memory_retrieval import MemoryRetrievalFacade
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalFacade,
+    SearchExecutionDiagnostics,
+)
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     build_memory_record_pipeline,
@@ -76,58 +77,6 @@ def _to_relational_read_result(
         relationships=context.relationships,
         superseded=context.superseded,
     )
-
-
-@dataclass(slots=True)
-class SearchExecutionDiagnostics:
-    """Compatibility diagnostics for the canonical kernel-owned search path."""
-
-    timing_ms: dict[str, float] = field(default_factory=dict)
-    keyword_candidate_count: int = 0
-    semantic_candidate_count: int = 0
-    semantic_only_candidate_count: int = 0
-    semantic_abstention_count: int = 0
-    semantic_abstention_rate: float | None = None
-    semantic_abstained: bool | None = None
-    semantic_candidate_strategy: str = "kernel"
-    candidate_counts: dict[str, int] = field(default_factory=dict)
-    vector_search: dict[str, object] | None = None
-    kernel_diagnostics: list[str] = field(default_factory=list)
-    cache_diagnostics: list[str] = field(default_factory=list)
-    failure_count: int = 0
-    missing_record_count: int = 0
-    degraded: bool = False
-    trace: dict[str, object] | None = None
-    scope: dict[str, object] = field(default_factory=dict)
-    duplicate_candidate_ids: list[str] = field(default_factory=list)
-    multi_lane_candidate_ids: list[str] = field(default_factory=list)
-    final_duplicate_ids: list[str] = field(default_factory=list)
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "timing_ms": dict(self.timing_ms),
-            "keyword_candidate_count": self.keyword_candidate_count,
-            "semantic_candidate_count": self.semantic_candidate_count,
-            "semantic_only_candidate_count": self.semantic_only_candidate_count,
-            "semantic_abstention_count": self.semantic_abstention_count,
-            "semantic_abstention_rate": self.semantic_abstention_rate,
-            "semantic_abstained": self.semantic_abstained,
-            "semantic_candidate_strategy": self.semantic_candidate_strategy,
-            "candidate_counts": dict(self.candidate_counts),
-            "vector_search": (
-                None if self.vector_search is None else dict(self.vector_search)
-            ),
-            "kernel_diagnostics": list(self.kernel_diagnostics),
-            "cache_diagnostics": list(self.cache_diagnostics),
-            "failure_count": self.failure_count,
-            "missing_record_count": self.missing_record_count,
-            "degraded": self.degraded,
-            "trace": None if self.trace is None else dict(self.trace),
-            "scope": dict(self.scope),
-            "duplicate_candidate_ids": list(self.duplicate_candidate_ids),
-            "multi_lane_candidate_ids": list(self.multi_lane_candidate_ids),
-            "final_duplicate_ids": list(self.final_duplicate_ids),
-        }
 
 
 def build_search_scope_diagnostics(
@@ -335,8 +284,7 @@ class RelationalMemorySearchService:
         side_effect_free: bool = False,
     ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
         """Delegate retrieval to searchkernel while preserving the legacy payload."""
-        started_at = time.perf_counter()
-        outcome = self._retrieval_facade.search_sync(
+        outcome, diagnostics = self._retrieval_facade.search_sync_with_diagnostics(
             query,
             limit=limit,
             adaptive_limit=adaptive_limit,
@@ -345,16 +293,14 @@ class RelationalMemorySearchService:
             memory_type=memory_type,
             status=status,
             include_superseded=include_superseded,
+            side_effect_free=side_effect_free,
+            debug=debug,
         )
         results = [_to_relational_search_result(result) for result in outcome.results]
-        result_counts = Counter(result.memory_id for result in results)
-        final_duplicate_ids = sorted(
-            memory_id for memory_id, count in result_counts.items() if count > 1
-        )
         for result in results:
             if result.ranking_debug is not None:
                 result.ranking_debug["final_duplicate"] = (
-                    result.memory_id in final_duplicate_ids
+                    result.memory_id in (diagnostics.final_duplicate_ids or [])
                 )
         if results and not side_effect_free:
             self._repository.touch_last_surfaced(
@@ -362,67 +308,6 @@ class RelationalMemorySearchService:
                 _utc_now(),
                 best_effort=True,
             )
-        timing_ms = {
-            "total": round((time.perf_counter() - started_at) * 1000.0, 3)
-        }
-        timing_ms.update(
-            {
-                stage: round(duration, 3)
-                for stage, duration in outcome.stage_timings_ms.items()
-            }
-        )
-        (
-            semantic_candidate_count,
-            semantic_only_candidate_count,
-            semantic_abstention_count,
-        ) = _semantic_abstention_counts(outcome.diagnostics)
-        semantic_abstention_rate = (
-            semantic_abstention_count / semantic_only_candidate_count
-            if semantic_only_candidate_count
-            else None
-        )
-        semantic_abstained = (
-            None
-            if outcome.degraded or semantic_candidate_count == 0
-            else semantic_abstention_count > 0
-        )
-        diagnostics = SearchExecutionDiagnostics(
-            timing_ms=timing_ms,
-            semantic_candidate_count=semantic_candidate_count,
-            semantic_only_candidate_count=semantic_only_candidate_count,
-            semantic_abstention_count=semantic_abstention_count,
-            semantic_abstention_rate=semantic_abstention_rate,
-            semantic_abstained=semantic_abstained,
-            candidate_counts={
-                str(stage): int(count)
-                for stage, count in outcome.candidate_counts.items()
-            },
-            kernel_diagnostics=list(outcome.diagnostics),
-            cache_diagnostics=list(outcome.cache_diagnostics),
-            failure_count=len(outcome.failures),
-            missing_record_count=len(outcome.missing_record_ids),
-            degraded=outcome.degraded,
-            scope=build_search_scope_diagnostics(
-                workspace_id=workspace_id,
-                ranking_workspace_id=ranking_workspace_id,
-            ),
-            trace=(
-                outcome.trace.to_dict()
-                if debug and outcome.trace is not None
-                else None
-            ),
-            duplicate_candidate_ids=[
-                result.record_id
-                for result in outcome.results
-                if _is_duplicate_candidate(result)
-            ],
-            multi_lane_candidate_ids=[
-                result.record_id
-                for result in outcome.results
-                if _is_duplicate_candidate(result)
-            ],
-            final_duplicate_ids=final_duplicate_ids,
-        )
         return results, diagnostics
 
     def read_memory(self, memory_id: str) -> RelationalReadResult | None:

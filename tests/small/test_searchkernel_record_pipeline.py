@@ -16,6 +16,7 @@ from mcp_memory.core.ports.memory import (
     RankedMemoryCandidate,
 )
 from mcp_memory.core.search_ranking import RankingEngine, RankingSignals
+from mcp_memory.integrations.memory_retrieval import build_search_execution_diagnostics
 from mcp_memory.integrations.searchkernel_adapters import MemoryVectorBackend
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
@@ -377,6 +378,95 @@ async def test_missing_vector_or_embedder_degrades_to_keyword_pipeline() -> None
     assert without_embedder.diagnostics.reasons
     assert (await without_vector.search("query", limit=1)).results
     assert (await without_embedder.search("query", limit=1)).results
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_planner_reports_keyword_only_lane() -> None:
+    """Expose the planner's keyword-only decision when semantic retrieval is absent."""
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository(keyword_ids=["active"]))
+    )
+
+    outcome = await pipeline.search("active", limit=1)
+    diagnostics = build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+
+    assert diagnostics.lane_decisions is not None
+    assert diagnostics.lane_decisions["enabled"] == ["keyword"]
+    assert diagnostics.lane_decisions["budgets"] == {
+        "keyword": 50,
+        "vector": 50,
+        "graph_seeds": 3,
+        "rerank": 0,
+    }
+    assert diagnostics.lane_decisions["skipped"] == ["vector:unavailable"]
+    assert diagnostics.candidate_counts == {"keyword": 1}
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_planner_reports_vector_only_lane() -> None:
+    """Expose the forced semantic-only decision and its disabled keyword lane."""
+    repository = FakeRepository(
+        records={"semantic": _memory("semantic")},
+        keyword_ids=[],
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", FakeVectorStore([("semantic", 0.95)])),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search(
+        "semantic query",
+        limit=1,
+        filters={"retrieval_mode": "semantic_only"},
+    )
+    diagnostics = build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+
+    assert diagnostics.lane_decisions is not None
+    assert diagnostics.lane_decisions["enabled"] == ["vector"]
+    skipped = diagnostics.lane_decisions["skipped"]
+    assert isinstance(skipped, list)
+    assert "keyword:unavailable" in skipped
+    assert diagnostics.candidate_counts == {"vector": 1}
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_planner_reports_hybrid_lanes() -> None:
+    """Expose both retrieval lanes for a query that does not force a single lane."""
+    repository = FakeRepository(
+        records={
+            "active": _memory("active"),
+            "semantic": _memory("semantic"),
+        },
+        keyword_ids=["active"],
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", FakeVectorStore([("semantic", 0.95)])),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search("unmatched query", limit=2)
+    diagnostics = build_search_execution_diagnostics(
+        outcome,
+        workspace_id=None,
+        ranking_workspace_id=None,
+    )
+
+    assert diagnostics.lane_decisions is not None
+    enabled = diagnostics.lane_decisions["enabled"]
+    assert isinstance(enabled, list)
+    assert set(enabled) >= {"keyword", "vector"}
+    assert diagnostics.candidate_counts is not None
+    assert set(diagnostics.candidate_counts) >= {"keyword", "vector"}
 
 
 @pytest.mark.asyncio
