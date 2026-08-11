@@ -34,12 +34,31 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
 )
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
-from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalPort,
+    build_memory_retrieval_facade,
+)
 from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 
 
 def _sampling_task_id(task: Any) -> str:
     return task.task_id if hasattr(task, "task_id") else task.id
+
+
+def _curator_retrieval(ctx: ApplicationContext) -> MemoryRetrievalPort | None:
+    retrieval = getattr(ctx, "memory_retrieval", None)
+    if callable(getattr(retrieval, "search_sync", None)):
+        return cast(MemoryRetrievalPort, retrieval)
+    if ctx.repository is None or ctx.relational_search is None:
+        return None
+    return build_memory_retrieval_facade(
+        ctx.repository,
+        config=getattr(ctx, "config", None),
+        vector_store=getattr(ctx, "vector_store", None),
+        embedder=getattr(ctx, "embedder", None),
+        embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+        native_search=ctx.relational_search,
+    )
 
 CURATOR_MAX_SEED_RECORDS = 24
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
@@ -853,16 +872,7 @@ def _query_campaign_goal_candidates(
         if record is not None and record.status == "active":
             candidate_by_id[record.id] = record
 
-    retrieval = getattr(ctx, "memory_retrieval", None)
-    if retrieval is None and ctx.relational_search is not None:
-        retrieval = build_memory_retrieval_facade(
-            ctx.repository,
-            config=getattr(ctx, "config", None),
-            vector_store=getattr(ctx, "vector_store", None),
-            embedder=getattr(ctx, "embedder", None),
-            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
-            native_search=ctx.relational_search,
-        )
+    retrieval = _curator_retrieval(ctx)
     if retrieval is not None and hypothesis.query and hypothesis.query.strip():
         outcome = retrieval.search_sync(
             hypothesis.query.strip(),
