@@ -47,6 +47,8 @@ When a non-active spec conflicts with an active spec, the active spec wins.
 - `specs/19-curation-quality-and-family-ownership.md` — proposed curation quality, coverage, routing, and convergence policy
 - `specs/20-memory-mutation-history-and-restore.md` — proposed reversible history, protection, and restore model
 - `specs/22-skill-review-ledger-and-outcome-protocol.md` — authoritative skill-review ledger and terminal outcome wire contracts
+- `specs/23-searchkernel-post-upgrade-quality-roadmap.md` — SearchKernel upgrade evidence, quality gates, and upstream-extraction roadmap
+- `specs/24-searchkernel-and-memory-search-improvement-design.md` — draft design for SearchKernel adoption, diagnostics, cache ownership, federation, and upstream extraction
 
 ## UI and operator surfaces
 
