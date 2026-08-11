@@ -13,6 +13,7 @@ from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchOutcome
 
 from mcp_memory.config import Config
+from mcp_memory.application.ports import LegacyNativeSearchPort
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.core.retrieval import (
     RetrievalDiagnostics,
@@ -493,7 +494,7 @@ class MemoryRetrievalFacade:
         embedder: Any | None = None,
         embedding_maintenance: Any | None = None,
         query_embedding_cache: QueryEmbeddingCache | None = None,
-        native_search: Any | None = None,
+        native_search: LegacyNativeSearchPort | None = None,
         pipeline: MemoryRecordSearchPipeline | None = None,
         pipeline_factory: Callable[[bool], MemoryRecordSearchPipeline] | None = None,
     ) -> None:
@@ -911,7 +912,7 @@ def build_memory_retrieval_facade(
     vector_store: Any | None = None,
     embedder: Any | None = None,
     embedding_maintenance: Any | None = None,
-    native_search: Any | None = None,
+    native_search: LegacyNativeSearchPort | None = None,
 ) -> MemoryRetrievalFacade:
     """Compose the canonical retrieval boundary for an application caller."""
     return MemoryRetrievalFacade(
