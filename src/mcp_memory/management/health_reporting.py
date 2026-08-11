@@ -5,6 +5,7 @@ from mcp_memory.core.ports.tasks import is_process_alive
 import time
 from typing import TypedDict
 
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     EmbeddingIntegrityEventSummaryPayload,
@@ -118,15 +119,17 @@ def build_embedding_status(
 def build_search_health(
     relational_search,
     *,
+    search_health: SearchHealthPort | None = None,
     search_diagnostics: dict[str, object] | None = None,
 ) -> SearchHealthPayload:
-    if relational_search is None:
+    health_provider = search_health if search_health is not None else relational_search
+    if health_provider is None:
         return SearchHealthPayload(
             search_diagnostics=SearchDiagnosticsPayload(
                 **_narrow_search_diagnostics(search_diagnostics)
             )
         )
-    health = relational_search.get_health()
+    health = health_provider.get_health()
     return SearchHealthPayload(
         semantic_enabled=health.semantic_enabled,
         available=health.available,

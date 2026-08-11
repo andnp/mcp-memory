@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import time
 from statistics import median
 
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.management.analytics_common import _bucket_starts, _datetime_to_timestamp
 from mcp_memory.management.analytics_curation import build_curation_metrics
 from mcp_memory.management.analytics_maintenance import build_maintenance_summary
@@ -186,6 +187,7 @@ def build_nerd_metrics(
     ai_agent_provider,
     ai_provider_registry,
     relational_search,
+    search_health: SearchHealthPort | None = None,
     window_hours: int = 24,
     bucket_minutes: int = 60,
     now: float | None = None,
@@ -297,7 +299,7 @@ def build_nerd_metrics(
         bucket_seconds=bucket_seconds,
     )
     search_quality = build_search_quality(
-        search_health=build_search_health(relational_search),
+        search_health=build_search_health(relational_search, search_health=search_health),
         graph_topology=graph_topology,
         memory_lifecycle=memory_lifecycle,
     )
