@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from searchkernel.domain import RecordHit, Vector
 from searchkernel.ports import AsyncEmbeddingProvider, EmbeddingBatchProvider
-from searchkernel.runtime import get_or_compute_query_embedding
+from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import (
     RecordSearchCandidate,
     RecordSearchConfig,
@@ -48,6 +48,11 @@ from mcp_memory.integrations.searchkernel_adapters import (
 MEMORY_SEARCH_POLICY_VERSION = "mcp-memory-record-policy-v1"
 MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX = "semantic_abstention:"
 
+_ACTIVE_QUERY_EMBEDDING_CACHE: ContextVar[QueryEmbeddingCache | None] = ContextVar(
+    "mcp_memory_query_embedding_cache",
+    default=None,
+)
+
 
 class MemoryQueryEmbeddingProvider(AsyncEmbeddingProvider):
     """Adapt mcp-memory's batch embedder to the query seam."""
@@ -74,13 +79,7 @@ class MemoryQueryEmbeddingProvider(AsyncEmbeddingProvider):
                 raise ValueError("memory embedder must return one query vector")
             return list(embeddings[0])
 
-        vector = await asyncio.to_thread(
-            get_or_compute_query_embedding,
-            model_name=self.model_name,
-            encoder_namespace=self.encoder_namespace,
-            query=text,
-            compute=compute,
-        )
+        vector = await asyncio.to_thread(compute)
         if len(vector) != self.dim:
             raise ValueError(
                 f"memory query embedding has dimension {len(vector)}, "
@@ -292,6 +291,7 @@ def build_memory_record_pipeline(
     embedder: EmbeddingBatchProvider | None = None,
     embedding_dim: int | None = None,
     embedding_maintenance: Any | None = None,
+    query_embedding_cache: QueryEmbeddingCache | None = None,
     adaptive_enabled: bool = False,
     config: Config | None = None,
 ) -> MemoryRecordSearchPipeline:
@@ -306,6 +306,11 @@ def build_memory_record_pipeline(
     """
     resolved_config = config or Config()
     searchkernel_config = resolved_config.searchkernel
+    resolved_query_embedding_cache = (
+        query_embedding_cache
+        if query_embedding_cache is not None
+        else _ACTIVE_QUERY_EMBEDDING_CACHE.get()
+    )
 
     def prefetch(memory_ids: Sequence[str]) -> None:
         _prefetch_memory_records(repository, memory_ids)
@@ -428,6 +433,7 @@ def build_memory_record_pipeline(
         config=record_search_config,
         policy=policy,
         continue_on_error=None,
+        query_embedding_cache=resolved_query_embedding_cache,
         policy_version=(
             MEMORY_SEARCH_POLICY_VERSION
             if callable(getattr(repository, "get_search_epochs", None))

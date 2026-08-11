@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+import mcp_memory.integrations.memory_retrieval as memory_retrieval
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.integrations.memory_retrieval import MemoryRetrievalFacade, MemorySearchRequest
 from searchkernel.search.record_pipeline import RecordSearchOutcome
@@ -113,6 +114,7 @@ def test_sync_search_works_without_running_loop() -> None:
 
 
 def test_adaptive_search_uses_adaptive_pipeline_factory() -> None:
+    """Select the adaptive pipeline without changing the facade contract."""
     pipelines = {False: FakePipeline(), True: FakePipeline()}
     requested: list[bool] = []
 
@@ -129,6 +131,28 @@ def test_adaptive_search_uses_adaptive_pipeline_factory() -> None:
 
     assert isinstance(outcome, FakeOutcome)
     assert requested == [True]
+
+
+def test_standard_and_adaptive_pipelines_share_query_embedding_cache_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use one query cache owner when lazily creating both pipeline variants."""
+    pipelines = {False: FakePipeline(), True: FakePipeline()}
+    caches: list[object] = []
+
+    def build_pipeline(*args: Any, **kwargs: Any) -> FakePipeline:
+        del args
+        caches.append(kwargs["query_embedding_cache"])
+        return pipelines[kwargs["adaptive_enabled"]]
+
+    monkeypatch.setattr(memory_retrieval, "build_memory_record_pipeline", build_pipeline)
+    facade = MemoryRetrievalFacade(cast(MemoryRepositoryPort, object()))
+
+    facade.search_sync("standard query")
+    facade.search_sync("adaptive query", adaptive_limit=True)
+
+    assert len(caches) == 2
+    assert caches[0] is caches[1]
 
 
 @pytest.mark.asyncio

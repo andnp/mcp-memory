@@ -11,12 +11,14 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Protocol
 
+from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchOutcome
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
+    _ACTIVE_QUERY_EMBEDDING_CACHE,
     MemoryRecordSearchPipeline,
     build_memory_record_pipeline,
 )
@@ -350,6 +352,7 @@ class MemoryRetrievalFacade:
         vector_store: Any | None = None,
         embedder: Any | None = None,
         embedding_maintenance: Any | None = None,
+        query_embedding_cache: QueryEmbeddingCache | None = None,
         native_search: Any | None = None,
         pipeline: MemoryRecordSearchPipeline | None = None,
         pipeline_factory: Callable[[bool], MemoryRecordSearchPipeline] | None = None,
@@ -357,6 +360,11 @@ class MemoryRetrievalFacade:
         self._native_search = native_search
         self._provided_pipeline = pipeline
         self._pipeline = pipeline
+        self._query_embedding_cache = (
+            query_embedding_cache
+            if query_embedding_cache is not None
+            else QueryEmbeddingCache()
+        )
         factory = pipeline_factory
         if pipeline_factory is None:
             resolved_config = config or Config()
@@ -369,6 +377,7 @@ class MemoryRetrievalFacade:
                     vector_store=vector_store,
                     embedder=embedder,
                     embedding_maintenance=embedding_maintenance,
+                    query_embedding_cache=self._query_embedding_cache,
                     adaptive_enabled=adaptive_enabled,
                     config=resolved_config,
                 )
@@ -564,11 +573,18 @@ class MemoryRetrievalFacade:
             return self._provided_pipeline
         if adaptive_limit:
             if self._adaptive_pipeline is None:
-                self._adaptive_pipeline = self._pipeline_factory(True)
+                self._adaptive_pipeline = self._build_pipeline(True)
             return self._adaptive_pipeline
         if self._pipeline is None:
-            self._pipeline = self._pipeline_factory(False)
+            self._pipeline = self._build_pipeline(False)
         return self._pipeline
+
+    def _build_pipeline(self, adaptive_enabled: bool) -> MemoryRecordSearchPipeline:
+        token = _ACTIVE_QUERY_EMBEDDING_CACHE.set(self._query_embedding_cache)
+        try:
+            return self._pipeline_factory(adaptive_enabled)
+        finally:
+            _ACTIVE_QUERY_EMBEDDING_CACHE.reset(token)
 
     def _normalize_request(
         self,

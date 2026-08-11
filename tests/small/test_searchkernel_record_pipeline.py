@@ -4,6 +4,7 @@ from collections import Counter
 from typing import cast
 
 import pytest
+from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchConfig
 
 import mcp_memory.integrations.searchkernel_record_pipeline as record_pipeline
@@ -224,6 +225,52 @@ class FakeEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         self.queries.extend(texts)
         return [[1.0, 0.0] for _ in texts]
+
+
+class FailingQueryEmbeddingCache:
+    async def async_get_or_compute(self, **kwargs: object) -> list[float]:
+        del kwargs
+        raise RuntimeError("cache unavailable")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_reuses_injected_query_embedding_cache() -> None:
+    """Share query vectors across repeated searches on one record pipeline."""
+    repository = FakeRepository()
+    vector_store = FakeVectorStore()
+    embedder = FakeEmbedder()
+    cache = QueryEmbeddingCache()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=embedder,
+        query_embedding_cache=cache,
+    )
+
+    await pipeline.search("repeated query", limit=1)
+    await pipeline.search("repeated query", limit=1)
+
+    assert embedder.queries == ["repeated query"]
+    assert cache.metrics.misses == 1
+    assert cache.metrics.hits == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_bypasses_query_embedding_cache_failure() -> None:
+    """Keep semantic search available when the query cache is unavailable."""
+    repository = FakeRepository()
+    embedder = FakeEmbedder()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", FakeVectorStore()),
+        embedder=embedder,
+        query_embedding_cache=cast(QueryEmbeddingCache, FailingQueryEmbeddingCache()),
+    )
+
+    outcome = await pipeline.search("cache failure query", limit=1)
+
+    assert [result.record_id for result in outcome.results] == ["active"]
+    assert embedder.queries == ["cache failure query"]
 
 
 @pytest.mark.asyncio
