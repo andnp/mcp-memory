@@ -103,4 +103,8 @@ def build_sqlite_runtime_components(
         source_coverage=SQLiteSourceCoverageStore(db_manager),
         ingress_quality_evidence=SQLiteIngressQualityEvidenceStore(db_manager),
         ingress_mutation_transaction=SQLiteIngressMutationStore(db_manager),
+        search_health=relational_search,
+        startup_health=relational_search,
+        read_cache_validation=relational_search,
+        memory_id_resolution=relational_search,
     )

@@ -10,6 +10,12 @@ import pytest
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config, CurationConfig, StorageCacheMode
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports import (
+    MemoryIDResolutionPort,
+    ReadCacheValidationPort,
+    SearchHealthPort,
+    StartupHealthPort,
+)
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.daemon_models import DaemonControllerView
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
@@ -44,6 +50,10 @@ class _ManagementContextStub:
     journal: object = None
     repository: object = None
     relational_search: MemorySearchPort | None = None
+    search_health: SearchHealthPort | None = None
+    startup_health: StartupHealthPort | None = None
+    read_cache_validation: ReadCacheValidationPort | None = None
+    memory_id_resolution: MemoryIDResolutionPort | None = None
     read_cache: object = None
     task_queue: object = None
     ai_json_provider: object = None

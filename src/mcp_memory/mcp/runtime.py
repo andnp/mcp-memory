@@ -252,7 +252,10 @@ def create_runtime_composition(
         embedding_repair_queue=storage.embedding_repair_queue,
         embedder=embedder,
         vector_store=storage.vector_store,
-        search_health=storage.relational_search.get_health(),
+        search_health=storage.search_health,
+        startup_health=storage.startup_health,
+        read_cache_validation=storage.read_cache_validation,
+        memory_id_resolution=storage.memory_id_resolution,
         internal_tool_call_tracker=internal_tool_call_tracker,
     )
     return RuntimeComposition(
@@ -311,6 +314,10 @@ def _runtime_resources_from_context(context: ApplicationContext) -> RuntimeResou
             source_coverage=context.source_coverage,
             ingress_quality_evidence=context.ingress_quality_evidence,
             ingress_mutation_transaction=context.ingress_mutation_transaction,
+            search_health=context.search_health,
+            startup_health=context.startup_health,
+            read_cache_validation=context.read_cache_validation,
+            memory_id_resolution=context.memory_id_resolution,
         ),
         embedder=cast(EmbeddingBatchProvider | None, context.embedder),
         provider_registry=cast(dict[str, dict[str, object]], context.ai_provider_registry or {}),

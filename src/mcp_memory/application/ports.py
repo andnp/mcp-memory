@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from mcp_memory.core.ports import MemoryIDResolutionPort, ReadCacheValidationPort
+
 
 class MemorySearchPort(Protocol):
     def get_health(self) -> Any: ...
@@ -126,6 +128,8 @@ class MemoryReadDependencies:
     vector_store: Any = None
     embedder: Any = None
     embedding_maintenance: Any = None
+    read_cache_validation: ReadCacheValidationPort | None = None
+    memory_id_resolution: MemoryIDResolutionPort | None = None
 
 
 class MemoryReadContext(Protocol):
@@ -141,6 +145,8 @@ class MemoryReadContext(Protocol):
     embedder: Any
     vector_store: Any
     embedding_maintenance: Any
+    read_cache_validation: ReadCacheValidationPort | None
+    memory_id_resolution: MemoryIDResolutionPort | None
 
 
 class MemoryMutationDependencies(Protocol):
@@ -160,6 +166,12 @@ class MemoryReadPort(Protocol):
 
     @property
     def read_cache(self) -> ReadCachePort | None: ...
+
+    @property
+    def read_cache_validation(self) -> ReadCacheValidationPort | None: ...
+
+    @property
+    def memory_id_resolution(self) -> MemoryIDResolutionPort | None: ...
 
 
 class RetrievalTelemetryPort(Protocol):

@@ -236,4 +236,8 @@ def build_postgres_runtime_components(
         source_coverage=PostgresSourceCoverageRepository(connection_manager),
         ingress_quality_evidence=PostgresIngressQualityEvidenceStore(connection_manager),
         ingress_mutation_transaction=PostgresIngressMutationStore(connection_manager),
+        search_health=relational_search,
+        startup_health=relational_search,
+        read_cache_validation=relational_search,
+        memory_id_resolution=relational_search,
     )

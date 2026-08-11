@@ -13,6 +13,12 @@ import pytest
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports import (
+    MemoryIDResolutionPort,
+    ReadCacheValidationPort,
+    SearchHealthPort,
+    StartupHealthPort,
+)
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import (
@@ -61,6 +67,10 @@ class _TaskRuntimeContextStub:
     journal: object = None
     repository: object = None
     relational_search: MemorySearchPort | None = None
+    search_health: SearchHealthPort | None = None
+    startup_health: StartupHealthPort | None = None
+    read_cache_validation: ReadCacheValidationPort | None = None
+    memory_id_resolution: MemoryIDResolutionPort | None = None
     task_queue: object = None
     curation: object = None
     curation_action_store: object = None

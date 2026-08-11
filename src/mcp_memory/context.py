@@ -13,6 +13,13 @@ from mcp_memory.core.ports.providers import (
 )
 from mcp_memory.core.ports.tasks import TaskQueue
 from mcp_memory.core.ports.work_items import WorkItemRepository
+from mcp_memory.core.ports import (
+    EmbeddingMaintenancePort,
+    MemoryIDResolutionPort,
+    ReadCacheValidationPort,
+    SearchHealthPort,
+    StartupHealthPort,
+)
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider, JSONTaskProvider
 
 TaskQueueProtocol = TaskQueue
@@ -33,6 +40,10 @@ class MemoryPipelineContext(Protocol):
     repository: Any
     relational_search: MemorySearchPort | None
     task_queue: Any
+    search_health: SearchHealthPort | None
+    startup_health: StartupHealthPort | None
+    read_cache_validation: ReadCacheValidationPort | None
+    memory_id_resolution: MemoryIDResolutionPort | None
 
 
 class ManagementContext(MemoryPipelineContext, Protocol):
@@ -90,7 +101,11 @@ class MemoryReadCapabilities:
     read_cache: object | None = None
     embedder: object | None = None
     vector_store: object | None = None
-    embedding_maintenance: object | None = None
+    embedding_maintenance: EmbeddingMaintenancePort | None = None
+    search_health: SearchHealthPort | None = None
+    startup_health: StartupHealthPort | None = None
+    read_cache_validation: ReadCacheValidationPort | None = None
+    memory_id_resolution: MemoryIDResolutionPort | None = None
 
     @classmethod
     def from_context(cls, ctx: MemoryPipelineContext) -> MemoryReadCapabilities:
@@ -106,6 +121,10 @@ class MemoryReadCapabilities:
             embedder=getattr(ctx, "embedder", None),
             vector_store=getattr(ctx, "vector_store", None),
             embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+            search_health=getattr(ctx, "search_health", None),
+            startup_health=getattr(ctx, "startup_health", None),
+            read_cache_validation=getattr(ctx, "read_cache_validation", None),
+            memory_id_resolution=getattr(ctx, "memory_id_resolution", None),
         )
 
 
@@ -218,6 +237,10 @@ class TaskRuntimeCapabilities:
             repository=self.mutation.repository,
             relational_search=self.mutation.relational_search,
             embedding_maintenance=self.memory.embedding_maintenance,
+            search_health=self.memory.search_health,
+            startup_health=self.memory.startup_health,
+            read_cache_validation=self.memory.read_cache_validation,
+            memory_id_resolution=self.memory.memory_id_resolution,
             task_queue=self.mutation.task_queue,
             curation=self.mutation.curation,
             curation_action_store=self.mutation.curation_action_store,
@@ -270,7 +293,11 @@ class _TaskRuntimeContextAdapter:
     journal: object | None
     repository: object | None
     relational_search: MemorySearchPort | None
-    embedding_maintenance: object | None
+    embedding_maintenance: EmbeddingMaintenancePort | None
+    search_health: SearchHealthPort | None
+    startup_health: StartupHealthPort | None
+    read_cache_validation: ReadCacheValidationPort | None
+    memory_id_resolution: MemoryIDResolutionPort | None
     task_queue: object | None
     curation: object | None
     curation_action_store: object | None
@@ -325,6 +352,10 @@ _MEMORY_PIPELINE_FIELDS = frozenset(
         "repository",
         "relational_search",
         "embedding_maintenance",
+        "search_health",
+        "startup_health",
+        "read_cache_validation",
+        "memory_id_resolution",
         "task_queue",
     }
 )
@@ -397,7 +428,11 @@ class ApplicationContext:
     journal: Any = None
     repository: Any = None
     relational_search: MemorySearchPort | None = None
-    embedding_maintenance: Any = None
+    embedding_maintenance: EmbeddingMaintenancePort | None = None
+    search_health: SearchHealthPort | None = None
+    startup_health: StartupHealthPort | None = None
+    read_cache_validation: ReadCacheValidationPort | None = None
+    memory_id_resolution: MemoryIDResolutionPort | None = None
     read_cache: Any = None
     task_queue: Any = None
     curation: Any = None
@@ -423,7 +458,6 @@ class ApplicationContext:
     source_coverage: Any = None
     ingress_quality_evidence: Any = None
     ingress_mutation_transaction: Any = None
-    search_health: Any = None
     internal_tool_call_tracker: Any = None
     _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)
 
