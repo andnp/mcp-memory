@@ -89,6 +89,32 @@ def test_search_quality_metrics_calculate_retrieval_and_latency() -> None:
     assert metrics.by_query_class["historical"].hit_at_5 == 0.0
 
 
+def test_search_quality_metrics_distinguish_zero_from_unavailable_abstention() -> None:
+    """Keep observed zero abstention distinct from unavailable abstention data."""
+    corpus = SearchQualityCorpus(
+        version="test",
+        entries=(_case("observed"), _case("unavailable", QueryClass.BROAD)),
+    )
+
+    observed = evaluate_corpus(
+        corpus,
+        {
+            "observed": SearchObservation(("target",), semantic_abstained=False),
+            "unavailable": SearchObservation(("target",)),
+        },
+    )
+    unavailable = evaluate_corpus(
+        corpus,
+        {
+            "observed": SearchObservation(("target",)),
+            "unavailable": SearchObservation(("target",)),
+        },
+    )
+
+    assert observed.semantic_abstention_rate == 0.0
+    assert unavailable.semantic_abstention_rate is None
+
+
 def test_search_quality_metrics_require_every_corpus_observation() -> None:
     """Fail clearly when a runner omits a corpus case."""
     corpus = SearchQualityCorpus(version="test", entries=(_case("missing"),))

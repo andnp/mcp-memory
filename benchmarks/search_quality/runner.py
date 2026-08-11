@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import math
 import time
 from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, TypedDict, cast
 
 from mcp_memory.daemon import ensure_daemon_started
 from mcp_memory.daemon_transport import request_daemon_json
@@ -176,6 +177,16 @@ class SearchPolicyIdentity:
         }
 
 
+class PolicyComparisonKwargs(TypedDict):
+    """Typed arguments shared by local policy builders and comparisons."""
+
+    baseline_builder: PolicyBuilder
+    calibrated_fusion_builder: PolicyBuilder | None
+    query_expansion_builder: PolicyBuilder | None
+    reranking_builder: RerankingPolicyBuilder | None
+    policy_identities: Mapping[PolicyName, SearchPolicyIdentity]
+
+
 @dataclass(frozen=True, slots=True)
 class LocalPolicyBuilders:
     """Lazy local builders and metadata for deterministic comparisons."""
@@ -186,13 +197,14 @@ class LocalPolicyBuilders:
     reranking_builder: RerankingPolicyBuilder | None
     identities: Mapping[PolicyName, SearchPolicyIdentity]
 
-    def comparison_kwargs(self) -> dict[str, object]:
+    def comparison_kwargs(self) -> PolicyComparisonKwargs:
         """Return builders in the shape accepted by ``run_policy_comparison``."""
         return {
             "baseline_builder": self.baseline_builder,
             "calibrated_fusion_builder": self.calibrated_fusion_builder,
             "query_expansion_builder": self.query_expansion_builder,
             "reranking_builder": self.reranking_builder,
+            "policy_identities": self.identities,
         }
 
     def metadata(self) -> dict[str, dict[str, str]]:
@@ -215,6 +227,9 @@ class SearchPolicyReport:
     skip_reason: str | None = None
     diagnostics_complete: bool = False
     duplicate_case_count: int = 0
+    observations: Mapping[str, SearchObservation] = field(default_factory=dict)
+    policy_fingerprint: str | None = None
+    corpus_fingerprint: str | None = None
 
     def to_mapping(self) -> dict[str, object]:
         """Serialize one policy without search payloads."""
@@ -225,6 +240,10 @@ class SearchPolicyReport:
             "degraded_case_count": self.degraded_case_count,
             "degradation_rate": self.degradation_rate,
             "skip_reason": self.skip_reason,
+            "diagnostics_complete": self.diagnostics_complete,
+            "duplicate_case_count": self.duplicate_case_count,
+            "policy_fingerprint": self.policy_fingerprint,
+            "corpus_fingerprint": self.corpus_fingerprint,
         }
 
 
@@ -405,6 +424,7 @@ class SearchPolicyComparison:
 
     corpus_version: str
     policies: tuple[SearchPolicyReport, ...]
+    corpus_fingerprint: str = ""
 
     @property
     def by_policy(self) -> dict[str, SearchPolicyReport]:
@@ -415,6 +435,7 @@ class SearchPolicyComparison:
         """Serialize the comparison in policy execution order."""
         return {
             "corpus_version": self.corpus_version,
+            "corpus_fingerprint": self.corpus_fingerprint,
             "policies": [report.to_mapping() for report in self.policies],
         }
 
@@ -427,6 +448,7 @@ def run_policy_comparison(
     query_expansion_builder: PolicyBuilder | None = None,
     reranking_builder: RerankingPolicyBuilder | None = None,
     reranker: object | None = None,
+    policy_identities: Mapping[PolicyName, SearchPolicyIdentity] | None = None,
 ) -> SearchPolicyComparison:
     """Run the same corpus against isolated baseline and policy builders.
 
@@ -435,6 +457,8 @@ def run_policy_comparison(
     Reranking is skipped unless both its builder and reranker are supplied.
     """
     selected_corpus = corpus or load_corpus()
+    corpus_fingerprint = _corpus_fingerprint(selected_corpus)
+    identities = policy_identities or {}
     policies: tuple[
         tuple[PolicyName, PolicyBuilder | RerankingPolicyBuilder | None, object | None],
         ...,
@@ -447,10 +471,24 @@ def run_policy_comparison(
     reports: list[SearchPolicyReport] = []
     for policy, builder, supplied_reranker in policies:
         if builder is None:
-            reports.append(_skipped_policy(policy, "builder_not_supplied"))
+            reports.append(
+                _skipped_policy(
+                    policy,
+                    "builder_not_supplied",
+                    policy_fingerprint=_policy_fingerprint(policy, identities),
+                    corpus_fingerprint=corpus_fingerprint,
+                )
+            )
             continue
         if policy == "reranking" and supplied_reranker is None:
-            reports.append(_skipped_policy(policy, "reranker_not_supplied"))
+            reports.append(
+                _skipped_policy(
+                    policy,
+                    "reranker_not_supplied",
+                    policy_fingerprint=_policy_fingerprint(policy, identities),
+                    corpus_fingerprint=corpus_fingerprint,
+                )
+            )
             continue
         if policy == "reranking":
             runner = cast(RerankingPolicyBuilder, builder)(
@@ -458,8 +496,20 @@ def run_policy_comparison(
             )
         else:
             runner = cast(PolicyBuilder, builder)()
-        reports.append(_run_policy(selected_corpus, policy, runner))
-    return SearchPolicyComparison(selected_corpus.version, tuple(reports))
+        reports.append(
+            _run_policy(
+                selected_corpus,
+                policy,
+                runner,
+                policy_fingerprint=_policy_fingerprint(policy, identities),
+                corpus_fingerprint=corpus_fingerprint,
+            )
+        )
+    return SearchPolicyComparison(
+        selected_corpus.version,
+        tuple(reports),
+        corpus_fingerprint,
+    )
 
 
 def build_local_policy_builders(
@@ -583,10 +633,123 @@ def _local_policy_builder(
     return build
 
 
+_REQUIRED_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "timing_ms",
+        "candidate_counts",
+        "degraded",
+        "lane_decisions",
+        "overlap",
+        "duplicate_candidate_ids",
+        "multi_lane_candidate_ids",
+        "final_duplicate_ids",
+        "semantic",
+    }
+)
+
+
+def _corpus_fingerprint(corpus: SearchQualityCorpus) -> str:
+    encoded = json.dumps(
+        corpus.to_mapping(),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _policy_fingerprint(
+    policy: PolicyName,
+    identities: Mapping[PolicyName, SearchPolicyIdentity],
+) -> str:
+    identity = identities.get(policy)
+    if identity is not None:
+        return identity.fingerprint
+    encoded = json.dumps({"policy": policy}, sort_keys=True).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _diagnostics_complete(diagnostics: Mapping[str, object] | None) -> bool:
+    return diagnostics is not None and _REQUIRED_DIAGNOSTIC_KEYS <= diagnostics.keys()
+
+
+def _diagnostic_mapping(
+    diagnostics: Mapping[str, object],
+    key: str,
+) -> Mapping[str, object] | None:
+    value = diagnostics.get(key)
+    return value if isinstance(value, Mapping) else None
+
+
+def _diagnostic_list(diagnostics: Mapping[str, object], key: str) -> list[object]:
+    value = diagnostics.get(key)
+    return list(value) if isinstance(value, list) else []
+
+
+def _enrich_observation(
+    observation: SearchObservation,
+    *,
+    policy_fingerprint: str,
+    corpus_fingerprint: str,
+    degraded: bool,
+) -> SearchObservation:
+    diagnostics = observation.diagnostics
+    if diagnostics is None:
+        return replace(
+            observation,
+            policy_fingerprint=policy_fingerprint,
+            corpus_fingerprint=corpus_fingerprint,
+            diagnostics_complete=False,
+            degraded=degraded,
+        )
+
+    semantic = _diagnostic_mapping(diagnostics, "semantic")
+    semantic_rate_value = diagnostics.get("semantic_abstention_rate")
+    if semantic is not None:
+        semantic_rate_value = semantic.get("abstention_rate", semantic_rate_value)
+    semantic_rate = (
+        float(semantic_rate_value)
+        if isinstance(semantic_rate_value, (int, float))
+        else None
+    )
+    timing = _diagnostic_mapping(diagnostics, "timing_ms")
+    stage_timings = (
+        {key: float(value) for key, value in timing.items() if isinstance(value, (int, float))}
+        if timing is not None
+        else None
+    )
+    overlap = _diagnostic_mapping(diagnostics, "overlap")
+    duplicate_semantics: dict[str, object] = {
+        "duplicate_candidate_ids": _diagnostic_list(
+            diagnostics, "duplicate_candidate_ids"
+        ),
+        "multi_lane_candidate_ids": _diagnostic_list(
+            diagnostics, "multi_lane_candidate_ids"
+        ),
+        "final_duplicate_ids": _diagnostic_list(diagnostics, "final_duplicate_ids"),
+    }
+    if overlap is not None:
+        duplicate_semantics["overlap"] = dict(overlap)
+    return replace(
+        observation,
+        policy_fingerprint=policy_fingerprint,
+        corpus_fingerprint=corpus_fingerprint,
+        lane_decisions=_diagnostic_mapping(diagnostics, "lane_decisions"),
+        stage_timings_ms=stage_timings,
+        diagnostics_complete=_diagnostics_complete(diagnostics),
+        degraded=degraded,
+        duplicate_semantics=duplicate_semantics,
+        semantic_abstention_rate=semantic_rate,
+        semantic_abstention_available=semantic_rate is not None,
+    )
+
+
 def _run_policy(
     corpus: SearchQualityCorpus,
     policy: PolicyName,
     runner: PolicyCaseRunner,
+    *,
+    policy_fingerprint: str,
+    corpus_fingerprint: str,
 ) -> SearchPolicyReport:
     observations: dict[str, SearchObservation] = {}
     degraded_case_count = 0
@@ -594,10 +757,16 @@ def _run_policy(
     duplicate_case_count = 0
     for case in corpus.entries:
         outcome = runner(case)
-        observations[case.evaluation_label] = outcome.observation
+        observation = _enrich_observation(
+            outcome.observation,
+            policy_fingerprint=policy_fingerprint,
+            corpus_fingerprint=corpus_fingerprint,
+            degraded=outcome.degraded,
+        )
+        observations[case.evaluation_label] = observation
         degraded_case_count += int(outcome.degraded)
-        diagnostics_complete &= outcome.observation.diagnostics is not None
-        diagnostics = outcome.observation.diagnostics
+        diagnostics_complete &= observation.diagnostics_complete
+        diagnostics = observation.diagnostics
         duplicate_ids = None if diagnostics is None else diagnostics.get(
             "final_duplicate_ids"
         )
@@ -612,10 +781,19 @@ def _run_policy(
         else 0.0,
         diagnostics_complete=diagnostics_complete,
         duplicate_case_count=duplicate_case_count,
+        observations=observations,
+        policy_fingerprint=policy_fingerprint,
+        corpus_fingerprint=corpus_fingerprint,
     )
 
 
-def _skipped_policy(policy: PolicyName, reason: str) -> SearchPolicyReport:
+def _skipped_policy(
+    policy: PolicyName,
+    reason: str,
+    *,
+    policy_fingerprint: str,
+    corpus_fingerprint: str,
+) -> SearchPolicyReport:
     return SearchPolicyReport(
         policy=policy,
         status="skipped",
@@ -623,6 +801,8 @@ def _skipped_policy(policy: PolicyName, reason: str) -> SearchPolicyReport:
         degraded_case_count=0,
         degradation_rate=None,
         skip_reason=reason,
+        policy_fingerprint=policy_fingerprint,
+        corpus_fingerprint=corpus_fingerprint,
     )
 
 

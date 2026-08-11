@@ -101,7 +101,7 @@ class NativeKernelRecallHarness:
     records: tuple[Record, ...]
 
     @classmethod
-    def build(cls) -> NativeKernelRecallHarness:
+    def build(cls, *, semantic_enabled: bool = True) -> NativeKernelRecallHarness:
         embedder = RecallEmbedder()
         base_records = (
             _record(
@@ -135,19 +135,22 @@ class NativeKernelRecallHarness:
         pipeline = RecordSearchPipeline(
             hydrator=backend,
             keyword_store=LocalKeywordStore(backend),
-            vector_store=LocalVectorStore(backend),
+            vector_store=LocalVectorStore(backend) if semantic_enabled else None,
             graph_store=LocalGraphStore(backend),
-            embedding_provider=embedder,
-            embedding_model_name=embedder.model_name,
+            embedding_provider=embedder if semantic_enabled else None,
+            embedding_model_name=embedder.model_name if semantic_enabled else None,
             embedding_dim=embedder.dim,
         )
         return cls(pipeline, backend, records)
 
-    async def search(self, query: str):
+    async def search(self, query: str, *, retrieval_mode: str | None = None):
+        filters: dict[str, object] = {"workspace_id": "workspace"}
+        if retrieval_mode is not None:
+            filters["retrieval_mode"] = retrieval_mode
         return await self.pipeline.async_search(
             query,
             limit=3,
-            filters={"workspace_id": "workspace"},
+            filters=filters,
         )
 
     def close(self) -> None:
@@ -360,6 +363,71 @@ async def test_semantic_branch_runs_when_keyword_lane_does_not_fill_limit() -> N
     assert outcome.candidate_counts["vector"] > 0
     assert harness.vector_backend.search_calls == 1
     assert outcome.results
+
+
+@pytest.mark.asyncio
+async def test_forced_keyword_only_fixture_observes_planner_decision() -> None:
+    """Prove keyword-only planning before checking the unavailable vector lane."""
+    harness = NativeKernelRecallHarness.build(semantic_enabled=False)
+    try:
+        outcome = await harness.search("summary specificity retrieval")
+    finally:
+        harness.close()
+
+    assert outcome.diagnostics == (
+        "query_plan:type:exploratory",
+        "query_plan:signals:none",
+        "query_plan:lanes:keyword",
+        "query_plan:budgets:keyword=15,vector=15,graph_seeds=10,rerank=0",
+        "query_plan:skip:vector:unavailable",
+        "query_plan:skip:graph:awaiting_seed_confidence",
+    )
+    assert outcome.candidate_counts == {"keyword": 1}
+
+
+@pytest.mark.asyncio
+async def test_forced_vector_only_fixture_observes_planner_decision() -> None:
+    """Prove semantic-only planning before checking vector execution."""
+    harness = NativeKernelRecallHarness.build()
+    try:
+        outcome = await harness.search(
+            "summary specificity retrieval",
+            retrieval_mode="semantic_only",
+        )
+    finally:
+        harness.close()
+
+    assert outcome.diagnostics == (
+        "query_plan:type:exploratory",
+        "query_plan:signals:none",
+        "query_plan:lanes:vector",
+        "query_plan:budgets:keyword=15,vector=15,graph_seeds=10,rerank=0",
+        "query_plan:skip:keyword:unavailable",
+        "query_plan:skip:graph:unavailable",
+    )
+    assert set(outcome.candidate_counts) == {"vector"}
+
+
+@pytest.mark.asyncio
+async def test_forced_hybrid_fixture_observes_both_planner_lanes() -> None:
+    """Prove hybrid planning before checking both candidate populations."""
+    harness = NativeKernelRecallHarness.build()
+    try:
+        outcome = await harness.search(
+            "summary specificity retrieval",
+            retrieval_mode="hybrid",
+        )
+    finally:
+        harness.close()
+
+    assert outcome.diagnostics == (
+        "query_plan:type:exploratory",
+        "query_plan:signals:none",
+        "query_plan:lanes:keyword,vector",
+        "query_plan:budgets:keyword=15,vector=15,graph_seeds=10,rerank=0",
+        "query_plan:graph:adaptive",
+    )
+    assert set(outcome.candidate_counts) == {"keyword", "vector"}
 
 
 @pytest.mark.asyncio

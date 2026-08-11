@@ -18,6 +18,15 @@ class SearchObservation:
     latency_ms: float | None = None
     semantic_abstained: bool | None = None
     diagnostics: Mapping[str, object] | None = None
+    policy_fingerprint: str | None = None
+    corpus_fingerprint: str | None = None
+    lane_decisions: Mapping[str, object] | None = None
+    stage_timings_ms: Mapping[str, float] | None = None
+    diagnostics_complete: bool = False
+    degraded: bool = False
+    duplicate_semantics: Mapping[str, object] | None = None
+    semantic_abstention_rate: float | None = None
+    semantic_abstention_available: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

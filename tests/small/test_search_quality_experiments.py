@@ -94,6 +94,34 @@ def _builder(
     return build
 
 
+def _complete_diagnostics() -> dict[str, object]:
+    return {
+        "timing_ms": {"search": 1.0},
+        "candidate_counts": {"keyword": 1, "vector": 1},
+        "degraded": False,
+        "lane_decisions": {
+            "enabled": ["keyword", "vector"],
+            "budgets": {"keyword": 15, "vector": 15},
+            "skipped": ["graph:awaiting_seed_confidence"],
+        },
+        "overlap": {
+            "raw_lane_overlap_count": 1,
+            "multi_lane_result_count": 1,
+            "final_duplicate_count": 0,
+        },
+        "duplicate_candidate_ids": ["target"],
+        "multi_lane_candidate_ids": ["target"],
+        "final_duplicate_ids": [],
+        "semantic": {
+            "candidate_count": 1,
+            "semantic_only_candidate_count": 1,
+            "abstention_count": 0,
+            "abstention_rate": 0.0,
+        },
+        "semantic_abstention_rate": 0.0,
+    }
+
+
 def _acceptance_corpus() -> SearchQualityCorpus:
     return SearchQualityCorpus(
         version="acceptance-test",
@@ -439,6 +467,63 @@ def test_policy_comparison_runs_isolated_builders_in_stable_order() -> None:
     assert serialized_policies[-1]["status"] == "completed"
 
 
+def test_policy_comparison_carries_observed_diagnostic_contract() -> None:
+    """Retain planner evidence instead of treating callback execution as proof."""
+
+    def build():
+        def search(_case: SearchQualityCase) -> SearchPolicyObservation:
+            return SearchPolicyObservation(
+                SearchObservation(
+                    ("target",),
+                    diagnostics=_complete_diagnostics(),
+                    semantic_abstained=False,
+                )
+            )
+
+        return search
+
+    comparison = run_policy_comparison(_corpus(), baseline_builder=build)
+    report = comparison.by_policy["baseline"]
+    observation = report.observations["exact"]
+
+    assert report.policy_fingerprint
+    assert report.corpus_fingerprint == comparison.corpus_fingerprint
+    assert observation.policy_fingerprint == report.policy_fingerprint
+    assert observation.corpus_fingerprint == report.corpus_fingerprint
+    assert observation.lane_decisions == _complete_diagnostics()["lane_decisions"]
+    assert observation.stage_timings_ms == {"search": 1.0}
+    assert observation.diagnostics_complete
+    assert observation.degraded is False
+    assert observation.duplicate_semantics == {
+        "duplicate_candidate_ids": ["target"],
+        "multi_lane_candidate_ids": ["target"],
+        "final_duplicate_ids": [],
+        "overlap": _complete_diagnostics()["overlap"],
+    }
+    assert observation.semantic_abstention_available is True
+    assert observation.semantic_abstention_rate == 0.0
+
+
+def test_policy_comparison_fails_diagnostics_gate_for_incomplete_observations() -> None:
+    """Reject a completed-looking experiment when required evidence is absent."""
+    comparison = run_policy_comparison(
+        _corpus(),
+        baseline_builder=_builder("baseline", [], []),
+    )
+    report = comparison.by_policy["baseline"]
+
+    decision = evaluate_policy_acceptance(
+        report,
+        report,
+        thresholds=SearchPolicyAcceptanceThresholds(require_diagnostics=True),
+    )
+
+    assert report.diagnostics_complete is False
+    assert decision.accepted is False
+    assert "baseline_diagnostics_missing" in decision.reasons
+    assert "candidate_diagnostics_missing" in decision.reasons
+
+
 def test_policy_comparison_skips_reranking_without_a_reranker() -> None:
     """Do not construct a reranking policy when its dependency is absent."""
     reranking_builds: list[object] = []
@@ -562,9 +647,7 @@ def test_local_builders_apply_requested_config_overrides() -> None:
 
             comparison = run_policy_comparison(
                 load_corpus(),
-                baseline_builder=builders.baseline_builder,
-                calibrated_fusion_builder=builders.calibrated_fusion_builder,
-                query_expansion_builder=builders.query_expansion_builder,
+                **builders.comparison_kwargs(),
             )
             assert all(
                 report.status == "completed"
@@ -573,6 +656,19 @@ def test_local_builders_apply_requested_config_overrides() -> None:
             assert all(
                 report.metrics is not None
                 for report in comparison.policies[:3]
+            )
+            assert [
+                report.policy_fingerprint for report in comparison.policies[:3]
+            ] == [
+                builders.identities[policy].fingerprint
+                for policy in ("baseline", "calibrated_fusion", "query_expansion")
+            ]
+            assert all(
+                report.corpus_fingerprint == comparison.corpus_fingerprint
+                for report in comparison.policies
+            )
+            assert all(
+                report.diagnostics_complete for report in comparison.policies[:3]
             )
         finally:
             manager.close()
