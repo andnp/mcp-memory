@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from threading import get_ident
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -24,8 +25,9 @@ class FakeOutcome:
 
 
 class FakePipeline:
-    def __init__(self) -> None:
+    def __init__(self, thread_ids: list[int] | None = None) -> None:
         self.calls: list[tuple[str, int, dict[str, object]]] = []
+        self.thread_ids = thread_ids
 
     async def search(
         self,
@@ -35,6 +37,8 @@ class FakePipeline:
         filters: dict[str, object],
     ) -> FakeOutcome:
         self.calls.append((query, limit, filters))
+        if self.thread_ids is not None:
+            self.thread_ids.append(get_ident())
         await asyncio.sleep(0)
         return FakeOutcome(query, limit, filters)
 
@@ -158,13 +162,46 @@ def test_standard_and_adaptive_pipelines_share_query_embedding_cache_owner(
 
 @pytest.mark.asyncio
 async def test_sync_search_is_safe_inside_running_loop() -> None:
-    pipeline = FakePipeline()
+    """Keep typed and legacy sync calls isolated from the active loop.
 
-    outcome = _facade(pipeline).search_sync("query", limit=4)
+    Both facade entry points should execute their pipelines on a worker.
+    """
+    caller_thread_id = get_ident()
+    thread_ids: list[int] = []
+    pipeline = FakePipeline(thread_ids)
+    facade = _facade(pipeline)
 
+    typed_result = facade.retrieve_sync("typed query", filters={"scope": "test"})
+    outcome = facade.search_sync("query", limit=4)
+
+    typed_outcome = typed_result.items[0]
+    assert isinstance(typed_outcome, FakeOutcome)
+    assert typed_outcome.query == "typed query"
     assert isinstance(outcome, FakeOutcome)
     assert outcome.query == "query"
     assert outcome.limit == 4
+    assert len(thread_ids) == 2
+    assert all(thread_id != caller_thread_id for thread_id in thread_ids)
+
+
+def test_sync_search_preserves_async_exception() -> None:
+    """Propagate pipeline exceptions through the synchronous facade.
+
+    Keep the original exception type and message visible to callers.
+    """
+    class FailingPipeline(FakePipeline):
+        async def search(
+            self,
+            query: str,
+            *,
+            limit: int,
+            filters: dict[str, object],
+        ) -> FakeOutcome:
+            del query, limit, filters
+            raise LookupError("pipeline unavailable")
+
+    with pytest.raises(LookupError, match="pipeline unavailable"):
+        _facade(FailingPipeline()).search_sync("query")
 
 
 def test_read_peek_and_maintenance_delegate_to_native_service() -> None:

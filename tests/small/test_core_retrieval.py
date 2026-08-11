@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import get_ident
 
 import pytest
 
@@ -57,9 +58,12 @@ def test_retrieval_request_rejects_invalid_fields(
 @dataclass(frozen=True)
 class _FakeBackend:
     calls: list[RetrievalRequest]
+    thread_ids: list[int] | None = None
 
     async def search(self, request: RetrievalRequest) -> RetrievalResult[str]:
         self.calls.append(request)
+        if self.thread_ids is not None:
+            self.thread_ids.append(get_ident())
         return RetrievalResult(
             items=("first", "second", "third"),
             diagnostics=RetrievalDiagnostics(
@@ -71,6 +75,8 @@ class _FakeBackend:
 
     def search_sync(self, request: RetrievalRequest) -> RetrievalResult[str]:
         self.calls.append(request)
+        if self.thread_ids is not None:
+            self.thread_ids.append(get_ident())
         return RetrievalResult(
             items=("first", "second", "third"),
             diagnostics=RetrievalDiagnostics(
@@ -101,11 +107,34 @@ async def test_async_and_sync_results_share_bounded_contract() -> None:
 
 @pytest.mark.asyncio
 async def test_sync_entry_point_is_safe_inside_running_loop() -> None:
-    """Allow legacy synchronous callers to run from an active event loop."""
-    backend = _FakeBackend([])
+    """Allow sync callers to run from an active event loop.
+
+    Keep the coroutine isolated from the caller's event-loop thread.
+    """
+    caller_thread_id = get_ident()
+    thread_ids: list[int] = []
+    backend = _FakeBackend([], thread_ids)
     service = BoundedRetrievalService(backend.search)
 
     result = service.search_sync("inside loop")
 
     assert result.items == ("first", "second", "third")
     assert backend.calls == [RetrievalRequest(query="inside loop")]
+    assert thread_ids and thread_ids[0] != caller_thread_id
+
+
+@pytest.mark.asyncio
+async def test_nested_sync_entry_point_preserves_async_exception() -> None:
+    """Propagate adapter exceptions through the nested sync bridge.
+
+    Preserve the original exception type and message for callers.
+    """
+
+    async def fail(request: RetrievalRequest) -> RetrievalResult[str]:
+        del request
+        raise LookupError("backend unavailable")
+
+    service = BoundedRetrievalService(fail)
+
+    with pytest.raises(LookupError, match="backend unavailable"):
+        service.search_sync("inside loop")
