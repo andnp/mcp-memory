@@ -277,7 +277,11 @@ def _legacy_federation_source(routes) -> MemoryFederationSource:
         return source
     retrieval = getattr(service, "_retrieval", None)
     repository = getattr(service, "_repository", None)
-    health_provider = getattr(service, "_relational_search", None)
+    capabilities = getattr(service, "capabilities", service)
+    reporting = getattr(capabilities, "reporting", None)
+    health_provider = getattr(reporting, "health", None)
+    if health_provider is None:
+        health_provider = getattr(service, "_relational_search", None)
     if retrieval is None:
         raise ValueError("memory_federation_unavailable")
     source = MemoryFederationSource(
