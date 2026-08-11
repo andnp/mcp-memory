@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 import logging
 from typing import Any
@@ -26,6 +26,8 @@ SEARCH_READ_GUIDANCE = (
 )
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _CACHE_VALIDATION_TOKENS_FIELD = "_cache_validation_tokens"
+_CACHE_SEARCH_EPOCHS_FIELD = "_cache_search_epochs"
+_SEARCH_EPOCH_LANES = ("keyword", "vector", "graph")
 logger = logging.getLogger(__name__)
 _ACTIVE_INFLIGHT_SEARCH: ContextVar[SharedReadCacheInFlightSearch | None] = ContextVar(
     "active_inflight_search", default=None
@@ -102,6 +104,7 @@ def _annotate_cached_fallback(
 def _compact_cached_search_payload(payload: dict[str, object]) -> dict[str, object]:
     compact_payload = dict(payload)
     compact_payload.pop(_CACHE_VALIDATION_TOKENS_FIELD, None)
+    compact_payload.pop(_CACHE_SEARCH_EPOCHS_FIELD, None)
     results = compact_payload.get("results")
     if isinstance(results, list):
         compact_payload["results"] = [
@@ -214,7 +217,11 @@ def _load_cached_search_fallback(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    payload = cache.load_search_response(request)
+    try:
+        payload = cache.load_search_response(request)
+    except Exception:
+        logger.warning("Shared read cache stale fallback load failed", exc_info=True)
+        return None
     if payload is None:
         return None
     logger.warning(
@@ -275,10 +282,18 @@ def _load_fresh_cached_search_hit(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    payload = cache.load_fresh_search_response(
-        request, ttl_seconds=_FRESH_SEARCH_CACHE_HIT_TTL_SECONDS
-    )
+    try:
+        payload = cache.load_fresh_search_response(
+            request, ttl_seconds=_FRESH_SEARCH_CACHE_HIT_TTL_SECONDS
+        )
+    except Exception:
+        logger.warning("Shared read cache fresh lookup failed", exc_info=True)
+        return None
     if payload is None:
+        return None
+    cached_epochs = payload.get(_CACHE_SEARCH_EPOCHS_FIELD)
+    current_epochs = _resolve_search_epochs(ctx)
+    if not isinstance(cached_epochs, dict) or current_epochs != cached_epochs:
         return None
     if not _cached_search_payload_has_current_records(ctx, payload):
         return None
@@ -306,14 +321,22 @@ def _store_cached_search_response(
     payload: dict[str, object],
     *,
     validation_tokens: dict[str, str],
+    search_epochs: dict[str, int] | None,
 ) -> None:
     cache = getattr(ctx, "read_cache", None)
     if cache is not None:
-        cache.store_search_response(
-            request,
-            payload | {_CACHE_VALIDATION_TOKENS_FIELD: validation_tokens},
-            inflight_search=_ACTIVE_INFLIGHT_SEARCH.get(),
-        )
+        try:
+            cache.store_search_response(
+                request,
+                payload
+                | {
+                    _CACHE_VALIDATION_TOKENS_FIELD: validation_tokens,
+                    _CACHE_SEARCH_EPOCHS_FIELD: search_epochs,
+                },
+                inflight_search=_ACTIVE_INFLIGHT_SEARCH.get(),
+            )
+        except Exception:
+            logger.warning("Shared read cache search response write failed", exc_info=True)
 
 
 def _begin_inflight_search_coalescing(
@@ -330,7 +353,11 @@ def _begin_inflight_search_coalescing(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    entry = cache.begin_inflight_search(request)
+    try:
+        entry = cache.begin_inflight_search(request)
+    except Exception:
+        logger.warning("Shared read cache in-flight coalescing failed", exc_info=True)
+        return None
     if entry.is_leader:
         _ACTIVE_INFLIGHT_SEARCH.set(entry)
     return entry
@@ -349,7 +376,10 @@ def _finish_inflight_search_coalescing(
     if cache is None:
         return
     try:
-        cache.finish_inflight_search(entry, payload=payload, error=error)
+        try:
+            cache.finish_inflight_search(entry, payload=payload, error=error)
+        except Exception:
+            logger.warning("Shared read cache in-flight completion failed", exc_info=True)
     finally:
         if _ACTIVE_INFLIGHT_SEARCH.get() is entry:
             _ACTIVE_INFLIGHT_SEARCH.set(None)
@@ -385,6 +415,31 @@ def _resolve_read_cache_validation_token(
     ctx: MemoryReadPort, memory_id: str
 ) -> str | None:
     return _resolve_read_cache_validation_tokens(ctx, [memory_id]).get(memory_id)
+
+
+def _resolve_search_epochs(ctx: MemoryReadPort) -> dict[str, int] | None:
+    for source in (
+        getattr(ctx, "repository", None),
+        getattr(ctx, "relational_search", None),
+    ):
+        resolver = getattr(source, "get_search_epochs", None)
+        if not callable(resolver):
+            continue
+        try:
+            epochs = resolver()
+        except Exception:
+            logger.warning("Search epoch snapshot capture failed", exc_info=True)
+            return None
+        if not isinstance(epochs, Mapping):
+            return None
+        if any(
+            not isinstance(epochs.get(lane), int)
+            or isinstance(epochs.get(lane), bool)
+            for lane in _SEARCH_EPOCH_LANES
+        ):
+            return None
+        return {lane: int(epochs[lane]) for lane in _SEARCH_EPOCH_LANES}
+    return None
 
 
 def _cached_search_payload_has_current_records(

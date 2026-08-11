@@ -18,6 +18,7 @@ from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
 from mcp_memory.application.cache_policy import (
+    _CACHE_SEARCH_EPOCHS_FIELD,
     _CACHE_VALIDATION_TOKENS_FIELD,
     _begin_inflight_search_coalescing,
     _compact_cached_read_payload,
@@ -31,6 +32,7 @@ from mcp_memory.application.cache_policy import (
     _load_validated_cached_read_hit,
     _resolve_read_cache_validation_token,
     _resolve_read_cache_validation_tokens,
+    _resolve_search_epochs,
     _shared_read_cache_enabled,
     _store_cached_read_response,
     _store_cached_search_response,
@@ -416,6 +418,13 @@ def _search_memory_records(
             datetime.now(UTC).isoformat(),
             best_effort=True,
         )
+    search_epochs = (
+        _resolve_search_epochs(ctx)
+        if _shared_read_cache_enabled(
+            ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+        )
+        else None
+    )
     telemetry.record_search(
         caller_kind=caller_kind,
         query=query,
@@ -490,11 +499,16 @@ def _search_memory_records(
             cache_request,
             payload,
             validation_tokens=validation_tokens,
+            search_epochs=search_epochs,
         )
     _finish_inflight_search_coalescing(
         ctx,
         inflight_search,
-        payload=payload | {_CACHE_VALIDATION_TOKENS_FIELD: validation_tokens},
+        payload=payload
+        | {
+            _CACHE_VALIDATION_TOKENS_FIELD: validation_tokens,
+            _CACHE_SEARCH_EPOCHS_FIELD: search_epochs,
+        },
     )
     return payload
 

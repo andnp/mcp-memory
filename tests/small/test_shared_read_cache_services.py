@@ -58,6 +58,17 @@ class FakeRuntimeLogs:
         return None
 
 
+class SearchEpochRepository:
+    def __init__(self) -> None:
+        self.epochs = {"keyword": 0, "vector": 0, "graph": 0}
+
+    def get_search_epochs(self) -> dict[str, int]:
+        return dict(self.epochs)
+
+    def bump(self, lane: str) -> None:
+        self.epochs[lane] += 1
+
+
 class SuccessfulSearchService:
     def search_memories(self, **kwargs):
         del kwargs
@@ -135,6 +146,32 @@ class CountingSearchService:
                 score=0.9,
                 ranking_debug=None,
             )
+        ]
+
+
+class EpochMutationSearchService:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.memory_ids = ["memory-1"]
+        self.summary = "Fresh authoritative result"
+        self.score = 0.9
+
+    def search_memories(self, **kwargs):
+        del kwargs
+        self.calls += 1
+        return [
+            SimpleNamespace(
+                memory_id=memory_id,
+                title=memory_id,
+                summary=self.summary,
+                memory_type="fact",
+                status="active",
+                tags=["cache"],
+                workspace_ids=["workspace-123"],
+                score=self.score,
+                ranking_debug=None,
+            )
+            for memory_id in self.memory_ids
         ]
 
 
@@ -441,11 +478,14 @@ def _build_context(
     read_cache: SharedReadCache,
     relational_search: object,
     config: Config | None = None,
+    repository: object | None = None,
 ) -> ApplicationContext:
+    search_epoch_repository = repository or SearchEpochRepository()
     context = ApplicationContext(
         config=config,
         workspace_id="workspace-123",
         storage_backend="postgres",
+        repository=search_epoch_repository,
         relational_search=cast(MemorySearchPort, relational_search),
         read_cache=read_cache,
         retrieval_telemetry=FakeTelemetryRepository(),
@@ -1258,7 +1298,10 @@ def test_search_memory_records_service_short_circuits_on_fresh_cache_hit(
         "guidance": "cached guidance",
     }
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
-    cache.store_search_response(request, cached_payload)
+    cache.store_search_response(
+        request,
+        cached_payload | {"_cache_search_epochs": {"keyword": 0, "vector": 0, "graph": 0}},
+    )
     search_service = CountingSearchService()
     ctx = _build_context(read_cache=cache, relational_search=search_service)
 
@@ -1334,6 +1377,113 @@ def test_search_memory_records_service_invalidates_archive_status_token_change(
 
     assert response["status"] == "ok"
     assert search_service.validation_calls == [["memory-1"], ["memory-1"], ["memory-1"]]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "lane"),
+    [
+        ("insertion", "keyword"),
+        ("update", "keyword"),
+        ("deletion", "keyword"),
+        ("embedding_repair", "vector"),
+    ],
+)
+def test_search_epoch_mutations_invalidate_fresh_hits(
+    tmp_path: Path,
+    scenario: str,
+    lane: str,
+) -> None:
+    """Corpus and embedding mutations force a fresh authoritative search.
+
+    The post-mutation result also changes, proving the old projection was not served.
+    """
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = EpochMutationSearchService()
+    repository = SearchEpochRepository()
+    ctx = _build_context(
+        read_cache=cache,
+        relational_search=search_service,
+        repository=repository,
+    )
+
+    search_memory_records_service(ctx, {"query": f"{scenario} query"})
+    repository.bump(lane)
+    if scenario == "insertion":
+        search_service.memory_ids.append("memory-2")
+    elif scenario == "update":
+        search_service.summary = "Updated authoritative result"
+    elif scenario == "deletion":
+        search_service.memory_ids = []
+    else:
+        search_service.summary = "Repaired embedding result"
+
+    response = search_memory_records_service(ctx, {"query": f"{scenario} query"})
+
+    assert response["status"] == "ok"
+    assert search_service.calls == 2
+    if scenario == "insertion":
+        assert [result["memory_ref"] for result in response["results"]] == [
+            "memory-1",
+            "memory-2",
+        ]
+    elif scenario == "update":
+        assert response["results"][0]["summary"] == "Updated authoritative result"
+    elif scenario == "deletion":
+        assert response["results"] == []
+    else:
+        assert response["results"][0]["summary"] == "Repaired embedding result"
+
+
+def test_search_epoch_mismatch_preserves_degraded_stale_fallback(
+    tmp_path: Path,
+) -> None:
+    """An epoch-invalid response remains available when authoritative search fails.
+
+    Stale lookup remains keyed only by the stable request identity.
+    """
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = CountingSearchService()
+    repository = SearchEpochRepository()
+    ctx = _build_context(
+        read_cache=cache,
+        relational_search=search_service,
+        repository=repository,
+    )
+
+    warm_response = search_memory_records_service(ctx, {"query": "epoch fallback"})
+    repository.bump("keyword")
+    search_service.should_fail = True
+
+    response = search_memory_records_service(ctx, {"query": "epoch fallback"})
+
+    assert response["cache_status"] == "stale_fallback"
+    assert response["degraded"] is True
+    assert response["results"] == warm_response["results"]
+
+
+def test_search_cache_failures_do_not_fail_authoritative_search(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cache lookup and write failures leave authoritative search available.
+
+    Cache errors are isolated from the user-visible authoritative result.
+    """
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = CountingSearchService()
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    def _raise_cache_failure(*args, **kwargs):
+        del args, kwargs
+        raise OSError("cache unavailable")
+
+    monkeypatch.setattr(cache, "load_fresh_search_response", _raise_cache_failure)
+    monkeypatch.setattr(cache, "store_search_response", _raise_cache_failure)
+
+    response = search_memory_records_service(ctx, {"query": "cache failure"})
+
+    assert response["status"] == "ok"
+    assert search_service.calls == 1
 
 
 def test_search_memory_records_service_refreshes_expired_cache_entry(
@@ -2048,7 +2198,11 @@ def test_search_memory_records_service_records_cache_metrics_for_external_non_de
         policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
-    cache.store_search_response(request, warm_response)
+    cache.store_search_response(
+        request,
+        warm_response
+        | {"_cache_search_epochs": ctx.repository.get_search_epochs()},
+    )
     ctx.relational_search = cast(MemorySearchPort, CountingSearchService())
 
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)

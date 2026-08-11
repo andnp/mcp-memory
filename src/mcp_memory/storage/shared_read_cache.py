@@ -30,6 +30,7 @@ from mcp_memory.utils.db import (
 
 logger = logging.getLogger(__name__)
 _CACHE_SCHEMA_VERSION = CACHE_SCHEMA_VERSION
+_CACHE_SEARCH_EPOCHS_FIELD = "_cache_search_epochs"
 _RECENT_CACHE_METRICS_WINDOW_MINUTES = 15
 _INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS = 1.0
 _METRIC_COLUMNS = (
@@ -258,15 +259,21 @@ class SharedReadCache:
         *,
         ttl_seconds: float,
     ) -> dict[str, Any] | None:
-        row = self._fetch_search_row(request, "payload_json, cached_at")
+        row = self._fetch_search_row(
+            request, "payload_json, cached_at, search_epochs_json"
+        )
         if row is None:
             return None
-        payload_json, cached_at = row
+        payload_json, cached_at, search_epochs_json = row
         if not isinstance(cached_at, int | float):
             return None
         if time() - float(cached_at) > ttl_seconds:
             return None
-        return self._decode_payload(payload_json)
+        payload = self._decode_payload(payload_json)
+        search_epochs = self._decode_search_epochs(search_epochs_json)
+        if payload is not None and search_epochs is not None:
+            payload[_CACHE_SEARCH_EPOCHS_FIELD] = search_epochs
+        return payload
 
     def store_search_response(
         self,
@@ -277,6 +284,13 @@ class SharedReadCache:
     ) -> None:
         params_json = self._serialize_json(request.normalized_params())
         cache_key = self._search_cache_key(request)
+        stored_payload = dict(payload)
+        search_epochs = stored_payload.pop(_CACHE_SEARCH_EPOCHS_FIELD, None)
+        search_epochs_json = (
+            self._serialize_json(search_epochs)
+            if isinstance(search_epochs, dict)
+            else None
+        )
         lock_context = (
             self._inflight_searches_lock
             if inflight_search is not None
@@ -293,17 +307,21 @@ class SharedReadCache:
                     return
             self._execute(
                 """
-                INSERT INTO cached_search_results (cache_key, params_json, payload_json, cached_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO cached_search_results (
+                    cache_key, params_json, payload_json, search_epochs_json, cached_at
+                )
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     params_json = excluded.params_json,
                     payload_json = excluded.payload_json,
+                    search_epochs_json = excluded.search_epochs_json,
                     cached_at = excluded.cached_at
                 """,
                 (
                     cache_key,
                     params_json,
-                    self._serialize_json(payload),
+                    self._serialize_json(stored_payload),
+                    search_epochs_json,
                     time(),
                 ),
             )
@@ -703,6 +721,7 @@ class SharedReadCache:
                 cache_key TEXT PRIMARY KEY,
                 params_json TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
+                search_epochs_json TEXT,
                 cached_at REAL NOT NULL
             );
 
@@ -761,6 +780,7 @@ class SharedReadCache:
         )
         self._ensure_column("cached_memory_records", "validation_token", "TEXT")
         self._ensure_column("cached_memory_projections", "validation_token", "TEXT")
+        self._ensure_column("cached_search_results", "search_epochs_json", "TEXT")
 
     def _search_cache_key(self, request: SharedReadCacheSearchRequest) -> str:
         normalized = self._serialize_json(request.normalized_params())
@@ -852,8 +872,28 @@ class SharedReadCache:
     def _decode_payload(self, payload_json: Any) -> dict[str, Any] | None:
         if not isinstance(payload_json, str):
             return None
-        payload = json.loads(payload_json)
+        try:
+            payload = json.loads(payload_json)
+        except (TypeError, ValueError):
+            return None
         return payload if isinstance(payload, dict) else None
+
+    def _decode_search_epochs(self, epochs_json: Any) -> dict[str, int] | None:
+        if not isinstance(epochs_json, str):
+            return None
+        try:
+            epochs = json.loads(epochs_json)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(epochs, dict):
+            return None
+        if any(
+            not isinstance(epochs.get(lane), int)
+            or isinstance(epochs.get(lane), bool)
+            for lane in ("keyword", "vector", "graph")
+        ):
+            return None
+        return {lane: int(epochs[lane]) for lane in ("keyword", "vector", "graph")}
 
     def _projection_entry_from_row(
         self,
