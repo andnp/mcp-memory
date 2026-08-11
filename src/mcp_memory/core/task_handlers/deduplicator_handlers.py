@@ -37,7 +37,7 @@ from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
-from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 from searchkernel.ingestion import embed_in_batches
 from searchkernel.utils.similarity import cosine_similarity_lists
 

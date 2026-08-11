@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         MemoryIDResolutionPort,
         ReadCacheValidationPort,
         SearchHealthPort,
+        SearchHealthSnapshot,
         StartupHealthPort,
     )
     from .work_items import WorkItemRecord, WorkItemRecordLike, WorkItemRepository
@@ -55,6 +56,7 @@ _EXPORTS = {
     "MemoryIDResolutionPort": ("search", "MemoryIDResolutionPort"),
     "ReadCacheValidationPort": ("search", "ReadCacheValidationPort"),
     "SearchHealthPort": ("search", "SearchHealthPort"),
+    "SearchHealthSnapshot": ("search", "SearchHealthSnapshot"),
     "StartupHealthPort": ("search", "StartupHealthPort"),
     "RankedMemoryCandidate": ("memory", "RankedMemoryCandidate"),
     "ProviderUsagePort": ("providers", "ProviderUsagePort"),
@@ -90,6 +92,7 @@ __all__ = (
     "MemoryIDResolutionPort",
     "ReadCacheValidationPort",
     "SearchHealthPort",
+    "SearchHealthSnapshot",
     "StartupHealthPort",
     "ProviderUsagePort",
     "NullProviderUsagePort",

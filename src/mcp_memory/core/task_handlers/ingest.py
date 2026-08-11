@@ -42,7 +42,7 @@ from mcp_memory.core.task_handlers.constants import DEFAULT_INGEST_BATCH_SIZE
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_or_context_workspace_id
 from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 from searchkernel.ingestion import embed_in_batches
 from searchkernel.utils.similarity import cosine_similarity_lists
 

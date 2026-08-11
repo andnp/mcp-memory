@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
-from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 
 # ---------------------------------------------------------------------------
 # relationship_proposal_support: prompt helpers and proposal normalization

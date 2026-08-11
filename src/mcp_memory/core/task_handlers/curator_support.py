@@ -33,7 +33,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalPort,
     build_memory_retrieval_facade,

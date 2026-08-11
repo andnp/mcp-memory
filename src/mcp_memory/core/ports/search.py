@@ -3,20 +3,43 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from mcp_memory.relational.search import SearchHealthStatus
+INTERNAL_SEARCH_TOOL_NAME = "internal_search_memory_records"
+
+
+class SearchHealthSnapshot(Protocol):
+    semantic_enabled: bool
+    available: bool
+    degraded: bool
+    fallback_count: int
+    rebuild_count: int
+    background_repair_enabled: bool
+    background_repair_wait_seconds: float
+    queued_repair_backlog_count: int
+    running_repair_count: int
+    oldest_queued_repair_age_seconds: float | None
+    repair_wait_count: int
+    partial_semantic_search_count: int
+    last_partial_semantic_at: str | None
+    last_repair_wait_seconds: float
+    last_repair_candidate_count: int
+    last_repair_pending_count: int
+    last_error: str | None
+    last_failure_at: str | None
+    last_recovery_at: str | None
+    last_integrity_check_at: str | None
+    integrity_check_error: str | None
 
 
 @runtime_checkable
 class SearchHealthPort(Protocol):
-    def get_health(self) -> SearchHealthStatus: ...
+    def get_health(self) -> SearchHealthSnapshot: ...
 
 
 @runtime_checkable
 class StartupHealthPort(Protocol):
-    def run_startup_health_check(self) -> SearchHealthStatus: ...
+    def run_startup_health_check(self) -> SearchHealthSnapshot: ...
 
 
 @runtime_checkable
@@ -40,8 +63,10 @@ class MemoryIDResolutionPort(Protocol):
 
 __all__ = [
     "EmbeddingMaintenancePort",
+    "INTERNAL_SEARCH_TOOL_NAME",
     "MemoryIDResolutionPort",
     "ReadCacheValidationPort",
     "SearchHealthPort",
+    "SearchHealthSnapshot",
     "StartupHealthPort",
 ]

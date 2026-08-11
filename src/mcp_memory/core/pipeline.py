@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.context import MemoryPipelineContext, MemoryReadCapabilities, MutationCapabilities
+from mcp_memory.core.ports.memory import MemoryReadPort
 from mcp_memory.integrations.memory_retrieval import MemoryRetrievalPort
 from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.runtime_facades import JournalFacade, RuntimeInfoFacade, TaskQueueFacade
@@ -17,7 +17,7 @@ class MemoryPipeline:
     task_queue: TaskQueueFacade
     memory_queries: RelationalMemoryQueries | None
     repository: object | None
-    search: MemorySearchPort | None
+    search: MemoryReadPort | None
     retrieval: MemoryRetrievalPort | None
 
     @classmethod
@@ -66,7 +66,7 @@ class MemoryPipeline:
                 else None
             ),
             repository=capabilities.repository,
-            search=capabilities.relational_search,
+            search=cast(MemoryReadPort | None, capabilities.relational_search),
             retrieval=cast(
                 MemoryRetrievalPort | None,
                 getattr(ctx, "memory_retrieval", None),

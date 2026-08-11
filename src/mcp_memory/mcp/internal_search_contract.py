@@ -2,8 +2,7 @@
 
 from dataclasses import dataclass
 
-
-INTERNAL_SEARCH_TOOL_NAME = "internal_search_memory_records"
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 
 
 @dataclass(frozen=True)
@@ -70,3 +69,9 @@ INTERNAL_SEARCH_CONSUMERS = (
 
 INTERNAL_SEARCH_CONSUMER_NAMES = frozenset(consumer.name for consumer in INTERNAL_SEARCH_CONSUMERS)
 
+__all__ = [
+    "INTERNAL_SEARCH_CONSUMERS",
+    "INTERNAL_SEARCH_CONSUMER_NAMES",
+    "INTERNAL_SEARCH_TOOL_NAME",
+    "InternalSearchConsumer",
+]

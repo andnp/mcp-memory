@@ -20,7 +20,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserver
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
 from mcp_memory.core.providers.interfaces import ProviderTokenUsage
-from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
