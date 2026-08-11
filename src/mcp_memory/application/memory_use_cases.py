@@ -17,6 +17,8 @@ from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.core.retrieval import RetrievalRequest
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalFacade,
+    MemoryRetrievalPort,
+    MemorySearchRequest,
     build_memory_retrieval_facade,
 )
 from mcp_memory.integrations.searchkernel_record_pipeline import (
@@ -59,7 +61,6 @@ from mcp_memory.application.skill_review_contract import (
 )
 from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
-    SearchMemoryRecordsOperation,
 )
 from mcp_memory.relational.search import (
     _to_relational_search_result,
@@ -378,25 +379,21 @@ def _search_memory_records(
     authoritative_search_started = perf_counter()
     try:
         if execution_arguments["retrieval_mode"] == "hybrid":
-            operation = SearchMemoryRecordsOperation(retrieval)
-            operation_arguments = {
-                key: value
-                for key, value in execution_arguments.items()
-                if key != "retrieval_mode"
-            }
-            if debug_enabled and callable(
-                getattr(retrieval, "search_sync_with_diagnostics", None)
-            ):
-                outcome, diagnostics = retrieval.search_sync_with_diagnostics(
-                    query,
-                    limit=execution_arguments["limit"],
-                    adaptive_limit=execution_arguments["adaptive_limit"],
-                    workspace_id=execution_arguments["workspace_id"],
-                    memory_type=execution_arguments["memory_type"],
-                    status=execution_arguments["status"],
-                    tags=execution_arguments["tags"],
-                    include_superseded=execution_arguments["include_superseded"],
-                    ranking_workspace_id=execution_arguments["ranking_workspace_id"],
+            retrieval_port = cast(MemoryRetrievalPort, retrieval)
+            request = MemorySearchRequest(
+                query=query,
+                workspace_id=execution_arguments["workspace_id"],
+                limit=execution_arguments["limit"],
+                adaptive_limit=execution_arguments["adaptive_limit"],
+                memory_type=execution_arguments["memory_type"],
+                status=execution_arguments["status"],
+                tags=execution_arguments["tags"],
+                include_superseded=execution_arguments["include_superseded"],
+                ranking_workspace_id=execution_arguments["ranking_workspace_id"],
+            )
+            if debug_enabled:
+                outcome, diagnostics = retrieval_port.search_sync_with_diagnostics(
+                    request,
                     debug=True,
                 )
                 raw_search_results = outcome.results
@@ -407,12 +404,10 @@ def _search_memory_records(
                             result.memory_id
                             in (getattr(diagnostics, "final_duplicate_ids", None) or [])
                         )
-            elif debug_enabled:
-                results, diagnostics = operation.execute_with_diagnostics(
-                    **operation_arguments
-                )
             else:
-                results = operation.execute(**operation_arguments)
+                outcome = retrieval_port.search_sync(request)
+                raw_search_results = outcome.results
+                results = [_to_relational_search_result(result) for result in outcome.results]
         elif debug_enabled:
             outcome, diagnostics = retrieval.search_sync_with_diagnostics(
                 query,

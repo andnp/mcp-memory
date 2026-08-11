@@ -26,11 +26,39 @@ from mcp_memory.mcp.internal_services import internal_search_memory_records_serv
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.relational.search import RelationalSearchResult, SearchExecutionDiagnostics
+from mcp_memory.relational.search import SearchExecutionDiagnostics
 from mcp_memory.utils.db import DatabaseManager
 
 
 pytestmark = pytest.mark.small
+
+
+def _raw_search_result(
+    memory_id: str = "memory-1",
+    *,
+    title: str = "Search result",
+    summary: str = "Search summary",
+) -> SimpleNamespace:
+    record = SimpleNamespace(
+        source_id=memory_id,
+        title=title,
+        body="Search summary",
+        metadata={
+            "memory_ref": 1,
+            "summary": summary,
+            "memory_type": "fact",
+            "memory_status": "active",
+            "tags": [],
+            "workspace_ids": [],
+        },
+        status=SimpleNamespace(value="active"),
+        storage_key=f"memory:{memory_id}",
+    )
+    provenance = SimpleNamespace(
+        strategies=("keyword",),
+        to_dict=lambda: {"strategies": ["keyword"]},
+    )
+    return SimpleNamespace(record=record, score=0.9, provenance=provenance)
 
 
 def test_debug_search_reports_bounded_application_phase_timings(monkeypatch) -> None:
@@ -38,25 +66,13 @@ def test_debug_search_reports_bounded_application_phase_timings(monkeypatch) -> 
     clock_values = iter((0.0, 0.001, 0.004, 0.006, 100.006, 100.007, 100.008, 100.009))
     monkeypatch.setattr(memory_use_cases, "perf_counter", lambda: next(clock_values))
     health = SimpleNamespace(repair_wait_count=0, last_repair_wait_seconds=0.007)
-    result = RelationalSearchResult(
-        memory_id="memory-1",
-        memory_ref=1,
-        title="Timing result",
-        summary="Timing summary",
-        memory_type="fact",
-        status="active",
-    )
     diagnostics = SearchExecutionDiagnostics(timing_ms={"total": 2.0, "search": 1.5})
 
-    def execute_with_diagnostics(_operation, **_kwargs):
+    def search_sync_with_diagnostics(_request, *, debug):
+        assert debug is True
         health.repair_wait_count += 1
-        return [result], diagnostics
+        return SimpleNamespace(results=(_raw_search_result(),)), diagnostics
 
-    monkeypatch.setattr(
-        memory_use_cases.SearchMemoryRecordsOperation,
-        "execute_with_diagnostics",
-        execute_with_diagnostics,
-    )
     typed_health = SimpleNamespace(get_health=lambda: health)
     legacy_search = SimpleNamespace(
         get_health=lambda: pytest.fail("legacy search health should not be called")
@@ -67,7 +83,9 @@ def test_debug_search_reports_bounded_application_phase_timings(monkeypatch) -> 
             workspace_id="workspace-1",
             relational_search=cast(MemorySearchPort, legacy_search),
             search_health=typed_health,
-            memory_retrieval=object(),
+            memory_retrieval=SimpleNamespace(
+                search_sync_with_diagnostics=search_sync_with_diagnostics,
+            ),
             config=None,
             repository=None,
             read_cache=None,
@@ -171,25 +189,17 @@ def test_read_uses_typed_memory_id_resolution_before_legacy_search(
     assert telemetry_calls[0]["memory_id"] == "resolved-by-capability"
 
 
-def test_non_debug_search_does_not_add_phase_timings(monkeypatch) -> None:
+def test_non_debug_search_does_not_add_phase_timings() -> None:
     """Non-debug search retains its compact response contract."""
-    result = RelationalSearchResult(
-        memory_id="memory-1",
-        memory_ref=1,
-        title="Compact result",
-        summary="Compact summary",
-        memory_type="fact",
-        status="active",
-    )
-    monkeypatch.setattr(
-        memory_use_cases.SearchMemoryRecordsOperation,
-        "execute",
-        lambda _operation, **_kwargs: [result],
+    retrieval = SimpleNamespace(
+        search_sync=lambda _request: SimpleNamespace(
+                results=(_raw_search_result(title="Compact result", summary="Compact summary"),),
+        )
     )
     ctx = MemoryReadDependencies(
         workspace_id="workspace-1",
         relational_search=cast(MemorySearchPort, SimpleNamespace()),
-        memory_retrieval=object(),
+        memory_retrieval=retrieval,
     )
     telemetry = cast(
         RetrievalTelemetryPort,
