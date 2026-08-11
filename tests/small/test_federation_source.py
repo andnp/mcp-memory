@@ -132,6 +132,20 @@ async def test_source_propagates_side_effect_free_retrieval_control() -> None:
 
 
 @pytest.mark.asyncio
+async def test_source_selection_can_exclude_memory_source() -> None:
+    """Source selection excludes memory without invoking retrieval."""
+    retrieval = RetrievalDouble([])
+    source = MemoryFederationSource(cast(Any, retrieval))
+
+    response = await source.search(
+        SearchRequest(query="query", source_selection=("other",))
+    )
+
+    assert response.hits == ()
+    assert retrieval.request is None
+
+
+@pytest.mark.asyncio
 async def test_source_authorization_filters_hits_before_text_exposure() -> None:
     retrieval = RetrievalDouble([_result("allowed"), _result("denied")])
     source = MemoryFederationSource(
