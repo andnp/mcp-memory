@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from mcp_memory.embeddings import HashingEmbedder
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.management.health_reporting import (
     build_embedding_status,
     build_execution_attempt_health,
@@ -238,7 +240,7 @@ def test_build_search_health_prefers_typed_capability_over_legacy_search() -> No
         get_health=lambda: pytest.fail("legacy search health should not be called")
     )
 
-    payload = build_search_health(legacy_search, search_health=typed_health)
+    payload = build_search_health(legacy_search, search_health=cast(SearchHealthPort, typed_health))
 
     assert payload.available is False
     assert payload.fallback_count == 11
