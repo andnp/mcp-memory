@@ -33,6 +33,7 @@ from mcp_memory.management.operator_health_reporting import (
 from mcp_memory.management.reporting_rows import count_recent_conversation_statuses, count_recent_memory_updates
 from mcp_memory.management.runtime_log_service import RuntimeLogService
 from mcp_memory.mcp.telemetry import search_diagnostics_snapshot
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
@@ -58,6 +59,7 @@ class RuntimeHealthServiceDependencies:
     runtime_log_service: RuntimeLogService
     list_ai_conversations: Callable[..., Any]
     list_memories: Callable[..., Any]
+    search_health: SearchHealthPort | None = None
 
 
 def _coerce_transport_diagnostics_payload(snapshot: object) -> TransportDiagnosticsPayload:
@@ -124,6 +126,7 @@ class RuntimeHealthService:
             embeddings=embedder_status,
             search=build_search_health(
                 dependencies.relational_search,
+                search_health=dependencies.search_health,
                 search_diagnostics=search_diagnostics_snapshot(
                     dependencies.retrieval_telemetry
                 ),

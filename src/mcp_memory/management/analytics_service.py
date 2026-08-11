@@ -16,6 +16,7 @@ from mcp_memory.management.models import (
 from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
+from mcp_memory.core.ports import SearchHealthPort
 
 
 _LOW_CONVERSION_DEFAULT_MIN_SEARCH_COUNT = 3
@@ -83,6 +84,7 @@ class AnalyticsServiceDependencies:
     ai_agent_provider: Any
     ai_provider_registry: Any
     relational_search: Any
+    search_health: SearchHealthPort | None = None
 
 
 class AnalyticsService:
@@ -146,6 +148,7 @@ class AnalyticsService:
             ai_agent_provider=dependencies.ai_agent_provider,
             ai_provider_registry=dependencies.ai_provider_registry,
             relational_search=dependencies.relational_search,
+            search_health=dependencies.search_health,
             window_hours=window_hours,
             bucket_minutes=bucket_minutes,
             now=now,

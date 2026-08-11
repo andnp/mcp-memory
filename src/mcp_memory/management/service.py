@@ -128,6 +128,7 @@ class ManagementService:
         self._embedder = cast(Any, memory.embedder)
         self._vector_store = cast(Any, memory.vector_store)
         self._relational_search = cast(Any, memory.relational_search)
+        self._search_health = memory.search_health
         self._embedding_maintenance = cast(Any, (
             memory.embedding_maintenance
             or getattr(self._relational_search, "_embedding_maintenance", None)
@@ -150,7 +151,7 @@ class ManagementService:
             MemoryFederationSource(
                 retrieval,
                 self._repository,
-                health_provider=self._relational_search,
+                health_provider=self._search_health or self._relational_search,
             )
             if retrieval is not None
             else None
@@ -177,6 +178,7 @@ class ManagementService:
                 ai_agent_provider=self._ai_agent_provider,
                 ai_provider_registry=self._ai_provider_registry,
                 relational_search=self._relational_search,
+                search_health=self._search_health,
             )
         )
         self._task_administration_service = TaskAdministrationService(
@@ -245,6 +247,7 @@ class ManagementService:
                 runtime_log_service=self._runtime_log_service,
                 list_ai_conversations=self._memory_service.list_ai_conversations,
                 list_memories=self._memory_service.list_memories,
+                search_health=self._search_health,
             )
         )
         self._overview_service = OverviewService(
@@ -262,6 +265,7 @@ class ManagementService:
                 relational_search=self._relational_search,
                 retrieval_telemetry=self._retrieval_telemetry,
                 cache_health=self._runtime_health_service._build_cache_health,
+                search_health=self._search_health,
                 embedding_integrity_summary=lambda: self._runtime_health_service._embedding_integrity_summary(
                     workspace_id=None
                 ),

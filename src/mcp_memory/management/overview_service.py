@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.management.models import (
     CacheHealthPayload,
     EmbeddingIntegrityEventSummaryPayload,
@@ -29,6 +30,7 @@ class OverviewServiceDependencies:
     retrieval_telemetry: Any
     cache_health: Callable[[], CacheHealthPayload]
     embedding_integrity_summary: Callable[[], EmbeddingIntegrityEventSummaryPayload]
+    search_health: SearchHealthPort | None = None
 
 
 class OverviewService:
@@ -53,7 +55,7 @@ class OverviewService:
             embedder=dependencies.embedder,
             storage_backend=dependencies.storage_backend,
             vector_store=dependencies.vector_store,
-            relational_search=dependencies.relational_search,
+            relational_search=dependencies.search_health or dependencies.relational_search,
             search_diagnostics=search_diagnostics_snapshot(dependencies.retrieval_telemetry),
             cache=dependencies.cache_health(),
             embedding_integrity_summary=dependencies.embedding_integrity_summary(),
