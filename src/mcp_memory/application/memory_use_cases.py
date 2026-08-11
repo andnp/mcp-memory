@@ -61,6 +61,7 @@ from mcp_memory.application.skill_review_contract import (
 )
 from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
+    SearchMemoryRecordsOperation,
 )
 from mcp_memory.relational.search import (
     _to_relational_search_result,
@@ -391,7 +392,11 @@ def _search_memory_records(
                 include_superseded=execution_arguments["include_superseded"],
                 ranking_workspace_id=execution_arguments["ranking_workspace_id"],
             )
-            if debug_enabled:
+            typed_diagnostics = callable(
+                getattr(retrieval_port, "search_sync_with_diagnostics", None)
+            )
+            typed_search = callable(getattr(retrieval_port, "search_sync", None))
+            if debug_enabled and typed_diagnostics:
                 outcome, diagnostics = retrieval_port.search_sync_with_diagnostics(
                     request,
                     debug=True,
@@ -404,10 +409,31 @@ def _search_memory_records(
                             result.memory_id
                             in (getattr(diagnostics, "final_duplicate_ids", None) or [])
                         )
-            else:
+            elif debug_enabled:
+                operation = SearchMemoryRecordsOperation(retrieval)
+                operation_arguments = {
+                    key: value
+                    for key, value in execution_arguments.items()
+                    if key != "retrieval_mode"
+                }
+                if debug_enabled:
+                    results, diagnostics = operation.execute_with_diagnostics(
+                        **operation_arguments
+                    )
+                else:
+                    results = operation.execute(**operation_arguments)
+            elif typed_search:
                 outcome = retrieval_port.search_sync(request)
                 raw_search_results = outcome.results
                 results = [_to_relational_search_result(result) for result in outcome.results]
+            else:
+                operation = SearchMemoryRecordsOperation(retrieval)
+                operation_arguments = {
+                    key: value
+                    for key, value in execution_arguments.items()
+                    if key != "retrieval_mode"
+                }
+                results = operation.execute(**operation_arguments)
         elif debug_enabled:
             outcome, diagnostics = retrieval.search_sync_with_diagnostics(
                 query,
