@@ -30,7 +30,7 @@ _TECHNICAL_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.:/-]*")
 
 
 def _query_tokens(query: str) -> list[str]:
-    return [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+    return [token.lower() for token in FTS_QUERY_TOKEN_PATTERN.findall(query)]
 
 
 def _has_exact_identifier_match(
@@ -90,9 +90,7 @@ def _keyword_token_coverage(
 def _token_presence_ratio(query_tokens: Sequence[str], text: str) -> float:
     if not query_tokens or not text.strip():
         return 0.0
-    text_tokens = {
-        match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(text)
-    }
+    text_tokens = {token.lower() for token in FTS_QUERY_TOKEN_PATTERN.findall(text)}
     matched_tokens = sum(1 for token in query_tokens if token in text_tokens)
     return matched_tokens / len(query_tokens)
 
