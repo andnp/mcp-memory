@@ -253,7 +253,7 @@ class RelationalMemoryRepository:
                 )
                 self._replace_workspace_mappings(conn, item.memory_id, item.workspace_ids)
                 self._replace_tag_mappings(conn, item.memory_id, item.tags)
-                self._replace_fts_row(
+                self._insert_fts_row(
                     conn,
                     item.memory_id,
                     title=item.title,
@@ -1544,6 +1544,25 @@ class RelationalMemoryRepository:
         tags: list[str],
     ):
         conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
+        self._insert_fts_row(
+            conn,
+            memory_id,
+            title=title,
+            summary=summary,
+            content=content,
+            tags=tags,
+        )
+
+    def _insert_fts_row(
+        self,
+        conn,
+        memory_id: str,
+        *,
+        title: str,
+        summary: str,
+        content: str,
+        tags: list[str],
+    ):
         conn.execute(
             "INSERT INTO memories_fts(memory_id, title, summary, content, tags) VALUES (?, ?, ?, ?, ?)",
             (memory_id, title, summary, content, " ".join(tags)),
