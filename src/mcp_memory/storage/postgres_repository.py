@@ -4,6 +4,7 @@ import json
 import re
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
@@ -17,6 +18,7 @@ from mcp_memory.core.ports.memory import (
     _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
     _QUALITY_SIGNAL_ALIASES,
     FTS_QUERY_TOKEN_PATTERN,
+    MemoryCreateRequest,
     MemoryLink,
     MemoryReadContext,
     MemoryRecord,
@@ -33,6 +35,22 @@ from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionMana
 _SUMMARY_UNSET = object()
 RelationalMemoryReadContext = MemoryReadContext
 RelationalMemoryRecord = MemoryRecord
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedMemoryCreate:
+    memory_id: str
+    title: str
+    content: str
+    summary: str
+    memory_type: str
+    status: str
+    created_at: str
+    updated_at: str
+    archived_at: str | None
+    metadata: str
+    workspace_ids: list[str]
+    tags: list[str]
 
 
 class PostgresRelationalMemoryRepository:
@@ -227,67 +245,118 @@ class PostgresRelationalMemoryRepository:
         created_at: str | None = None,
         updated_at: str | None = None,
     ):
+        created = self.create_memories(
+            [
+                MemoryCreateRequest(
+                    title=title,
+                    content=content,
+                    workspace_ids=workspace_ids,
+                    tags=tags or (),
+                    summary=summary,
+                    memory_type=memory_type,
+                    status=status,
+                    metadata=metadata,
+                    memory_id=memory_id,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                )
+            ]
+        )
+        return self.get_memory(created[0].id) if created else None
+
+    def create_memories(self, requests: Sequence[MemoryCreateRequest]) -> list[MemoryRecord]:
+        prepared = [self._prepare_memory_create(request) for request in requests]
+        if not prepared:
+            return []
+
+        memory_ids = [item.memory_id for item in prepared]
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                for item in prepared:
+                    cursor.execute(
+                        """
+                        INSERT INTO memories (
+                            id, title, content, summary, type, status, created_at, updated_at,
+                            read_count, access_score, last_accessed_at, last_surfaced_at, metadata, archived_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                        """,
+                        (
+                            item.memory_id,
+                            item.title,
+                            item.content,
+                            item.summary,
+                            item.memory_type,
+                            item.status,
+                            item.created_at,
+                            item.updated_at,
+                            0,
+                            0.0,
+                            None,
+                            None,
+                            item.metadata,
+                            item.archived_at,
+                        ),
+                    )
+                    self._replace_workspace_mappings(cursor, item.memory_id, item.workspace_ids)
+                    self._replace_tag_mappings(cursor, item.memory_id, item.tags)
+                    self._upsert_search_document(
+                        cursor,
+                        memory_id=item.memory_id,
+                        title=item.title,
+                        summary=item.summary,
+                        content=item.content,
+                        tags=item.tags,
+                    )
+            connection.commit()
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                rows_by_id = self._memory_rows_by_id(cursor, memory_ids)
+                workspaces_by_id = self._workspace_ids_by_memory_id(cursor, memory_ids)
+                tags_by_id = self._tags_by_memory_id(cursor, memory_ids)
+                return [
+                    self._record_from_memory_row(
+                        rows_by_id[memory_id],
+                        workspace_ids=workspaces_by_id.get(memory_id, []),
+                        tags=tags_by_id.get(memory_id, []),
+                    )
+                    for memory_id in memory_ids
+                ]
+
+    def _prepare_memory_create(self, request: MemoryCreateRequest) -> _PreparedMemoryCreate:
         now = self._utc_now()
-        created_timestamp = created_at or now
-        updated_timestamp = updated_at or created_timestamp
-        normalized_title = title.strip()
-        normalized_content = content.strip()
-        normalized_workspace_ids = self._normalize_values(workspace_ids)
-        normalized_tags = self._normalize_values(tags or [])
-        normalized_type = self._validate_memory_type(memory_type)
-        normalized_status = self._validate_memory_status(status)
+        created_timestamp = request.created_at or now
+        updated_timestamp = request.updated_at or created_timestamp
+        normalized_title = request.title.strip()
+        normalized_content = request.content.strip()
+        normalized_workspace_ids = self._normalize_values(list(request.workspace_ids))
+        normalized_tags = self._normalize_values(list(request.tags))
+        normalized_type = self._validate_memory_type(request.memory_type)
+        normalized_status = self._validate_memory_status(request.status)
         self._validate_required_text("title", normalized_title)
         self._validate_required_text("content", normalized_content)
         if not normalized_workspace_ids:
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
-        summary_text = summary or self._build_summary(
+        summary_text = request.summary or self._build_summary(
             title=normalized_title,
             content=normalized_content,
             memory_type=normalized_type,
         )
-        record_id = memory_id or str(uuid4())
-        metadata_payload = json.dumps(metadata or {}, sort_keys=True)
-
-        with self._sessions.open_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO memories (
-                        id, title, content, summary, type, status, created_at, updated_at,
-                        read_count, access_score, last_accessed_at, last_surfaced_at, metadata, archived_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
-                    """,
-                    (
-                        record_id,
-                        normalized_title,
-                        normalized_content,
-                        summary_text,
-                        normalized_type,
-                        normalized_status,
-                        created_timestamp,
-                        updated_timestamp,
-                        0,
-                        0.0,
-                        None,
-                        None,
-                        metadata_payload,
-                        self._utc_now() if normalized_status == "archived" else None,
-                    ),
-                )
-                self._replace_workspace_mappings(cursor, record_id, normalized_workspace_ids)
-                self._replace_tag_mappings(cursor, record_id, normalized_tags)
-                self._upsert_search_document(
-                    cursor,
-                    memory_id=record_id,
-                    title=normalized_title,
-                    summary=summary_text,
-                    content=normalized_content,
-                    tags=normalized_tags,
-                )
-            connection.commit()
-
-        return self.get_memory(record_id)
+        return _PreparedMemoryCreate(
+            memory_id=request.memory_id or str(uuid4()),
+            title=normalized_title,
+            content=normalized_content,
+            summary=summary_text,
+            memory_type=normalized_type,
+            status=normalized_status,
+            created_at=created_timestamp,
+            updated_at=updated_timestamp,
+            archived_at=self._utc_now() if normalized_status == "archived" else None,
+            metadata=json.dumps(request.metadata or {}, sort_keys=True),
+            workspace_ids=normalized_workspace_ids,
+            tags=normalized_tags,
+        )
 
     def get_memory(self, memory_id: str):
         resolved_memory_id = self.resolve_memory_id(memory_id)

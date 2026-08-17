@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.ports.memory import MemoryMutationPort
+from mcp_memory.core.ports.memory import MemoryCreateRequest, MemoryMutationPort
 
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -69,18 +69,7 @@ def import_markdown_memory(
     workspace_ids: list[str] | None = None,
 ):
     normalized = parse_markdown_memory(file_path)
-    return repository.create_memory(
-        title=normalized.title,
-        content=normalized.content,
-        summary=normalized.summary,
-        memory_type=normalized.memory_type,
-        status=normalized.status,
-        tags=normalized.tags,
-        workspace_ids=workspace_ids or [],
-        created_at=normalized.created_at,
-        updated_at=normalized.created_at,
-        metadata=normalized.metadata,
-    )
+    return repository.create_memories([_memory_create_request(normalized, workspace_ids)])[0]
 
 
 def import_markdown_memories(
@@ -129,10 +118,29 @@ def import_markdown_memory_paths(
     paths_or_globs: list[str | Path],
     workspace_ids: list[str] | None = None,
 ):
-    imported = []
-    for file_path in resolve_markdown_import_paths(paths_or_globs):
-        imported.append(import_markdown_memory(repository, file_path, workspace_ids))
-    return imported
+    requests = [
+        _memory_create_request(parse_markdown_memory(file_path), workspace_ids)
+        for file_path in resolve_markdown_import_paths(paths_or_globs)
+    ]
+    return repository.create_memories(requests)
+
+
+def _memory_create_request(
+    normalized: NormalizedMarkdownMemory,
+    workspace_ids: list[str] | None,
+) -> MemoryCreateRequest:
+    return MemoryCreateRequest(
+        title=normalized.title,
+        content=normalized.content,
+        summary=normalized.summary,
+        memory_type=normalized.memory_type,
+        status=normalized.status,
+        tags=normalized.tags,
+        workspace_ids=workspace_ids or [],
+        created_at=normalized.created_at,
+        updated_at=normalized.created_at,
+        metadata=normalized.metadata,
+    )
 
 
 def record_markdown_memory_as_thought(

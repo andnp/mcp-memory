@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -28,6 +28,21 @@ _QUALITY_SIGNAL_ALIASES = {
     "oversized": "oversized_memory_count",
     "raw_ingress": "raw_ingress_count",
 }
+
+
+@dataclass
+class MemoryCreateRequest:
+    title: str
+    content: str
+    workspace_ids: Sequence[str]
+    tags: Sequence[str] = ()
+    summary: str | None = None
+    memory_type: str = "journal"
+    status: str = "active"
+    metadata: Mapping[str, object] | None = None
+    memory_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass
@@ -169,6 +184,11 @@ class MemoryReadPort(Protocol):
 
 @runtime_checkable
 class MemoryMutationPort(Protocol):
+    def create_memories(
+        self,
+        requests: Sequence[MemoryCreateRequest],
+    ) -> list[MemoryRecord]: ...
+
     def create_memory(
         self,
         title: str,

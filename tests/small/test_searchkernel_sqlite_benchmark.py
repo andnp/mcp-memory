@@ -73,3 +73,19 @@ async def test_sqlite_benchmark_writes_a_profile_artifact(tmp_path: Path) -> Non
     assert isinstance(benchmarks, list)
     benchmark = _mapping(benchmarks[0])
     assert _mapping(_mapping(benchmark["warm"])["overall"])["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_sqlite_benchmark_can_repeat_with_one_database_prefix(tmp_path: Path) -> None:
+    """Repeated runs isolate generated databases instead of colliding on IDs."""
+    database_prefix = tmp_path / "repeatable.db"
+
+    first = await _run_benchmark(database_prefix, record_counts=(7,), repetitions=1)
+    second = await _run_benchmark(database_prefix, record_counts=(7,), repetitions=1)
+
+    first_benchmarks = first["benchmarks"]
+    second_benchmarks = second["benchmarks"]
+    assert isinstance(first_benchmarks, list)
+    assert isinstance(second_benchmarks, list)
+    assert len(first_benchmarks) == 1
+    assert len(second_benchmarks) == 1

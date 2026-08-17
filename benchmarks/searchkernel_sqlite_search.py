@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
+from uuid import uuid4
 
 from benchmarks.searchkernel_ingest_search import (
     _BENCHMARK_QUERIES,
@@ -26,7 +27,7 @@ from benchmarks.searchkernel_ingest_search import (
     scaled_memories,
 )
 from mcp_memory.config import Config, SearchRankingConfig
-from mcp_memory.core.ports.memory import MemoryRecord
+from mcp_memory.core.ports.memory import MemoryCreateRequest, MemoryRecord
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
@@ -44,19 +45,23 @@ class SQLiteSearchHarness:
     def __post_init__(self) -> None:
         self.database = DatabaseManager(self.database_path)
         self.repository = SQLiteRelationalMemoryRepository(self.database)
-        for record in self.records:
-            self.repository.create_memory(
-                title=record.title,
-                content=record.content,
-                workspace_ids=record.workspace_ids,
-                tags=record.tags,
-                summary=record.summary,
-                memory_type=record.type,
-                status=record.status,
-                memory_id=record.id,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-            )
+        self.repository.create_memories(
+            [
+                MemoryCreateRequest(
+                    title=record.title,
+                    content=record.content,
+                    workspace_ids=record.workspace_ids,
+                    tags=record.tags,
+                    summary=record.summary,
+                    memory_type=record.type,
+                    status=record.status,
+                    memory_id=record.id,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                )
+                for record in self.records
+            ]
+        )
         if "auth-current" in {record.id for record in self.records}:
             self.repository.add_link(
                 "auth-current",
@@ -208,16 +213,26 @@ async def _run_benchmark(
     if repetitions <= 0:
         raise ValueError("repetitions must be positive")
     profiler = cProfile.Profile() if profile_path is not None else None
-    benchmarks = [
-        await _run_benchmark_size(
-            database_path.parent / f"{database_path.stem}-{record_count}.db",
-            record_count=record_count,
-            warmups=warmups,
-            repetitions=repetitions,
-            profiler=profiler,
+    benchmarks = []
+    for record_count in record_counts:
+        generated_database_path = database_path.parent / (
+            f"{database_path.stem}-{record_count}-{uuid4().hex}.db"
         )
-        for record_count in record_counts
-    ]
+        try:
+            benchmarks.append(
+                await _run_benchmark_size(
+                    generated_database_path,
+                    record_count=record_count,
+                    warmups=warmups,
+                    repetitions=repetitions,
+                    profiler=profiler,
+                )
+            )
+        finally:
+            for suffix in ("", "-wal", "-shm"):
+                generated_database_path.with_name(
+                    generated_database_path.name + suffix
+                ).unlink(missing_ok=True)
     if profiler is not None and profile_path is not None:
         profiler.dump_stats(profile_path)
     return {"benchmarks": benchmarks}

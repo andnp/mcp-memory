@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 
 from mcp_memory.core.ports.memory import (
+    MemoryCreateRequest,
     MemoryLinkPort,
     MemoryMaintenanceReadPort,
     MemoryMutationPort,
@@ -104,6 +105,53 @@ def test_database_manager_initializes_relational_memory_schema(db_manager):
     }
     assert {"workspace_id", "author", "claim_task_id", "claimed_at"} <= journal_columns
     assert db_manager.get_schema_version() == SCHEMA_VERSION
+
+
+def test_create_memories_commits_records_and_fts_together(db_manager) -> None:
+    """A batch create persists records, mappings, and keyword search rows."""
+    repository = RelationalMemoryRepository(db_manager)
+
+    created = repository.create_memories(
+        [
+            MemoryCreateRequest(
+                title="Batch alpha",
+                content="SQLite batch indexing",
+                workspace_ids=["workspace-a"],
+                tags=["batch"],
+                memory_id="batch-alpha",
+            ),
+            MemoryCreateRequest(
+                title="Batch beta",
+                content="SQLite transaction boundary",
+                workspace_ids=["workspace-b"],
+                memory_id="batch-beta",
+            ),
+        ]
+    )
+
+    assert [record.id for record in created] == ["batch-alpha", "batch-beta"]
+    assert [record.memory_ref for record in created] == [1, 2]
+    assert repository.search_keyword_memory_ids("indexing", limit=10) == ["batch-alpha"]
+    alpha = repository.get_memory("batch-alpha")
+    assert alpha is not None
+    assert alpha.workspace_ids == ["workspace-a"]
+
+
+def test_create_memories_rolls_back_the_entire_batch_on_insert_failure(db_manager) -> None:
+    """A failed batch leaves no earlier records or FTS rows committed."""
+    repository = RelationalMemoryRepository(db_manager)
+    request = MemoryCreateRequest(
+        title="Duplicate batch",
+        content="Will roll back",
+        workspace_ids=["workspace"],
+        memory_id="duplicate-batch",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repository.create_memories([request, request])
+
+    assert repository.get_memory("duplicate-batch") is None
+    assert repository.search_keyword_memory_ids("roll back", limit=10) == []
 
 
 def test_current_schema_creation_bootstraps_fresh_db_without_legacy_migration(tmp_path: Path) -> None:

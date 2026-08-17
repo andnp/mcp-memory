@@ -6,11 +6,13 @@ import logging
 import re
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from mcp_memory.core.ports.memory import (
     FTS_QUERY_TOKEN_PATTERN,
+    MemoryCreateRequest,
     MemoryLink,
     MemoryReadContext,
     MemoryRecord,
@@ -38,6 +40,22 @@ logger = logging.getLogger(__name__)
 
 RelationalMemoryRecord = MemoryRecord
 RelationalMemoryReadContext = MemoryReadContext
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedMemoryCreate:
+    memory_id: str
+    title: str
+    content: str
+    summary: str
+    memory_type: str
+    status: str
+    created_at: str
+    updated_at: str
+    archived_at: str | None
+    metadata: str
+    workspace_ids: list[str]
+    tags: list[str]
 
 
 class RelationalMemoryRepository:
@@ -176,72 +194,133 @@ class RelationalMemoryRepository:
         created_at: str | None = None,
         updated_at: str | None = None,
     ):
-        now = self._utc_now()
-        created_timestamp = created_at or now
-        updated_timestamp = updated_at or created_timestamp
-        normalized_title = title.strip()
-        normalized_content = content.strip()
-        normalized_workspace_ids = self._normalize_values(workspace_ids)
-        normalized_tags = self._normalize_values(tags or [])
-        normalized_type = self._validate_memory_type(memory_type)
-        normalized_status = self._validate_memory_status(status)
-        archived_timestamp = self._utc_now() if normalized_status == "archived" else None
-        self._validate_required_text("title", normalized_title)
-        self._validate_required_text("content", normalized_content)
-        if not normalized_workspace_ids:
-            raise ValueError("workspace_ids must contain at least one non-empty value")
-
-        summary_text = summary or self._build_summary(
-            title=normalized_title,
-            content=normalized_content,
-            memory_type=normalized_type,
+        created = self.create_memories(
+            [
+                MemoryCreateRequest(
+                    title=title,
+                    content=content,
+                    workspace_ids=workspace_ids,
+                    tags=tags or (),
+                    summary=summary,
+                    memory_type=memory_type,
+                    status=status,
+                    metadata=metadata,
+                    memory_id=memory_id,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                )
+            ]
         )
-        payload = json.dumps(metadata or {}, sort_keys=True)
-        record_id = memory_id or str(uuid4())
+        return self.get_memory(created[0].id) if created else None
+
+    def create_memories(self, requests: Sequence[MemoryCreateRequest]) -> list[MemoryRecord]:
+        prepared = [self._prepare_memory_create(request) for request in requests]
+        if not prepared:
+            return []
 
         conn = self._db.get_connection()
         with conn:
             next_ref_row = conn.execute(
                 "SELECT COALESCE(MAX(memory_ref), 0) + 1 FROM memories"
             ).fetchone()
-            memory_ref = int(next_ref_row[0]) if next_ref_row is not None else 1
-            conn.execute(
-                """
-                INSERT INTO memories (
-                    id, memory_ref, title, content, summary, type, status, created_at, updated_at,
-                    archived_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record_id,
-                    memory_ref,
-                    normalized_title,
-                    normalized_content,
-                    summary_text,
-                    normalized_type,
-                    normalized_status,
-                    created_timestamp,
-                    updated_timestamp,
-                    archived_timestamp,
-                    0,
-                    0.0,
-                    None,
-                    None,
-                    payload,
-                ),
-            )
-            self._replace_workspace_mappings(conn, record_id, normalized_workspace_ids)
-            self._replace_tag_mappings(conn, record_id, normalized_tags)
-            self._replace_fts_row(
-                conn,
-                record_id,
-                title=normalized_title,
-                summary=summary_text,
-                content=normalized_content,
-                tags=normalized_tags,
-            )
+            next_memory_ref = int(next_ref_row[0]) if next_ref_row is not None else 1
+            first_memory_ref = next_memory_ref
+            for item in prepared:
+                conn.execute(
+                    """
+                    INSERT INTO memories (
+                        id, memory_ref, title, content, summary, type, status, created_at, updated_at,
+                        archived_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item.memory_id,
+                        next_memory_ref,
+                        item.title,
+                        item.content,
+                        item.summary,
+                        item.memory_type,
+                        item.status,
+                        item.created_at,
+                        item.updated_at,
+                        item.archived_at,
+                        0,
+                        0.0,
+                        None,
+                        None,
+                        item.metadata,
+                    ),
+                )
+                self._replace_workspace_mappings(conn, item.memory_id, item.workspace_ids)
+                self._replace_tag_mappings(conn, item.memory_id, item.tags)
+                self._replace_fts_row(
+                    conn,
+                    item.memory_id,
+                    title=item.title,
+                    summary=item.summary,
+                    content=item.content,
+                    tags=item.tags,
+                )
+                next_memory_ref += 1
 
-        return self.get_memory(record_id)
+        return [
+            MemoryRecord(
+                id=item.memory_id,
+                title=item.title,
+                content=item.content,
+                summary=item.summary,
+                type=item.memory_type,
+                status=item.status,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                read_count=0,
+                access_score=0.0,
+                last_accessed_at=None,
+                last_surfaced_at=None,
+                metadata=json.loads(item.metadata),
+                workspace_ids=sorted(item.workspace_ids),
+                tags=sorted(item.tags),
+                memory_ref=first_memory_ref + index,
+                archived_at=item.archived_at,
+            )
+            for index, item in enumerate(prepared)
+        ]
+
+    def _prepare_memory_create(self, request: MemoryCreateRequest) -> _PreparedMemoryCreate:
+        now = self._utc_now()
+        created_timestamp = request.created_at or now
+        updated_timestamp = request.updated_at or created_timestamp
+        normalized_title = request.title.strip()
+        normalized_content = request.content.strip()
+        normalized_workspace_ids = self._normalize_values(list(request.workspace_ids))
+        normalized_tags = self._normalize_values(list(request.tags))
+        normalized_type = self._validate_memory_type(request.memory_type)
+        normalized_status = self._validate_memory_status(request.status)
+        archived_timestamp = self._utc_now() if normalized_status == "archived" else None
+        self._validate_required_text("title", normalized_title)
+        self._validate_required_text("content", normalized_content)
+        if not normalized_workspace_ids:
+            raise ValueError("workspace_ids must contain at least one non-empty value")
+
+        summary_text = request.summary or self._build_summary(
+            title=normalized_title,
+            content=normalized_content,
+            memory_type=normalized_type,
+        )
+        return _PreparedMemoryCreate(
+            memory_id=request.memory_id or str(uuid4()),
+            title=normalized_title,
+            content=normalized_content,
+            summary=summary_text,
+            memory_type=normalized_type,
+            status=normalized_status,
+            created_at=created_timestamp,
+            updated_at=updated_timestamp,
+            archived_at=archived_timestamp,
+            metadata=json.dumps(request.metadata or {}, sort_keys=True),
+            workspace_ids=normalized_workspace_ids,
+            tags=normalized_tags,
+        )
 
     def add_link(
         self,
