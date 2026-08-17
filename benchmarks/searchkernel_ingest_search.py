@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import cProfile
 import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
 from typing import Any, cast
@@ -143,6 +144,24 @@ def sample_memories() -> list[MemoryRecord]:
             workspace_ids=["workspace-a", "workspace-b"],
         ),
     ]
+
+
+def scaled_memories(record_count: int) -> list[MemoryRecord]:
+    """Return the fixture expanded to a deterministic corpus size."""
+    base = sample_memories()
+    if record_count < len(base):
+        raise ValueError(f"record_count must be at least {len(base)}")
+    records = list(base)
+    for index in range(len(base), record_count):
+        template = base[index % len(base)]
+        records.append(
+            replace(
+                template,
+                id=f"{template.id}-{index}",
+                title=f"{template.title} {index}",
+            )
+        )
+    return records
 
 
 class DeterministicEmbeddingProvider:
@@ -413,6 +432,52 @@ class SearchObservation:
     candidate_observations: tuple[VectorSearchObservation, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class LatencySummary:
+    """Percentile summary for one warmed benchmark population."""
+
+    count: int
+    p50_ms: float
+    p95_ms: float
+    min_ms: float
+    max_ms: float
+    mean_ms: float
+
+    def to_mapping(self) -> dict[str, float | int]:
+        return {
+            "count": self.count,
+            "p50_ms": round(self.p50_ms, 3),
+            "p95_ms": round(self.p95_ms, 3),
+            "min_ms": round(self.min_ms, 3),
+            "max_ms": round(self.max_ms, 3),
+            "mean_ms": round(self.mean_ms, 3),
+        }
+
+
+def _percentile(samples: Sequence[float], fraction: float) -> float:
+    ordered = sorted(samples)
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
+
+
+def _summarize_latency(samples: Sequence[float]) -> LatencySummary:
+    if not samples:
+        raise ValueError("latency samples cannot be empty")
+    return LatencySummary(
+        count=len(samples),
+        p50_ms=_percentile(samples, 0.50),
+        p95_ms=_percentile(samples, 0.95),
+        min_ms=min(samples),
+        max_ms=max(samples),
+        mean_ms=sum(samples) / len(samples),
+    )
+
+
 @dataclass
 class IngestSearchHarness:
     """Reusable local ingest/search harness with structured observations."""
@@ -498,48 +563,132 @@ class IngestSearchHarness:
         self.embedding_cache.close()
 
 
-async def _run_benchmark(cache_path: Path) -> dict[str, object]:
-    harness = IngestSearchHarness(cache_path)
+_BENCHMARK_QUERIES = (
+    ("authentication policy", "workspace-a"),
+    ("database migration", "workspace-a"),
+    ("database migration", "workspace-b"),
+)
+
+
+async def _run_benchmark_size(
+    cache_path: Path,
+    *,
+    record_count: int,
+    warmups: int,
+    repetitions: int,
+    profiler: cProfile.Profile | None,
+) -> dict[str, object]:
+    started = perf_counter()
+    harness = IngestSearchHarness(cache_path, records=scaled_memories(record_count))
     try:
         receipt = await harness.ingest()
-        observations = [
-            (
-                (query, workspace),
-                await harness.search(query, workspace_id=workspace),
+        setup_ms = (perf_counter() - started) * 1000.0
+        cold_observations = {
+            (query, workspace): await harness.search(
+                query,
+                workspace_id=workspace,
             )
-            for query, workspace in (
-                ("authentication policy", "workspace-a"),
-                ("database migration", "workspace-a"),
-                ("database migration", "workspace-b"),
-            )
-        ]
+            for query, workspace in _BENCHMARK_QUERIES
+        }
+        cold_query, cold_workspace = _BENCHMARK_QUERIES[0]
+        cold_observation = cold_observations[(cold_query, cold_workspace)]
+        for _ in range(warmups):
+            for query, workspace in _BENCHMARK_QUERIES:
+                await harness.search(query, workspace_id=workspace)
+
+        samples_by_case: dict[tuple[str, str], list[float]] = {
+            case: [] for case in _BENCHMARK_QUERIES
+        }
+        if profiler is not None:
+            profiler.enable()
+        try:
+            for _ in range(repetitions):
+                for query, workspace in _BENCHMARK_QUERIES:
+                    observation = await harness.search(query, workspace_id=workspace)
+                    samples_by_case[(query, workspace)].append(observation.elapsed_ms)
+        finally:
+            if profiler is not None:
+                profiler.disable()
+
+        search = {
+            f"{query}:{workspace}": {
+                "result_ids": cold_observations[(query, workspace)].result_ids,
+                "elapsed_ms": round(cold_observations[(query, workspace)].elapsed_ms, 3),
+                "cache_diagnostics": cold_observations[(query, workspace)].cache_diagnostics,
+                "diagnostics": cold_observations[(query, workspace)].diagnostics,
+                "candidate_observations": [
+                    {
+                        "candidate_ids": item.candidate_ids,
+                        "workspace_id": item.workspace_id,
+                        "limit": item.limit,
+                    }
+                    for item in cold_observations[(query, workspace)].candidate_observations
+                ],
+            }
+            for query, workspace in _BENCHMARK_QUERIES
+        }
         return {
+            "record_count": record_count,
             "ingest": {
                 "attempted": receipt.attempted,
                 "committed": receipt.committed,
                 "failed": receipt.failed,
                 "checkpoint": receipt.checkpoint,
             },
-            "search": {
-                f"{query}:{workspace}": {
-                    "result_ids": observation.result_ids,
-                    "elapsed_ms": round(observation.elapsed_ms, 3),
-                    "cache_diagnostics": observation.cache_diagnostics,
-                    "diagnostics": observation.diagnostics,
-                    "candidate_observations": [
-                        {
-                            "candidate_ids": item.candidate_ids,
-                            "workspace_id": item.workspace_id,
-                            "limit": item.limit,
-                        }
-                        for item in observation.candidate_observations
-                    ],
-                }
-                for (query, workspace), observation in observations
+            "cold": {
+                "startup_ms": round(setup_ms, 3),
+                "first_search_ms": round(cold_observation.elapsed_ms, 3),
             },
+            "warm": {
+                "repetitions": repetitions,
+                "warmups": warmups,
+                "overall": _summarize_latency(
+                    [sample for samples in samples_by_case.values() for sample in samples]
+                ).to_mapping(),
+                "by_case": {
+                    f"{query}:{workspace}": _summarize_latency(
+                        samples_by_case[(query, workspace)]
+                    ).to_mapping()
+                    for query, workspace in _BENCHMARK_QUERIES
+                },
+            },
+            "search": search,
         }
     finally:
         harness.close()
+
+
+async def _run_benchmark(
+    cache_path: Path,
+    *,
+    record_counts: Sequence[int] = (7,),
+    warmups: int = 3,
+    repetitions: int = 10,
+    profile_path: Path | None = None,
+) -> dict[str, object]:
+    if warmups < 0:
+        raise ValueError("warmups must be non-negative")
+    if repetitions <= 0:
+        raise ValueError("repetitions must be positive")
+    profiler = cProfile.Profile() if profile_path is not None else None
+    benchmarks = [
+        await _run_benchmark_size(
+            cache_path,
+            record_count=record_count,
+            warmups=warmups,
+            repetitions=repetitions,
+            profiler=profiler,
+        )
+        for record_count in record_counts
+    ]
+    if profiler is not None and profile_path is not None:
+        profiler.dump_stats(profile_path)
+    first = benchmarks[0]
+    return {
+        "benchmarks": benchmarks,
+        "ingest": first["ingest"],
+        "search": first["search"],
+    }
 
 
 def main() -> None:
@@ -550,14 +699,54 @@ def main() -> None:
         default=None,
         help="SQLite embedding cache path (defaults to a temporary file)",
     )
+    parser.add_argument(
+        "--sizes",
+        type=int,
+        nargs="+",
+        default=[len(sample_memories())],
+        help="Corpus sizes to measure (default: 7).",
+    )
+    parser.add_argument(
+        "--warmups",
+        type=int,
+        default=3,
+        help="Unmeasured searches per query before sampling (default: 3).",
+    )
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=10,
+        help="Measured rounds per query (default: 10).",
+    )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        help="Write a cProfile stats file for warmed searches.",
+    )
     args = parser.parse_args()
     if args.cache is None:
         import tempfile
 
         with tempfile.TemporaryDirectory(prefix="searchkernel-parity-") as directory:
-            result = asyncio.run(_run_benchmark(Path(directory) / "embeddings.db"))
+            result = asyncio.run(
+                _run_benchmark(
+                    Path(directory) / "embeddings.db",
+                    record_counts=args.sizes,
+                    warmups=args.warmups,
+                    repetitions=args.repetitions,
+                    profile_path=args.profile,
+                )
+            )
     else:
-        result = asyncio.run(_run_benchmark(args.cache))
+        result = asyncio.run(
+            _run_benchmark(
+                args.cache,
+                record_counts=args.sizes,
+                warmups=args.warmups,
+                repetitions=args.repetitions,
+                profile_path=args.profile,
+            )
+        )
     print(json.dumps(result, indent=2, sort_keys=True, default=list))
 
 
