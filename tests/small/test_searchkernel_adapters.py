@@ -162,6 +162,38 @@ async def test_keyword_store_delegates_relational_policy():
 
 
 @pytest.mark.asyncio
+async def test_keyword_store_skips_hydration_for_workspace_scoped_search():
+    """Reuse the requested workspace identity without loading matching records."""
+    repository = _BatchRepository()
+    store = MemoryKeywordStore(cast(MemoryReadPort, repository))
+
+    hits = await store.search("query", 2, {"workspace_id": "workspace-1"})
+
+    assert [hit.identity for hit in hits] == [
+        RecordIdentity("workspace-1", "memory", "memory-1"),
+        RecordIdentity("workspace-1", "memory", "memory-2"),
+    ]
+    assert repository.batch_memory_calls == []
+
+
+@pytest.mark.asyncio
+async def test_keyword_store_hydrates_identity_for_global_search():
+    """Load workspace provenance when a keyword search has no workspace filter."""
+    repository = _BatchRepository()
+    store = MemoryKeywordStore(cast(MemoryReadPort, repository))
+
+    hits = await store.search("query", 2)
+
+    assert [hit.identity for hit in hits] == [
+        RecordIdentity("workspace-1", "memory", "memory-1"),
+        RecordIdentity("workspace-1", "memory", "memory-2"),
+    ]
+    assert repository.batch_memory_calls == [
+        (["memory-1", "memory-2"], None, False)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_vector_store_uses_formal_candidate_filter_capability():
     backend = _VectorBackend()
     store = MemoryVectorStore(backend)

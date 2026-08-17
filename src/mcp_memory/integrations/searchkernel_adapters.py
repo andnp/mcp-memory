@@ -199,13 +199,17 @@ class MemoryKeywordStore(AsyncKeywordStore):
             **search_kwargs,
         )
         workspace_id = _string_filter(filters, "workspace_id")
-        records_by_id = await asyncio.to_thread(
-            _load_memory_records,
-            self._repository,
-            memory_ids,
-            status=_memory_status_filter(filters.get("status")),
-            include_superseded=bool(filters.get("include_superseded", False)),
-            scalar_fallback=False,
+        records_by_id = (
+            {}
+            if workspace_id is not None
+            else await asyncio.to_thread(
+                _load_memory_records,
+                self._repository,
+                memory_ids,
+                status=_memory_status_filter(filters.get("status")),
+                include_superseded=bool(filters.get("include_superseded", False)),
+                scalar_fallback=False,
+            )
         )
         if self._prefetch is not None and memory_ids:
             await asyncio.to_thread(self._prefetch, memory_ids)
