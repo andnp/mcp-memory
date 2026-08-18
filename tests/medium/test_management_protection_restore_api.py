@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import record_token
 from mcp_memory.core.curation_models import ActionPreconditions, NormalizeMemoryAction
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
@@ -15,6 +14,7 @@ from mcp_memory.daemon_dispatch import dispatch_management_request
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from tests.support.curation_executor import CurationExecutor
 
 pytestmark = pytest.mark.medium
 

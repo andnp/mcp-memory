@@ -99,7 +99,6 @@ ignore = [
 "src/mcp_memory/cli.py" = ["E501"]
 "src/mcp_memory/config.py" = ["E501"]
 "src/mcp_memory/core/agent_runtime.py" = ["E501"]
-"src/mcp_memory/core/curation_executor.py" = ["E501"]
 "src/mcp_memory/core/curation_feedback.py" = ["E501"]
 "src/mcp_memory/core/curation_identity.py" = ["E501"]
 "src/mcp_memory/core/curation_policy.py" = ["E501"]

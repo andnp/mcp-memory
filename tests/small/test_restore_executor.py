@@ -4,7 +4,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import link_token, record_token
 from mcp_memory.core.curation_models import (
     AbsentLinkAssertion,
@@ -26,6 +25,7 @@ from mcp_memory.mutation_history import (
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
+from tests.support.curation_executor import CurationExecutor
 
 pytestmark = pytest.mark.small
 

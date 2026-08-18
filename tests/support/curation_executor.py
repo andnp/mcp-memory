@@ -589,7 +589,9 @@ def execute_archive_memory(
     )
 
 
-def _record_verification_descriptor(action: NormalizeMemoryAction | RewriteMemoryAction) -> CurationVerificationDescriptor | None:
+def _record_verification_descriptor(
+    action: NormalizeMemoryAction | RewriteMemoryAction,
+) -> CurationVerificationDescriptor | None:
     status = action.preconditions.required_statuses.get(action.target_id)
     if status is None:
         return None

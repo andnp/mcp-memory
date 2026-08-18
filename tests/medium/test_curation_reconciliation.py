@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import record_token
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
@@ -34,6 +33,7 @@ from mcp_memory.curation_store import (
 )
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.relational.search import MaintenanceReadRepositoryLike
+from tests.support.curation_executor import CurationExecutor
 
 pytestmark = pytest.mark.medium
 
