@@ -787,7 +787,7 @@ def _is_model_cached_locally(model_name: str) -> bool:
     repo_dir = cache_root / f"models--{model_name.replace('/', '--')}"
     snapshots_dir = repo_dir / "snapshots"
     refs_dir = repo_dir / "refs"
-    return snapshots_dir.exists() and any(snapshots_dir.iterdir()) or refs_dir.exists()
+    return (snapshots_dir.exists() and any(snapshots_dir.iterdir())) or refs_dir.exists()
 
 
 def _hash_text_to_unit_vector(text: str, dimensions: int) -> list[float]:

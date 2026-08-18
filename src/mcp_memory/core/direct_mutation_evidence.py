@@ -223,9 +223,9 @@ def _ledger_matches(evidence: DirectMutationEvidence, ledger: object) -> bool:
 def _valid_deltas(deltas: Iterable[DirectMutationEntityDelta]) -> bool:
     values = tuple(deltas)
     return bool(values) and all(
-        item.kind in {EvidenceEntityKind.RECORD, EvidenceEntityKind.LINK}
+        (item.kind in {EvidenceEntityKind.RECORD, EvidenceEntityKind.LINK}
         and bool(item.entity_id)
-        and item.before_exists != item.after_exists
+        and item.before_exists != item.after_exists)
         or (
             item.kind in {EvidenceEntityKind.RECORD, EvidenceEntityKind.LINK}
             and bool(item.entity_id)

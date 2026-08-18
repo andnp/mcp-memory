@@ -46,7 +46,7 @@ def _narrow_search_diagnostics(
         narrowed["available"] = available
     for key in ("sample_rate", "sampled_rate", "degraded_rate"):
         value = values.get(key)
-        if value is None or isinstance(value, (float, int)) and not isinstance(value, bool):
+        if value is None or (isinstance(value, (float, int)) and not isinstance(value, bool)):
             narrowed[key] = None if value is None else float(value)
     for key in (
         "observed_searches",
