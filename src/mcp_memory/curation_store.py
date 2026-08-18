@@ -385,14 +385,14 @@ class SQLiteCurationStore:
                     """,
                     _receipt_values(normalized),
                 )
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as exc:
             existing = self.get_receipt(receipt.run_id, receipt.action_id)
             if existing is None:
                 raise
             if not _receipt_identity_matches(existing, receipt):
                 raise CurationReceiptIdentityConflictError(
                     f"curation action receipt identity is already in use for {receipt.run_id}/{receipt.action_id}"
-                )
+                ) from exc
             return existing
         return normalized
 
