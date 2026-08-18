@@ -133,7 +133,9 @@ async def _dispatch_tool(
         raw_task_id = arguments.get("task_id")
         task_id = raw_task_id if isinstance(raw_task_id, str) else None
         raw_epoch = arguments.get("execution_epoch")
-        execution_epoch = raw_epoch if isinstance(raw_epoch, int) and not isinstance(raw_epoch, bool) else None
+        execution_epoch = _resolve_execution_epoch(ctx, task_id, raw_epoch)
+        if task_id is not None and ctx.task_queue is not None and execution_epoch is None:
+            raise ValueError("execution_epoch_unavailable")
         if current_curator_execution() is not None or task_id is not None:
             execution_token = begin_tool_call(
                 task_id=task_id,
@@ -181,6 +183,23 @@ async def _dispatch_tool(
                 raise
         if execution_token is not None:
             finish_tool_call(execution_token)
+
+
+def _resolve_execution_epoch(
+    ctx: ApplicationContext,
+    task_id: str | None,
+    raw_epoch: object,
+) -> int | None:
+    if isinstance(raw_epoch, int) and not isinstance(raw_epoch, bool):
+        return raw_epoch
+
+    current = current_curator_execution()
+    if current is not None and (task_id is None or current.task_id == task_id):
+        return current.execution_epoch
+
+    if task_id is None or ctx.task_queue is None:
+        return None
+    return ctx.task_queue.get_task(task_id).execution_epoch
 
 
 def tool_services() -> dict[str, ToolService]:

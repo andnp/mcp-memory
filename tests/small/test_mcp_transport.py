@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -119,6 +120,51 @@ async def test_internal_dispatch_records_tracker_counts_via_session_bound_task_r
         "internal_get_next_curator_batch": 1,
         "internal_update_memory_record": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_internal_dispatch_resolves_worker_epoch_at_proxy_boundary() -> None:
+    """Resolve the worker epoch when the internal proxy omits it.
+
+    Persisted mutation evidence and the tool ledger must share the task queue's
+    authoritative execution identity.
+    """
+    class EvidenceStore:
+        def __init__(self) -> None:
+            self.items = []
+
+        def save(self, evidence) -> None:
+            self.items.append(evidence)
+
+    class TaskQueue:
+        def get_task(self, task_id: str):
+            assert task_id == "task-1"
+            return SimpleNamespace(execution_epoch=7)
+
+    tracker = InternalToolCallTracker()
+    store = EvidenceStore()
+    ctx = ApplicationContext(
+        task_queue=TaskQueue(),
+        internal_tool_call_tracker=tracker,
+        direct_mutation_evidence=store,
+        repository=object(),
+    )
+
+    def _service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        return {"status": "ok", "record": {"id": "memory-1", "updated_at": "after"}}
+
+    await transport._dispatch_tool(
+        ctx,
+        "internal_update_memory_record",
+        {"task_id": "task-1", "memory_id": "memory-1"},
+        service_resolver=lambda: {"internal_update_memory_record": _service},
+        on_success=transport._record_internal_tool_call,
+    )
+
+    snapshot = tracker.finalize_task("task-1")
+    assert snapshot is not None
+    assert snapshot.tool_call_ledger[0]["execution_epoch"] == 7
+    assert store.items[0].execution_epoch == 7
 
 
 

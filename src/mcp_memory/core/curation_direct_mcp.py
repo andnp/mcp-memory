@@ -128,11 +128,18 @@ async def run_curator_direct_mcp(
     quality_evidence = quality_evaluation.evidence
     verified_mutations = productive_mutation_count(direct_evidence)
     quality_productive_mutations = quality_productive_mutation_count(quality_evidence)
-    mutations = verified_mutations if direct_evidence else actual_mutations
+    mutations = verified_mutations
     provider_metadata = _direct_provider_usage_metadata(ctx, task)
-    outcome = "applied" if mutations else "no_op"
-    if direct_evidence:
+    quality_evidence_status = quality_evaluation.status
+    quality_evidence_reason = quality_evaluation.reason
+    if actual_mutations and not direct_evidence:
+        outcome = DirectMutationOutcome.APPLIED_UNVERIFIED.value
+        quality_evidence_status = "not_observed"
+        quality_evidence_reason = "direct_mutation_evidence_missing"
+    elif direct_evidence:
         outcome = _project_direct_evidence_outcome(direct_evidence, actual_mutations)
+    else:
+        outcome = "no_op"
     if claimed_work_item is not None:
         complete_work_item(ctx, claimed_work_item.id)
     return sampling_payload(
@@ -166,13 +173,13 @@ async def run_curator_direct_mcp(
                 item.model_dump(mode="json") for item in quality_evidence
             ],
             "quality_outcomes": _quality_outcome_counts(quality_evidence),
-            "quality_evidence_status": quality_evaluation.status,
-            "quality_evidence_reason": quality_evaluation.reason,
+            "quality_evidence_status": quality_evidence_status,
+            "quality_evidence_reason": quality_evidence_reason,
             **provider_metadata,
         },
         quality_evidence=[item.model_dump(mode="json") for item in quality_evidence],
-        quality_evidence_status=quality_evaluation.status,
-        quality_evidence_reason=quality_evaluation.reason,
+        quality_evidence_status=quality_evidence_status,
+        quality_evidence_reason=quality_evidence_reason,
     )
 
 

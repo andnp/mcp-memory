@@ -114,6 +114,7 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
     tmp_path: Path,
     invalid_ledger: bool,
 ) -> None:
+    """Record direct curator mutations under the worker execution epoch."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     workspace = tmp_path / "workspace"
@@ -233,6 +234,50 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         refreshed = runtime.repository.get_memory(record.id)
         assert refreshed is not None and refreshed.summary == "A direct MCP curator conclusion."
         assert runtime.work_items.get_item(item.id).status == "completed"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_direct_campaign_does_not_report_unmatched_mutations_as_verified(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep raw mutations unverified when matching evidence is unavailable."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = create_runtime(cwd=workspace)
+    assert runtime.repository is not None and runtime.work_items is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Unmatched evidence target",
+            content="This record exercises the unverified mutation contract.",
+            summary="Telemetry target.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert record is not None
+        runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": [record.id]},
+            idempotency_key="direct-curator-unmatched-evidence",
+        )
+        runtime.ai_agent_provider = _DirectProvider(runtime, record.id)
+        monkeypatch.setattr(runtime.direct_mutation_evidence, "list_for_execution", lambda *_args: [])
+
+        result = await handle_memory_curator_task(runtime, _task(runtime), object())
+
+        assert result["actual_mutation_count"] == 1
+        assert result["verified_mutation_count"] == 0
+        assert result["mutations"] == 0
+        assert result["curation_outcome"] == "applied_unverified"
+        assert result["quality_evidence_status"] == "not_observed"
+        assert result["quality_evidence_reason"] == "direct_mutation_evidence_missing"
     finally:
         runtime.close()
 
