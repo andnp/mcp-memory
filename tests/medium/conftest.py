@@ -78,7 +78,7 @@ class PostgresContainerInfo:
 
 
 @pytest.fixture(scope="session")
-def postgres_container() -> Generator[PostgresContainerInfo, None, None]:
+def postgres_container() -> Generator[PostgresContainerInfo]:
     docker = pytest.importorskip("docker")
     try:
         client = docker.from_env()
@@ -130,7 +130,7 @@ def postgres_test_db_name(request: pytest.FixtureRequest) -> str:
 def postgres_storage_config(
     postgres_container: PostgresContainerInfo,
     postgres_test_db_name: str,
-) -> Generator[PostgresStorageConfig, None, None]:
+) -> Generator[PostgresStorageConfig]:
     psycopg, _ = load_postgres_driver_modules()
     admin_dsn = postgres_container.admin_dsn
     test_dsn = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_container.host}:{postgres_container.port}/{postgres_test_db_name}"

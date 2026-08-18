@@ -20,7 +20,7 @@ ServiceFactory = Callable[[str | None], HookReminderService]
 
 
 @pytest.fixture
-def postgres_hook_reminder_factory(postgres_storage_config) -> Generator[ServiceFactory, None, None]:
+def postgres_hook_reminder_factory(postgres_storage_config) -> Generator[ServiceFactory]:
     ensure_postgres_schema(postgres_storage_config)
 
     with PostgresConnectionManager(postgres_storage_config) as manager:

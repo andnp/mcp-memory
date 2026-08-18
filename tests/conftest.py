@@ -66,7 +66,7 @@ def temp_db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def db_manager(temp_db_path: Path) -> Generator[DatabaseManager, None, None]:
+def db_manager(temp_db_path: Path) -> Generator[DatabaseManager]:
     manager = DatabaseManager(temp_db_path)
     try:
         yield manager
