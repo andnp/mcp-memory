@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, cast
 from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_candidates import CuratorCandidateRequest, CuratorSamplingContext
+from mcp_memory.core.curation_feedback_controller import select_curator_feedback_strategy
 from mcp_memory.core.curation_identity import (
     SCHEMA_VERSION,
     candidate_revision_token,
@@ -422,6 +423,11 @@ def _select_curator_seed_batch(
     campaign_hypothesis: CampaignHypothesis | None = None,
 ) -> SamplingBatch:
     assert ctx.repository is not None
+    feedback_decision = select_curator_feedback_strategy(
+        getattr(ctx, "curation", None),
+        task.requested_strategy,
+    )
+    task = replace(task, requested_strategy=feedback_decision.strategy)
     limit = _normalize_curator_seed_limit(seed_limit)
     excluded_ids = exclude_memory_ids or set()
     excluded_ids = exclude_memory_ids or set()
