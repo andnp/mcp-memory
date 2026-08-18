@@ -117,9 +117,9 @@ class _MemorySearchSignalContext:
         )
 
 
-_ACTIVE_FILTERS: ContextVar[dict[str, object]] = ContextVar(
+_ACTIVE_FILTERS: ContextVar[dict[str, object] | None] = ContextVar(
     "mcp_memory_searchkernel_filters",
-    default={},
+    default=None,
 )
 _ACTIVE_POLICY_CONTEXT: ContextVar[_MemorySearchPolicyContext | None] = ContextVar(
     "mcp_memory_searchkernel_policy_context",
@@ -756,7 +756,8 @@ def _ranking_candidate(
 
 
 def _signal_context() -> _MemorySearchSignalContext | None:
-    context = _ACTIVE_FILTERS.get().get("_mcp_memory_signal_context")
+    filters = _ACTIVE_FILTERS.get()
+    context = filters.get("_mcp_memory_signal_context") if filters is not None else None
     return context if isinstance(context, _MemorySearchSignalContext) else None
 
 
@@ -767,7 +768,7 @@ def _sort_results(
 
 
 def _memory_allowed(repository: MemoryRepositoryPort, memory: MemoryRecord) -> bool:
-    filters = _ACTIVE_FILTERS.get()
+    filters = _ACTIVE_FILTERS.get() or {}
     workspace_id = filters.get("workspace_id")
     if isinstance(workspace_id, str) and workspace_id not in memory.workspace_ids:
         return False
