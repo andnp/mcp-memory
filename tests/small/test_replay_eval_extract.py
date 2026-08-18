@@ -18,7 +18,7 @@ class FakeCursor:
         self._rows = rows
         self.executed: list[tuple[str, dict[str, Any]]] = []
 
-    def execute(self, query: str, params: dict[str, Any], /) -> None:
+    def execute(self, query: Any, params: Any, /) -> None:
         self.executed.append((query, params))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
