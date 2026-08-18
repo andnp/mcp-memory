@@ -67,7 +67,7 @@ class DirectMutationEvidence:
         sequence: int | None,
         tool_name: str,
         arguments: dict[str, Any],
-    ) -> "DirectMutationEvidence":
+    ) -> DirectMutationEvidence:
         key = call_id or _missing_call_id_key(
             task_id=task_id, execution_epoch=execution_epoch,
             tool_name=tool_name, arguments=arguments,
@@ -95,7 +95,7 @@ class DirectMutationEvidence:
         deltas: Iterable[DirectMutationEntityDelta] = (),
         outcome: str | None = None,
         error_code: str | None = None,
-    ) -> "DirectMutationEvidence":
+    ) -> DirectMutationEvidence:
         merged_payload = _json_safe(payload)
         if isinstance(merged_payload, dict) and isinstance(self.payload.get("before_entities"), dict):
             merged_payload = {**merged_payload, "before_entities": self.payload["before_entities"]}

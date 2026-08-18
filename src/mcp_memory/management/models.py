@@ -13,7 +13,7 @@ class EmbeddingStatusPayload(BaseModel):
     fallback_persistence_policy: str = "allowed"
     blocked_fallback_write_count: int = 0
     last_blocked_fallback_model_name: str | None = None
-    integrity_events: "EmbeddingIntegrityEventSummaryPayload" = Field(default_factory=lambda: EmbeddingIntegrityEventSummaryPayload())
+    integrity_events: EmbeddingIntegrityEventSummaryPayload = Field(default_factory=lambda: EmbeddingIntegrityEventSummaryPayload())
 
 
 class EmbeddingIntegrityEventSnapshotPayload(BaseModel):
@@ -180,36 +180,36 @@ class OperatorLogDigestPayload(BaseModel):
     window_minutes: int = 15
     total: int = 0
     by_level: dict[str, int] = Field(default_factory=dict)
-    recent_errors: list["RuntimeLogPayload"] = Field(default_factory=list)
+    recent_errors: list[RuntimeLogPayload] = Field(default_factory=list)
 
 
 class OperatorWarningDigestPayload(BaseModel):
     window_minutes: int = 15
     total: int = 0
-    recent: list["RuntimeLogPayload"] = Field(default_factory=list)
+    recent: list[RuntimeLogPayload] = Field(default_factory=list)
 
 
 class OperatorTaskDigestPayload(BaseModel):
     recent_status_counts: dict[str, int] = Field(default_factory=dict)
-    recent: list["AgentRunHistoryPayload"] = Field(default_factory=list)
+    recent: list[AgentRunHistoryPayload] = Field(default_factory=list)
     recent_failure_count: int = 0
     recent_retry_count: int = 0
-    recent_failures: list["AgentRunHistoryPayload"] = Field(default_factory=list)
-    recent_retries: list["AgentRunHistoryPayload"] = Field(default_factory=list)
+    recent_failures: list[AgentRunHistoryPayload] = Field(default_factory=list)
+    recent_retries: list[AgentRunHistoryPayload] = Field(default_factory=list)
 
 
 class OperatorConversationDigestPayload(BaseModel):
     window_hours: int = 24
     total: int = 0
     by_status: dict[str, int] = Field(default_factory=dict)
-    recent: list["AIConversationPayload"] = Field(default_factory=list)
+    recent: list[AIConversationPayload] = Field(default_factory=list)
 
 
 class OperatorMemoryActivityPayload(BaseModel):
     updated_last_15_minutes: int = 0
     updated_last_hour: int = 0
     updated_last_day: int = 0
-    recent: list["CompactMemoryRecord"] = Field(default_factory=list)
+    recent: list[CompactMemoryRecord] = Field(default_factory=list)
 
 
 class MemoryToolLatencyMetricPayload(BaseModel):
@@ -238,7 +238,7 @@ class OperatorHealthSnapshotPayload(BaseModel):
     conversations: OperatorConversationDigestPayload = Field(default_factory=OperatorConversationDigestPayload)
     memory_activity: OperatorMemoryActivityPayload = Field(default_factory=OperatorMemoryActivityPayload)
     tool_latency: MemoryToolLatencyPayload = Field(default_factory=MemoryToolLatencyPayload)
-    provider_policy: "NerdProviderPolicyPayload" = Field(default_factory=lambda: NerdProviderPolicyPayload())
+    provider_policy: NerdProviderPolicyPayload = Field(default_factory=lambda: NerdProviderPolicyPayload())
 
 
 class OverviewCounts(BaseModel):

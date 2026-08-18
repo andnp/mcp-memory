@@ -127,7 +127,7 @@ class FakeCopilotClient:
     session: FakeCopilotSession
     create_session_calls: list[dict[str, Any]] = field(default_factory=list)
 
-    async def __aenter__(self) -> "FakeCopilotClient":
+    async def __aenter__(self) -> FakeCopilotClient:
         return self
 
     async def __aexit__(self, *exc_info: Any) -> bool:

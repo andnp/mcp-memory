@@ -190,7 +190,7 @@ def _evaluate_direct_quality(
     evidence: list[Any],
     *,
     campaign_hypothesis: CampaignHypothesis | None,
-) -> "_DirectQualityEvaluation":
+) -> _DirectQualityEvaluation:
     if not evidence:
         return _DirectQualityEvaluation((), "not_applicable")
     quality_repository = getattr(ctx, "curation_quality", None)

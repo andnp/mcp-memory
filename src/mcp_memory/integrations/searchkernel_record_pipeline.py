@@ -121,7 +121,7 @@ _ACTIVE_FILTERS: ContextVar[dict[str, object]] = ContextVar(
     "mcp_memory_searchkernel_filters",
     default={},
 )
-_ACTIVE_POLICY_CONTEXT: ContextVar["_MemorySearchPolicyContext | None"] = ContextVar(
+_ACTIVE_POLICY_CONTEXT: ContextVar[_MemorySearchPolicyContext | None] = ContextVar(
     "mcp_memory_searchkernel_policy_context",
     default=None,
 )
