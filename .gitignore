@@ -24,3 +24,6 @@ docs/plans/
 .codannaignore
 .fastembed_cache
 .codegraph/
+
+# Replay-evaluation artifacts derived from live telemetry
+benchmarks/replay_eval/artifacts/
