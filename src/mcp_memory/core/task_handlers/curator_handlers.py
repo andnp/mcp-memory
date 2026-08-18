@@ -28,11 +28,12 @@ from mcp_memory.core.task_handlers.curator_seed_resolution import (
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
+    record_curator_no_op_dispositions,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import (
-    complete_work_item,
     defer_work_item,
+    release_work_item,
     work_item_result_metadata,
 )
 
@@ -97,7 +98,7 @@ async def handle_memory_curator_task(
                 "reason": "seed_resolution_temporarily_unavailable",
             }
         if seed_resolution.state == CuratorSeedResolutionState.MALFORMED:
-            _quarantine_curator_review_item(ctx, claimed_review_item, seed_resolution)
+            release_work_item(ctx, claimed_review_item.id)
             claimed_review_item = None
     seed_batch, sampled_records, seed_records, claimed_review_item = await asyncio.to_thread(
         _prepare_curator_seed_context,
@@ -145,7 +146,7 @@ async def handle_memory_curator_task(
             reason="no_seed_records",
         )
 
-    return await run_curator_direct_mcp(
+    result = await run_curator_direct_mcp(
         ctx,
         task,
         provider=provider,
@@ -157,6 +158,9 @@ async def handle_memory_curator_task(
         claimed_work_item=claimed_review_item,
         work_item_metadata=work_item_metadata,
     )
+    if result.get("curation_outcome") == "no_op":
+        record_curator_no_op_dispositions(ctx, sampled_records)
+    return result
 
 
 def _mutation_budget_override(task: TaskRecord) -> CurationMutationBudget | None:
@@ -184,7 +188,7 @@ def _prepare_curator_seed_context(
         if seed_records:
             seed_batch = _curator_support.review_sampling_batch(claimed_review_item.payload, seed_records)
         else:
-            complete_work_item(ctx, claimed_review_item.id)
+            release_work_item(ctx, claimed_review_item.id)
             claimed_review_item = None
             seed_batch = acquire_curator_candidates(
                 ctx,
@@ -213,25 +217,6 @@ def _prepare_curator_seed_context(
         support_records = _curator_support.select_curator_support_records(ctx, task, sampled_records)
         seed_records = sampled_records + support_records
     return seed_batch, sampled_records, seed_records, claimed_review_item
-
-
-def _quarantine_curator_review_item(
-    ctx: ApplicationContext,
-    claimed_review_item: Any,
-    resolution: CuratorSeedResolution,
-) -> None:
-    work_items = getattr(ctx, "work_items", None)
-    quarantine_item = getattr(work_items, "quarantine_item", None)
-    error = resolution.reason or "malformed_seed_packet"
-    if callable(quarantine_item):
-        quarantine_item(claimed_review_item.id, error=error)
-        return
-    defer_work_item(
-        ctx,
-        claimed_review_item.id,
-        error=f"quarantined:{error}",
-        retry_delay_seconds=365 * 24 * 60 * 60,
-    )
 
 
 def _claim_curator_review_work_batch(

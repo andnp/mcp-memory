@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, cast
 from uuid import UUID
 
@@ -69,6 +69,8 @@ CURATOR_MAX_SUPPORT_RECORDS = 8
 CURATOR_MAX_QUALITY_FEEDBACK_SEEDS = 1
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_STABILIZATION_WINDOW_SECONDS = 3600.0
+CURATOR_NO_OP_COOLDOWN_BASE = timedelta(hours=1)
+CURATOR_NO_OP_COOLDOWN_MAX = timedelta(hours=24)
 CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS = 4
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
@@ -704,6 +706,59 @@ def filter_curator_candidates(
             continue
         eligible.append(record)
     return eligible
+
+
+def record_curator_no_op_dispositions(
+    ctx: ApplicationContext,
+    candidates: list[Any],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Persist a bounded cooldown for candidates examined without a mutation."""
+    curation = getattr(ctx, "curation", None)
+    get_state = getattr(curation, "get_candidate_state", None)
+    compare_and_set_state = getattr(curation, "compare_and_set_candidate_state", None)
+    if not callable(get_state) or not callable(compare_and_set_state):
+        return
+
+    current_time = now or datetime.now(UTC)
+    for record in candidates:
+        memory_id = _candidate_uuid(record.id)
+        if memory_id is None:
+            continue
+        identity = curator_candidate_revision_token(ctx, record)
+        previous = cast(CurationCandidateState | None, get_state(memory_id))
+        if previous is not None and previous.last_observed_revision_token != identity:
+            continue
+        if (
+            previous is not None
+            and previous.disposition is CandidateDisposition.ESCALATED
+            and previous.last_disposition_reason in _CURATOR_QUALITY_FEEDBACK_REASONS
+        ):
+            continue
+        no_op_count = 1 if previous is None else previous.consecutive_no_op_count + 1
+        cooldown = min(
+            CURATOR_NO_OP_COOLDOWN_MAX,
+            CURATOR_NO_OP_COOLDOWN_BASE * 2 ** min(no_op_count - 1, 10),
+        )
+        updated = (
+            CurationCandidateState(memory_id=memory_id)
+            if previous is None
+            else previous
+        ).model_copy(
+            update={
+                "last_observed_revision_token": identity,
+                "disposition": CandidateDisposition.COOLDOWN,
+                "consecutive_no_op_count": no_op_count,
+                "cooldown_until": current_time + cooldown,
+                "last_disposition_reason": "agent_no_mutations",
+            }
+        )
+        compare_and_set_state(
+            memory_id,
+            None if previous is None else previous.last_observed_revision_token,
+            updated,
+        )
 
 
 def curator_candidate_revision_token(ctx: ApplicationContext, record: Any) -> str:

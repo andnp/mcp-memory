@@ -12,6 +12,7 @@ from mcp_memory.core.task_handlers.curator_support import (
     curator_candidate_revision_token,
     curator_quality_feedback,
     filter_curator_candidates,
+    record_curator_no_op_dispositions,
 )
 from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState, SQLiteCurationStore
 from mcp_memory.mutation_history import MutationActorKind
@@ -79,6 +80,27 @@ def test_noop_cooldown_is_per_record_not_frontier_composition(db_manager) -> Non
 
     assert filter_curator_candidates(ctx, [first, second], now=now) == [second]
     assert filter_curator_candidates(ctx, [second, first], now=now) == [second]
+
+
+def test_noop_cooldown_is_bounded_and_exact_expiry_is_eligible(db_manager) -> None:
+    repository = _Repository()
+    record = _record(uuid4())
+    ctx = _context(db_manager, repository)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    record_curator_no_op_dispositions(ctx, [record], now=now)
+    first = ctx.curation.get_candidate_state(UUID(record.id))
+    assert first is not None
+    assert first.disposition is CandidateDisposition.COOLDOWN
+    assert first.cooldown_until == now + timedelta(hours=1)
+
+    assert filter_curator_candidates(ctx, [record], now=first.cooldown_until) == [record]
+
+    record_curator_no_op_dispositions(ctx, [record], now=now + timedelta(hours=1))
+    second = ctx.curation.get_candidate_state(UUID(record.id))
+    assert second is not None
+    assert second.consecutive_no_op_count == 2
+    assert second.cooldown_until == now + timedelta(hours=3)
 
 
 @pytest.mark.parametrize("change", ["revision", "adjacency"])
