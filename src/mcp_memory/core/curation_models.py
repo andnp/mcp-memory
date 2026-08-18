@@ -344,11 +344,6 @@ class CampaignHypothesis(CurationModel):
     def legacy(cls) -> CampaignHypothesis:
         return cls()
 
-CurationCampaignHypothesis = CampaignHypothesis
-CurationCampaignAcceptance = CampaignAcceptance
-RetrievalProblem = CampaignRetrievalProblem
-TargetMode = CampaignTargetMode
-
 
 def campaign_hypothesis_from_payload(payload: Mapping[str, Any] | None) -> CampaignHypothesis:
     if not payload or payload.get("campaign_hypothesis") is None:

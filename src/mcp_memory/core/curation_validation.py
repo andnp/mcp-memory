@@ -32,6 +32,3 @@ class CurationSpecialistRoute:
     action: CurationAction
     family: MaintenanceFamily
     reason_code: CurationValidationReasonCode = CurationValidationReasonCode.NEEDS_DIFFERENT_SPECIALIST
-
-
-MutationBudget = CurationMutationBudget
