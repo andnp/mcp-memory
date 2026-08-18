@@ -15,7 +15,7 @@ from mcp_memory.core.ports import (
     SearchHealthPort,
     StartupHealthPort,
 )
-from mcp_memory.core.search_ranking import RankingEngine, ScoringWeights
+from mcp_memory.core.search_ranking import RankingEngine
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalPort,
@@ -47,19 +47,6 @@ def _clear_query_embedding_cache() -> Iterator[None]:
     clear_query_embedding_cache()
     yield
     clear_query_embedding_cache()
-
-
-def test_core_ranking_engine_fuses_vector_and_keyword_lists() -> None:
-    engine = RankingEngine(Config(), weights=ScoringWeights(rrf_k=60.0))
-
-    fused = engine.fuse_reciprocal_rank(
-        ["memory-a", "memory-b"],
-        ["memory-b", "memory-c"],
-    )
-
-    assert fused["memory-b"] > fused["memory-a"]
-    assert fused["memory-b"] > fused["memory-c"]
-    assert fused["memory-a"] == pytest.approx(1.0 / 61.0)
 
 
 def test_core_ranking_engine_applies_authority_from_ranked_candidates(

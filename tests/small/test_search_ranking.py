@@ -9,7 +9,6 @@ from mcp_memory.core.search_ranking import (
     EXACT_IDENTIFIER_MATCH_MULTIPLIER,
     RankingEngine,
     RankingSignals,
-    ScoringWeights,
     _has_exact_identifier_match,
 )
 
@@ -41,16 +40,6 @@ def _record(
         workspace_ids=workspace_ids,
         tags=tags or [],
     )
-
-
-def test_fuse_reciprocal_rank_preserves_kernel_formula_and_configured_k() -> None:
-    engine = RankingEngine(Config(), weights=ScoringWeights(rrf_k=10.0))
-
-    assert engine.fuse_reciprocal_rank(["doc1"], []) == {"doc1": 1 / 11}
-    assert engine.fuse_reciprocal_rank(["doc1", "doc2"], ["doc2", "doc1"]) == {
-        "doc1": 1 / 11 + 1 / 12,
-        "doc2": 1 / 12 + 1 / 11,
-    }
 
 
 def test_adaptive_result_bands_use_calibrated_scores() -> None:

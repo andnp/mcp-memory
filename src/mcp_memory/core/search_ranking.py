@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
 from searchkernel.search.calibration import calibrate_score
-from searchkernel.search.fusion import fuse_reciprocal_rank
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import (
@@ -175,16 +174,6 @@ class RankingEngine:
     ) -> None:
         self._config = config
         self._weights = weights or ScoringWeights.from_config(config)
-
-    def fuse_reciprocal_rank(
-        self,
-        vector_ranked_ids: list[str],
-        keyword_ranked_ids: list[str],
-    ) -> dict[str, float]:
-        return fuse_reciprocal_rank(
-            (vector_ranked_ids, keyword_ranked_ids),
-            k=self._weights.rrf_k,
-        )
 
     def calibrate_score(self, rrf_score: float) -> float:
         return calibrate_score(
