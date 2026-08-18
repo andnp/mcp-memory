@@ -403,7 +403,7 @@ class DaemonZmqServer:
             tracked_request.response_status = _response_status(response)
             tracked_request.phase = "dispatched"
             return identity, response, tracked_request.request_id
-        except asyncio.TimeoutError:
+        except TimeoutError:
             tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
             tracked_request.phase = "timed_out"
             tracked_request.error = "daemon_request_timed_out"

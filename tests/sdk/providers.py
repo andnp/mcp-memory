@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -70,7 +69,7 @@ class FakeAsyncProcess:
 
     async def communicate(self) -> tuple[bytes, bytes]:
         if self.raise_timeout:
-            raise asyncio.TimeoutError
+            raise TimeoutError
         return (
             self.stdout_text.encode("utf-8"),
             self.stderr_text.encode("utf-8"),

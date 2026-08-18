@@ -293,7 +293,7 @@ class RuntimeTaskWorker:
                         timeout=self._abandoned_recovery_interval_seconds,
                     )
                     return
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     task_queue = getattr(self._ctx, "task_queue", None)
                     if task_queue is None:
                         continue
