@@ -8,7 +8,11 @@ import pytest
 
 from benchmarks.replay_eval.labels import RelevanceLabel
 from benchmarks.replay_eval.observations import ReplayObservation
-from benchmarks.replay_eval.report import compare_variants, per_query_scores
+from benchmarks.replay_eval.report import (
+    compare_variants,
+    per_query_scores,
+    sorted_query_keys,
+)
 
 
 def _observation(
@@ -147,3 +151,37 @@ def test_serialization_reports_every_variant() -> None:
     variants = mapping["variants"]
     assert isinstance(variants, list)
     assert {v["variant"] for v in variants} == {"base", "noise"}  # type: ignore[index]
+
+
+def test_query_keys_sort_with_and_without_a_workspace() -> None:
+    """Order keys deterministically when a global search records no workspace."""
+    keys = [("b", None), ("a", "w1"), ("a", None)]
+
+    assert sorted_query_keys(keys) == [("a", None), ("a", "w1"), ("b", None)]
+
+
+def test_a_comparison_spans_global_and_scoped_queries() -> None:
+    """Compare variants whose labels mix workspace-scoped and global searches."""
+    def run(variant: str, rank: int) -> list[ReplayObservation]:
+        return [
+            ReplayObservation(
+                label=RelevanceLabel(
+                    query=f"q{index}",
+                    workspace_id=None if index % 2 else "w1",
+                    memory_id="a",
+                    logged_rank=1,
+                    observed_at=1.0,
+                ),
+                variant=variant,
+                retrieved_rank=rank,
+            )
+            for index in range(30)
+        ]
+
+    report = compare_variants(
+        {"base": run("base", 4), "better": run("better", 1)},
+        baseline="base",
+        seed=1,
+    )
+
+    assert report.query_count == 30

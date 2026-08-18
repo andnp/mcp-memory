@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .metrics import VariantMetrics, summarize
@@ -10,6 +10,15 @@ from .observations import ReplayObservation
 from .significance import DEFAULT_RESAMPLES, PairedDelta, paired_bootstrap
 
 QueryKey = tuple[str, str | None]
+
+
+def sorted_query_keys(keys: Iterable[QueryKey]) -> list[QueryKey]:
+    """Order query keys deterministically despite an optional workspace.
+
+    A global search records no workspace, so the raw tuples mix ``str`` with
+    ``None`` and cannot be compared directly.
+    """
+    return sorted(keys, key=lambda key: (key[0], key[1] or ""))
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +91,7 @@ def compare_variants(
         if variant_scores.keys() != baseline_scores.keys():
             raise ValueError(f"variant {name!r} covered different queries than the baseline")
 
-    ordered_keys = sorted(baseline_scores)
+    ordered_keys = sorted_query_keys(baseline_scores)
     comparisons = [
         VariantComparison(
             metrics=summarize(name, replays[name]),

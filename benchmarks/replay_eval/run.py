@@ -18,7 +18,7 @@ from mcp_memory.storage.types import StorageBootstrapSpec
 
 from .labels import RelevanceLabel
 from .replay import DEFAULT_LIMIT, SearchFn, replay_labels
-from .report import compare_variants
+from .report import compare_variants, sorted_query_keys
 from .variants import Variant, default_variants
 
 DEFAULT_LABELS = Path("benchmarks/replay_eval/artifacts/labels.jsonl")
@@ -45,7 +45,7 @@ def sample_by_query(
     Sampling whole queries rather than labels keeps each sampled query's
     evidence intact, which is the unit the comparison weights by.
     """
-    keys = sorted({(label.query, label.workspace_id) for label in labels})
+    keys = sorted_query_keys({(label.query, label.workspace_id) for label in labels})
     if queries >= len(keys):
         return list(labels)
     chosen = set(random.Random(seed).sample(keys, queries))
