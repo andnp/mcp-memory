@@ -19,6 +19,8 @@ from mcp_memory.core.curation_reconciliation import (
 )
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.sampling import SamplingBatch
+from mcp_memory.core.task_handlers.curator_support import build_curator_context_packet
 from mcp_memory.curation_store import CurationRun
 
 
@@ -36,6 +38,24 @@ def _result(
             receipts=list(receipts),
         )
     )
+
+
+def _packet_record(memory_id: str, content: str = "Durable full content") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=memory_id,
+        title=f"Title {memory_id}",
+        summary=f"Summary {memory_id}",
+        content=content,
+        type="fact",
+        status="active",
+        tags=[],
+        workspace_ids=["workspace"],
+        metadata={},
+    )
+
+
+def _packet_task(data: dict[str, object] | None = None) -> SimpleNamespace:
+    return SimpleNamespace(id="packet-task", data=data or {})
 
 
 def test_mixed_neutral_feedback_continues_after_measured_regression() -> None:
@@ -201,6 +221,73 @@ def test_direct_curator_prompt_contains_durability_retention_guardrails() -> Non
     assert "advisory cleanup candidates" in prompt
     assert "Never archive or delete solely due to age, date, or access" in prompt
     assert "preserve every durable claim and its meaningful qualifiers" in prompt
+
+
+def test_curator_packet_identity_is_deterministic() -> None:
+    """Give identical ordered candidate context the same stable packet identity."""
+    records = [_packet_record("seed"), _packet_record("support")]
+    batch = SamplingBatch(
+        requested_strategy=None,
+        strategy_used="semantic",
+        strategy_fallback_reason=None,
+        candidate_count=2,
+        records=cast(Any, records),
+        strategy_selection_reason="selected=semantic",
+        strategy_selection_scores={"semantic": 0.8},
+        selector_feature_snapshot={"strategy_signals": {"recency": 0.2}},
+    )
+    first = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)), cast(Any, _packet_task()), batch, records[:1], records
+    )
+    second = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)), cast(Any, _packet_task()), batch, records[:1], records
+    )
+
+    assert first.packet_id == second.packet_id
+    assert first.to_mapping()["seeds"] == ["seed"]
+    assert first.to_mapping()["support"] == ["support"]
+    assert first.to_mapping()["record_tokens"]["seed"].startswith("v1:")
+
+
+def test_curator_packet_records_omit_overflow_with_bounds_metadata() -> None:
+    """Enforce configured record and character bounds while explaining omissions."""
+    records = [_packet_record("one"), _packet_record("two"), _packet_record("three")]
+    batch = SamplingBatch(None, "semantic", None, 3, cast(Any, records))
+    packet = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)),
+        cast(Any, _packet_task({"packet_max_records": 2, "packet_max_chars": 30})),
+        batch,
+        records[:1],
+        records,
+    ).to_mapping()
+
+    assert len(packet["records"]) == 1
+    assert packet["limits"]["records"] == 2
+    assert packet["limits"]["characters"] == 30
+    assert packet["disclosure"]["content"] == "omitted"
+    assert "character_limit" in {item["reason"] for item in packet["omissions"]}
+
+
+def test_direct_curator_prompt_includes_packet_identity_and_summary_only_context() -> None:
+    """Send the canonical packet to the provider without exposing full record content."""
+    record = _packet_record("seed", content="secret full record body")
+    batch = SamplingBatch(None, "semantic", None, 1, cast(Any, [record]))
+    packet = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)), cast(Any, _packet_task()), batch, [record], [record]
+    )
+    prompt = _direct_curator_prompt(
+        task=cast(TaskRecord, SimpleNamespace(id="curator-task")),
+        seed_records=[record],
+        campaign_hypothesis=None,
+        mutation_budget=CurationMutationBudget(),
+        context_packet=packet,
+    )
+
+    assert packet.packet_id in prompt
+    assert '"context_packet"' in prompt
+    assert '"content": "omitted"' in prompt
+    assert "secret full record body" not in prompt
+    assert '"seed_records"' not in prompt
 
 
 def test_direct_curator_prompt_does_not_direct_blanket_date_deletion() -> None:

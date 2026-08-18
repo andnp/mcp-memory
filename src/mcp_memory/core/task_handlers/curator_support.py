@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, cast
@@ -8,7 +9,14 @@ from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_candidates import CuratorCandidateRequest, CuratorSamplingContext
-from mcp_memory.core.curation_identity import candidate_revision_token, graph_token, record_token
+from mcp_memory.core.curation_identity import (
+    SCHEMA_VERSION,
+    candidate_revision_token,
+    canonical_token,
+    frontier_fingerprint,
+    graph_token,
+    record_token,
+)
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -74,6 +82,8 @@ CURATOR_NO_OP_COOLDOWN_MAX = timedelta(hours=24)
 CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS = 4
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
+CURATOR_PACKET_MAX_RECORDS = CURATOR_MAX_BATCH_RECORDS + CURATOR_MAX_SUPPORT_RECORDS
+CURATOR_PACKET_MAX_CHARS = CURATOR_PACKET_MAX_RECORDS * (CURATOR_MAX_TITLE_CHARS + CURATOR_MAX_SUMMARY_CHARS)
 CURATOR_MAX_TAGS = 6
 CURATOR_LOW_READ_REVIEW_THRESHOLD = 3
 CURATOR_LOW_CONVERSION_EXPOSURE_THRESHOLD = 3
@@ -193,6 +203,153 @@ CURATOR_SIZE_POLICY = CuratorSizePolicy(
     acceptable_max_chars=CURATOR_MAX_MEMORY_CHARS,
     split_threshold_chars=CURATOR_MAX_MEMORY_CHARS,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CuratorContextPacket:
+    """Immutable, summary-first context supplied to a direct curator provider."""
+
+    payload: dict[str, Any]
+    packet_id: str
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {**self.payload, "packet_id": self.packet_id}
+
+
+def build_curator_context_packet(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    seed_batch: SamplingBatch,
+    sampled_records: list[Any],
+    seed_records: list[Any],
+) -> CuratorContextPacket:
+    configured_record_limit = _packet_limit(task, "packet_max_records", CURATOR_PACKET_MAX_RECORDS)
+    configured_char_limit = _packet_limit(task, "packet_max_chars", CURATOR_PACKET_MAX_CHARS)
+    seed_ids = [str(record.id) for record in sampled_records]
+    seed_id_set = set(seed_ids)
+    ordered_records = []
+    seen_record_ids: set[str] = set()
+    for record in seed_records:
+        memory_id = str(record.id)
+        if memory_id not in seen_record_ids:
+            ordered_records.append(record)
+            seen_record_ids.add(memory_id)
+    support_records = [record for record in ordered_records if str(record.id) not in seed_id_set]
+    entries: list[dict[str, Any]] = []
+    record_tokens: dict[str, str] = {}
+    graph_tokens: dict[str, str] = {}
+    omissions: list[dict[str, str]] = []
+    disclosed_chars = 0
+    for record in ordered_records:
+        memory_id = str(record.id)
+        if len(entries) >= configured_record_limit:
+            omissions.append({"memory_id": memory_id, "reason": "record_limit"})
+            continue
+        title = truncate_text(record.title, CURATOR_MAX_TITLE_CHARS)
+        summary = truncate_text(record.summary or record.content, CURATOR_MAX_SUMMARY_CHARS)
+        entry_chars = len(title) + len(summary)
+        if disclosed_chars + entry_chars > configured_char_limit:
+            omissions.append({"memory_id": memory_id, "reason": "character_limit"})
+            continue
+        edges = _packet_edges(ctx, memory_id)
+        record_tokens[memory_id] = record_token(record)
+        if edges is None:
+            omissions.append({"memory_id": memory_id, "reason": "graph_token_unavailable"})
+        else:
+            graph_tokens[memory_id] = graph_token(memory_id, edges)
+        entries.append(
+            {
+                "memory_id": memory_id,
+                "title": title,
+                "summary": summary,
+                "memory_type": str(record.type),
+                "status": str(record.status),
+                "selection": {
+                    "role": "seed" if memory_id in seed_id_set else "support",
+                    "strategy_reason": seed_batch.strategy_selection_reason,
+                    "strategy_scores": dict(seed_batch.strategy_selection_scores or {}),
+                    "strategy_signals": dict((seed_batch.selector_feature_snapshot or {}).get("strategy_signals", {})),
+                },
+                "disclosure": {
+                    "fields": ["memory_id", "title", "summary", "memory_type", "status"],
+                    "content": "omitted",
+                    "summary": "bounded_excerpt",
+                },
+            }
+        )
+        disclosed_chars += entry_chars
+
+    included_ids = [entry["memory_id"] for entry in entries]
+    included_seed_ids = [memory_id for memory_id in seed_ids if memory_id in included_ids]
+    included_support_ids = [str(record.id) for record in support_records if str(record.id) in included_ids]
+    limits = {
+        "records": configured_record_limit,
+        "characters": configured_char_limit,
+        "title_characters": CURATOR_MAX_TITLE_CHARS,
+        "summary_characters": CURATOR_MAX_SUMMARY_CHARS,
+    }
+    disclosure = {
+        "mode": "summary_first",
+        "fields": ["memory_id", "title", "summary", "memory_type", "status"],
+        "content": "omitted",
+        "truncated_fields": ["title", "summary"],
+    }
+    packet = {
+        "schema_version": SCHEMA_VERSION,
+        "policy_version": str(task.data.get("policy_version", "curator-packet-v1")),
+        "frontier_fingerprint": frontier_fingerprint(
+            "memory-curation-review", seed_batch.strategy_used, seed_ids
+        ),
+        "seeds": included_seed_ids,
+        "support": included_support_ids,
+        "records": entries,
+        "record_tokens": record_tokens,
+        "graph_tokens": graph_tokens,
+        "disclosure": disclosure,
+        "omissions": omissions,
+        "limits": limits,
+        "selection": {
+            "strategy": seed_batch.strategy_used,
+            "reason": seed_batch.strategy_selection_reason,
+            "scores": dict(seed_batch.strategy_selection_scores or {}),
+            "signals": dict((seed_batch.selector_feature_snapshot or {}).get("strategy_signals", {})),
+        },
+    }
+    return CuratorContextPacket(payload=packet, packet_id=canonical_token(packet))
+
+
+def _packet_limit(task: TaskRecord, key: str, default: int) -> int:
+    value = task.data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return max(1, min(value, default))
+
+
+def _packet_edges(ctx: ApplicationContext, memory_id: str) -> list[dict[str, Any]] | None:
+    getter = getattr(ctx.repository, "get_links", None) if ctx.repository is not None else None
+    if not callable(getter):
+        return None
+    edges: list[dict[str, Any]] = []
+    for direction in ("outgoing", "incoming"):
+        for edge in cast(Iterable[Any], getter(memory_id, direction=direction)):
+            source_id = getattr(edge, "source_id", None)
+            target_id = getattr(edge, "target_id", None)
+            link_type = getattr(edge, "link_type", None) or getattr(edge, "type", None)
+            context = getattr(edge, "context", None)
+            if isinstance(edge, dict):
+                source_id = edge.get("source_id")
+                target_id = edge.get("target_id")
+                link_type = edge.get("link_type", edge.get("type"))
+                context = edge.get("context")
+            edges.append(
+                {
+                    "source_id": str(source_id),
+                    "target_id": str(target_id),
+                    "type": str(link_type),
+                    "context": context,
+                }
+            )
+    return edges
 
 
 

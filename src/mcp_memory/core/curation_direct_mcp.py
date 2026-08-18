@@ -41,6 +41,7 @@ async def run_curator_direct_mcp(
     seed_records: list[Any],
     claimed_work_item: Any,
     work_item_metadata: dict[str, Any],
+    context_packet: Any | None = None,
 ) -> dict[str, Any]:
     """Run one curator session with direct access to the mutation MCP tools."""
     from mcp_memory.core.task_handlers.agentic_tool_tracking import (
@@ -110,6 +111,7 @@ async def run_curator_direct_mcp(
             _direct_curator_prompt(
                 task=task,
                 seed_records=seed_records,
+                context_packet=context_packet,
                 campaign_hypothesis=campaign_hypothesis,
                 mutation_budget=budget,
             )
@@ -370,17 +372,8 @@ def _direct_curator_prompt(
     seed_records: list[Any],
     campaign_hypothesis: CampaignHypothesis | None,
     mutation_budget: CurationMutationBudget,
+    context_packet: Any | None = None,
 ) -> str:
-    records = [
-        {
-            "memory_id": str(record.id),
-            "title": str(record.title)[:200],
-            "summary": str(record.summary or "")[:500],
-            "memory_type": str(record.type),
-            "status": str(record.status),
-        }
-        for record in seed_records
-    ]
     context = {
         "task_id": task.id,
         "campaign_hypothesis": campaign_hypothesis,
@@ -388,7 +381,11 @@ def _direct_curator_prompt(
             "max_accepted_mutations": mutation_budget.max_accepted_mutations,
             "max_proposed_actions": mutation_budget.max_proposed_actions,
         },
-        "seed_records": records,
+        "context_packet": (
+            context_packet.to_mapping()
+            if context_packet is not None
+            else {"schema_version": 1, "seeds": [], "support": [], "records": [], "omissions": ["packet_unavailable"]}
+        ),
         "available_tools": list(CURATOR_AGENT_TOOLS),
     }
     return (

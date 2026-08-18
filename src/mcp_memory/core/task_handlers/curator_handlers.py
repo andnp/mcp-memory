@@ -157,6 +157,9 @@ async def handle_memory_curator_task(
         seed_records=seed_records,
         claimed_work_item=claimed_review_item,
         work_item_metadata=work_item_metadata,
+        context_packet=_curator_support.build_curator_context_packet(
+            ctx, task, seed_batch, sampled_records, seed_records
+        ),
     )
     if result.get("curation_outcome") == "no_op":
         record_curator_no_op_dispositions(ctx, sampled_records)
