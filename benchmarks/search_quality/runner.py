@@ -1123,7 +1123,7 @@ def seed_search_quality_records(
     *,
     workspace: str = "workspace",
 ) -> dict[str, str]:
-    records = (
+    records: tuple[tuple[str, str, str, str], ...] = (
         (
             "authentication-token-rotation",
             "Authentication token rotation",
@@ -1229,7 +1229,7 @@ def seed_search_quality_records(
             content,
             workspace_ids_by_label.get(label, [workspace]),
             summary=content,
-            tags=tags.split(),
+            tags=str(tags).split(),
             memory_type="fact",
         )
         if created is None:
