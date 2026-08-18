@@ -168,6 +168,37 @@ def _calibrate_score(rrf_score: float, *, threshold: float, steepness: float) ->
     return max(0.0, min(1.0, 1.0 / (1.0 + math.exp(exponent))))
 
 
+@dataclass(slots=True)
+class ScoreComponents:
+    """The named parts a ranking score is composed from.
+
+    Keeping them in one place is what stops the ranked score and the reported
+    explanation drifting apart: both are composed from the same instance.
+    """
+
+    calibrated_score: float
+    recency_bonus: float
+    graph_support_bonus: float
+    access_bonus: float
+    workspace_multiplier: float
+    authority_multiplier: float
+    degradation_multiplier: float
+    signal_multiplier: float
+
+    def compose(self) -> float:
+        """Combine the parts into the score used for ordering."""
+        score = min(
+            self.calibrated_score + self.recency_bonus + self.graph_support_bonus,
+            1.0,
+        )
+        score *= self.workspace_multiplier
+        score += self.access_bonus
+        score *= self.authority_multiplier
+        score *= self.degradation_multiplier
+        score *= self.signal_multiplier
+        return min(max(score, 0.0), 1.0)
+
+
 class RankingEngine:
     def __init__(
         self,
@@ -263,6 +294,36 @@ class RankingEngine:
             multiplier *= EXACT_IDENTIFIER_MATCH_MULTIPLIER
         return multiplier
 
+    def score_components(
+        self,
+        candidate: RankedMemoryCandidate | MemoryRecord,
+        rrf_score: float,
+        workspace_id: str | None,
+        *,
+        signals: RankingSignals,
+        keyword_candidates_present: bool,
+    ) -> ScoreComponents:
+        """Measure every ranking signal for one candidate."""
+        record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
+        authority_counts = (
+            candidate.incoming_link_type_counts
+            if isinstance(candidate, RankedMemoryCandidate)
+            else {}
+        )
+        return ScoreComponents(
+            calibrated_score=self.calibrate_score(rrf_score),
+            recency_bonus=self.type_aware_recency_bonus(record),
+            graph_support_bonus=self.graph_support_bonus(record, authority_counts),
+            access_bonus=self.adjusted_access_bonus(record, authority_counts),
+            workspace_multiplier=self.workspace_multiplier(record, workspace_id),
+            authority_multiplier=self.authority_multiplier_for_candidate(candidate),
+            degradation_multiplier=self.degradation_multiplier(record),
+            signal_multiplier=self._signal_adjustment_multiplier(
+                signals,
+                keyword_candidates_present=keyword_candidates_present,
+            ),
+        )
+
     def rank_records(
         self,
         records: Sequence[RankedMemoryCandidate | MemoryRecord],
@@ -277,20 +338,15 @@ class RankingEngine:
             record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
             if record.id not in rrf_scores:
                 continue
-            authority_counts = (
-                candidate.incoming_link_type_counts
-                if isinstance(candidate, RankedMemoryCandidate)
-                else {}
-            )
-            score = self.calibrate_score(rrf_scores[record.id])
-            score = min(score + self.type_aware_recency_bonus(record) + self.graph_support_bonus(record, authority_counts), 1.0)
-            score *= self.workspace_multiplier(record, workspace_id)
-            score += self.adjusted_access_bonus(record, authority_counts)
-            score *= self.authority_multiplier_for_candidate(candidate)
-            score *= self.degradation_multiplier(record)
             signals = ranking_signals.get(record.id, RankingSignals()) if ranking_signals is not None else RankingSignals()
-            score *= self._signal_adjustment_multiplier(signals, keyword_candidates_present=keyword_candidates_present)
-            ranked.append((record, min(max(score, 0.0), 1.0)))
+            components = self.score_components(
+                candidate,
+                rrf_scores[record.id],
+                workspace_id,
+                signals=signals,
+                keyword_candidates_present=keyword_candidates_present,
+            )
+            ranked.append((record, components.compose()))
         ranked.sort(key=lambda item: (-item[1], item[0].id))
         return ranked
 
@@ -304,31 +360,28 @@ class RankingEngine:
         keyword_candidates_present: bool = False,
     ) -> RankingExplanation:
         record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
-        calibrated_score = self.calibrate_score(rrf_score)
-        recency_bonus = self.type_aware_recency_bonus(record)
-        workspace_multiplier = self.workspace_multiplier(record, workspace_id)
         authority_counts = (
             candidate.incoming_link_type_counts
             if isinstance(candidate, RankedMemoryCandidate)
             else {}
         )
-        support_bonus = self.graph_support_bonus(record, authority_counts)
-        access_bonus = self.adjusted_access_bonus(record, authority_counts)
-        authority_multiplier = self.authority_multiplier_for_candidate(candidate)
-        degradation_multiplier = self.degradation_multiplier(record)
-        score_after_recency = min(calibrated_score + recency_bonus + support_bonus, 1.0)
-        final_score = score_after_recency
-        final_score *= workspace_multiplier
-        final_score += access_bonus
-        final_score *= authority_multiplier
-        final_score *= degradation_multiplier
         active_signals = signals or RankingSignals()
-        signal_multiplier = self._signal_adjustment_multiplier(
-            active_signals,
+        components = self.score_components(
+            candidate,
+            rrf_score,
+            workspace_id,
+            signals=active_signals,
             keyword_candidates_present=keyword_candidates_present,
         )
-        final_score *= signal_multiplier
-        final_score = min(max(final_score, 0.0), 1.0)
+        calibrated_score = components.calibrated_score
+        recency_bonus = components.recency_bonus
+        support_bonus = components.graph_support_bonus
+        access_bonus = components.access_bonus
+        workspace_multiplier = components.workspace_multiplier
+        authority_multiplier = components.authority_multiplier
+        degradation_multiplier = components.degradation_multiplier
+        signal_multiplier = components.signal_multiplier
+        final_score = components.compose()
         return {
             "rrf_score": round(rrf_score, 6),
             "calibrated_score": round(calibrated_score, 6),
