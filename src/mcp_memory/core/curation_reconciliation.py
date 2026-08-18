@@ -224,7 +224,9 @@ class CurationReconciler:
                 if receipt.verification_descriptor is not None:
                     descriptor = receipt.verification_descriptor
                     result = self._with_lock_retries(
-                        lambda: self._verifier.verify_descriptor(receipt, descriptor)
+                        lambda receipt=receipt, descriptor=descriptor: self._verifier.verify_descriptor(
+                            receipt, descriptor
+                        )
                     )
                 else:
                     try:
@@ -234,7 +236,11 @@ class CurationReconciler:
                     if action is None:
                         return self._finish_failed_run(run, "action_unavailable", verified_count)
                     resolved_action = action
-                    result = self._with_lock_retries(lambda: self._verifier.verify(receipt, resolved_action))
+                    result = self._with_lock_retries(
+                        lambda receipt=receipt, resolved_action=resolved_action: self._verifier.verify(
+                            receipt, resolved_action
+                        )
+                    )
             except sqlite3.OperationalError as exc:
                 if _is_locked(exc):
                     return _defer(run, "sqlite_locked")
