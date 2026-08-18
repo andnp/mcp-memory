@@ -23,7 +23,7 @@ dependencies = [
     "pyzmq>=27.0.0",
     "textual>=0.44.0",
     "github-copilot-sdk>=1.0.1",
-    "andnp-searchkernel[ollama]>=1.5.0",
+    "andnp-searchkernel[ollama]>=1.5.2",
 ]
 
 [project.scripts]
