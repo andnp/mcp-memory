@@ -189,6 +189,9 @@ class DeterministicEmbeddingProvider:
             )
         return vectors
 
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
+
 
 class _MemoryRepository:
     """Authoritative in-memory repository implementing the search read port."""

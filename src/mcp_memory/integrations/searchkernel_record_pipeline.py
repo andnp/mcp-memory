@@ -48,6 +48,13 @@ from mcp_memory.integrations.searchkernel_adapters import (
 MEMORY_SEARCH_POLICY_VERSION = "mcp-memory-record-policy-v1"
 MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX = "semantic_abstention:"
 
+# MemoryKeywordStore scores hits as 1.0/rank rather than with an unbounded BM25
+# magnitude, so searchkernel's default even-odds point of 10.0 would place even a
+# rank-one hit at 0.09 confidence and permanently close the gates that consume it.
+# At 1/3 the 0.75 thresholds mean "the top hit is rank one", as they did before
+# those gates were expressed in calibrated confidence.
+KEYWORD_RANK_SATURATION_K = 1.0 / 3.0
+
 _ACTIVE_QUERY_EMBEDDING_CACHE: ContextVar[QueryEmbeddingCache | None] = ContextVar(
     "mcp_memory_query_embedding_cache",
     default=None,
@@ -390,6 +397,7 @@ def build_memory_record_pipeline(
     record_search_config = RecordSearchConfig(
         minimum_candidate_limit=50,
         rrf_k=resolved_config.search_ranking.rrf_k,
+        keyword_saturation_k=KEYWORD_RANK_SATURATION_K,
         graph_fusion="max",
         max_graph_seeds=3,
         max_neighbors_per_seed=10,

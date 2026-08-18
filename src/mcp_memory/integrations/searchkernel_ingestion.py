@@ -50,6 +50,9 @@ class _MemoryEmbeddingProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [list(vector) for vector in self._embedder.embed(texts)]
 
+    def embed_query(self, text: str) -> list[float]:
+        return list(self._embedder.embed_query(text))
+
 
 class _MemoryKeywordIndex:
     """Satisfy the kernel's synchronous indexing port; SQL remains authoritative."""
