@@ -423,10 +423,6 @@ class SQLiteMutationHistoryStore:
         return stored
 
 
-# Keep the repository spelling available to callers following existing store names.
-SQLiteMutationHistoryRepository = SQLiteMutationHistoryStore
-
-
 def _bounded_limit(limit: int) -> int:
     if limit < 1:
         raise ValueError("limit must be at least 1")
