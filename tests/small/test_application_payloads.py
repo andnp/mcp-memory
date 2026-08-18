@@ -95,17 +95,11 @@ def _raw_search_result(
     chunks: object = (),
     strategies: object = ("keyword", "vector"),
     normalized_score: object = 0.87654321,
-    community_boost: object = 1.25,
-    project_uplift: object = 1.1,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         record=SimpleNamespace(source_id="id-1"),
         normalized_score=normalized_score,
-        provenance=SimpleNamespace(
-            strategies=strategies,
-            community_boost=community_boost,
-            project_uplift=project_uplift,
-        ),
+        provenance=SimpleNamespace(strategies=strategies),
         chunk_matches=chunks,
     )
 
@@ -171,7 +165,6 @@ def test_debug_search_payload_includes_bounded_evidence() -> None:
     assert _evidence(payload) == {
         "lanes": ["keyword", "semantic"],
         "normalized_score": 0.876543,
-        "score_adjustments": {"community_boost": 1.25, "project_uplift": 1.1},
         "excerpts": [
             {"content": "high", "score": 0.9},
             {"content": "upper", "score": 0.8},
@@ -204,8 +197,6 @@ def test_debug_search_payload_redacts_malformed_chunk_details() -> None:
         ],
         strategies=("keyword", "provider-private"),
         normalized_score=float("nan"),
-        community_boost=float("nan"),
-        project_uplift=101.0,
     )
 
     evidence = _evidence(
@@ -235,8 +226,6 @@ def test_debug_search_payload_omits_unavailable_chunk_evidence() -> None:
                 chunks=None,
                 strategies=("provider-private",),
                 normalized_score=float("nan"),
-                community_boost=None,
-                project_uplift=None,
             )
         ],
     )[0]

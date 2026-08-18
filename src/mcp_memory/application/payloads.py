@@ -14,7 +14,6 @@ from mcp_memory.serialization import (
 
 MAX_SEARCH_EVIDENCE_EXCERPTS = 3
 MAX_SEARCH_EVIDENCE_EXCERPT_CHARS = 240
-MAX_SEARCH_EVIDENCE_ADJUSTMENTS = 4
 MAX_SEARCH_EVIDENCE_SCORE = 100.0
 
 _SEARCH_EVIDENCE_LANES = {
@@ -23,7 +22,6 @@ _SEARCH_EVIDENCE_LANES = {
     "semantic": "semantic",
     "graph": "graph",
 }
-_SEARCH_EVIDENCE_ADJUSTMENTS = ("community_boost", "project_uplift")
 
 
 def _bounded_search_evidence_number(value: object) -> float | None:
@@ -67,16 +65,6 @@ def _search_evidence_for_result(raw_result: object) -> dict[str, object]:
     )
     if normalized_score is not None:
         evidence["normalized_score"] = normalized_score
-
-    adjustments: dict[str, float] = {}
-    for name in _SEARCH_EVIDENCE_ADJUSTMENTS:
-        adjustment = _bounded_search_evidence_number(_raw_value(provenance, name))
-        if adjustment is not None:
-            adjustments[name] = adjustment
-        if len(adjustments) >= MAX_SEARCH_EVIDENCE_ADJUSTMENTS:
-            break
-    if adjustments:
-        evidence["score_adjustments"] = adjustments
 
     chunks = _raw_value(raw_result, "chunk_matches")
     if chunks is None:

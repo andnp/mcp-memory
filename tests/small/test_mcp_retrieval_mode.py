@@ -142,8 +142,6 @@ class _DebugSemanticRetrieval:
         )
         provenance = SimpleNamespace(
             strategies=("keyword", "vector"),
-            community_boost=1.2,
-            project_uplift=None,
             to_dict=lambda: {"strategies": ["keyword", "vector"]},
         )
         result = SimpleNamespace(
@@ -226,7 +224,6 @@ def test_search_use_case_debug_includes_bounded_search_evidence() -> None:
     evidence = payload["results"][0]["ranking_debug"]["evidence"]
     assert evidence["lanes"] == ["keyword", "semantic"]
     assert evidence["normalized_score"] == 0.75
-    assert evidence["score_adjustments"] == {"community_boost": 1.2}
     assert len(evidence["excerpts"]) == 1
     assert len(evidence["excerpts"][0]["content"]) == 240
 
