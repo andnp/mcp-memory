@@ -355,7 +355,7 @@ class SQLiteMutationHistoryStore:
                         _datetime_text(created_at),
                     ),
                 )
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as exc:
             existing = self._db.get_connection().execute(
                 "SELECT * FROM memory_restore_requests WHERE idempotency_key = ?",
                 (request.idempotency_key,),
@@ -374,7 +374,7 @@ class SQLiteMutationHistoryStore:
             ):
                 raise MutationHistoryIdentityConflictError(
                     f"restore idempotency key {request.idempotency_key!r} is already in use"
-                )
+                ) from exc
             return _restore_result_from_row(existing, replay=True)
         row = self._db.get_connection().execute(
             "SELECT * FROM memory_restore_requests WHERE id = ?",
