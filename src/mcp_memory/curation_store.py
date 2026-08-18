@@ -574,9 +574,6 @@ class SQLiteCurationStore:
         return state is not None and state.cooldown_until is not None and state.cooldown_until > (now or _now())
 
 
-SQLiteCurationRepository = SQLiteCurationStore
-
-
 def _bounded_limit(limit: int) -> int:
     if limit < 1:
         raise ValueError("limit must be at least 1")

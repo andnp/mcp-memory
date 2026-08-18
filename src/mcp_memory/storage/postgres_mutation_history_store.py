@@ -440,9 +440,6 @@ class PostgresMutationHistoryStore:
                 return cursor.fetchall()
 
 
-PostgresMutationHistoryRepository = PostgresMutationHistoryStore
-
-
 def _bounded_limit(limit: int) -> int:
     if limit < 1:
         raise ValueError("limit must be at least 1")

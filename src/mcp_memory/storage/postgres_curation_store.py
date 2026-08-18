@@ -594,6 +594,3 @@ def _receipt_identity_matches(left: CurationActionReceipt, right: CurationAction
 def _json_list(value: object) -> list[object]:
     decoded = _json_value(value, default=[])
     return decoded if isinstance(decoded, list) else []
-
-
-PostgresCurationRepository = PostgresCurationStore
