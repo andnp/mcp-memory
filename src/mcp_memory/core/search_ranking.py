@@ -217,9 +217,6 @@ class RankingEngine:
             return bonus * 0.5
         return bonus
 
-    def authority_multiplier(self, record: RelationalMemoryRecord) -> float:
-        return 1.0
-
     def authority_multiplier_for_candidate(self, candidate: RankedMemoryCandidate | RelationalMemoryRecord) -> float:
         if isinstance(candidate, RankedMemoryCandidate):
             weighted_links = _weighted_incoming_link_count(candidate.incoming_link_type_counts)
