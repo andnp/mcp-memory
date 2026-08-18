@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
-from searchkernel.search.calibration import calibrate_score
-
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import (
     FTS_QUERY_TOKEN_PATTERN,
@@ -165,6 +163,12 @@ class ScoringWeights:
         )
 
 
+def _calibrate_score(rrf_score: float, *, threshold: float, steepness: float) -> float:
+    """Map a fused RRF score onto a calibrated confidence in [0, 1]."""
+    exponent = max(-20.0, min(20.0, -steepness * (rrf_score - threshold)))
+    return max(0.0, min(1.0, 1.0 / (1.0 + math.exp(exponent))))
+
+
 class RankingEngine:
     def __init__(
         self,
@@ -176,7 +180,7 @@ class RankingEngine:
         self._weights = weights or ScoringWeights.from_config(config)
 
     def calibrate_score(self, rrf_score: float) -> float:
-        return calibrate_score(
+        return _calibrate_score(
             rrf_score,
             threshold=self._weights.calibration_threshold,
             steepness=self._weights.calibration_steepness,
