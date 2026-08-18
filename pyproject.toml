@@ -56,3 +56,214 @@ markers = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_memory"]
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "C4", "I", "UP", "SIM", "RUF"]
+ignore = [
+    "SIM117",
+    "UP035",
+    "SIM105",
+    "SIM118",
+    "B023",
+    "C409",
+    "RUF043",
+    "UP046",
+    "UP047",
+    "SIM102",
+    "UP040",
+    "RUF012",
+    "RUF059",
+    "B008",
+    "B904",
+    "C401",
+    "C416",
+    "RUF001",
+    "RUF046",
+    "SIM103",
+    "SIM108",
+    "B039",
+    "B905",
+    "RUF005",
+    "RUF007",
+    "UP042",
+    "I001",
+    "RUF100",
+    "UP017",
+    "RUF022",
+    "UP037",
+    "B009",
+    "B010",
+    "C420",
+    "UP043",
+    "RUF021",
+    "SIM114",
+    "UP041",
+    "SIM300",
+    "RUF023",
+    "UP012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"benchmarks/search_quality/runner.py" = ["E501"]
+"src/mcp_memory/application/memory_embedding_maintenance.py" = ["E501"]
+"src/mcp_memory/application/ports.py" = ["E501"]
+"src/mcp_memory/cli_admin_commands.py" = ["E501"]
+"src/mcp_memory/cli_daemon_commands.py" = ["E501"]
+"src/mcp_memory/cli_memory.py" = ["E501"]
+"src/mcp_memory/cli.py" = ["E501"]
+"src/mcp_memory/config.py" = ["E501"]
+"src/mcp_memory/core/agent_runtime.py" = ["E501"]
+"src/mcp_memory/core/curation_executor.py" = ["E501"]
+"src/mcp_memory/core/curation_feedback.py" = ["E501"]
+"src/mcp_memory/core/curation_identity.py" = ["E501"]
+"src/mcp_memory/core/curation_policy.py" = ["E501"]
+"src/mcp_memory/core/curation_reconciliation.py" = ["E501"]
+"src/mcp_memory/core/curation_verifier.py" = ["E501"]
+"src/mcp_memory/core/curator_telemetry.py" = ["E501"]
+"src/mcp_memory/core/ingest_claim_lifecycle.py" = ["E501"]
+"src/mcp_memory/core/journal.py" = ["E501"]
+"src/mcp_memory/core/mutation_restore.py" = ["E501"]
+"src/mcp_memory/core/ports/curation.py" = ["E501"]
+"src/mcp_memory/core/ports/tasks.py" = ["E501"]
+"src/mcp_memory/core/ports/work_items.py" = ["E501"]
+"src/mcp_memory/core/providers/copilot_sdk.py" = ["E501"]
+"src/mcp_memory/core/providers/interfaces.py" = ["E501"]
+"src/mcp_memory/core/sampling.py" = ["E501"]
+"src/mcp_memory/core/search_ranking.py" = ["E501"]
+"src/mcp_memory/core/search_repair.py" = ["E501"]
+"src/mcp_memory/core/summaries.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/agentic_guardrails.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/curator_support.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/deduplicator_handlers.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/ingest.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/relationship_proposals.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/taxonomist_handlers.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/taxonomist_support.py" = ["E501"]
+"src/mcp_memory/core/task_handlers/tool_loop.py" = ["E501"]
+"src/mcp_memory/core/task_results.py" = ["E501"]
+"src/mcp_memory/core/task_worker.py" = ["E501"]
+"src/mcp_memory/curation_action_store.py" = ["E501"]
+"src/mcp_memory/curation_quality_store.py" = ["E501"]
+"src/mcp_memory/curation_store.py" = ["E501"]
+"src/mcp_memory/daemon_app.py" = ["E501"]
+"src/mcp_memory/daemon_dispatch.py" = ["E501"]
+"src/mcp_memory/daemon.py" = ["E501"]
+"src/mcp_memory/daemon_runtime.py" = ["E501"]
+"src/mcp_memory/daemon_transport.py" = ["E501"]
+"src/mcp_memory/embedding_repair_store.py" = ["E501"]
+"src/mcp_memory/installer.py" = ["E501"]
+"src/mcp_memory/internal_tool_call_tracking.py" = ["E501"]
+"src/mcp_memory/management/agent_run_reporting.py" = ["E501"]
+"src/mcp_memory/management/analytics_quality.py" = ["E501"]
+"src/mcp_memory/management/analytics_reporting.py" = ["E501"]
+"src/mcp_memory/management/analytics_retrieval.py" = ["E501"]
+"src/mcp_memory/management/analytics_service.py" = ["E501"]
+"src/mcp_memory/management/models.py" = ["E501"]
+"src/mcp_memory/management/mutation_history_service.py" = ["E501"]
+"src/mcp_memory/management/operator_health_reporting.py" = ["E501"]
+"src/mcp_memory/management/overview_reporting.py" = ["E501"]
+"src/mcp_memory/management/reporting_rows.py" = ["E501"]
+"src/mcp_memory/management/route_audit.py" = ["E501"]
+"src/mcp_memory/management/task_administration.py" = ["E501"]
+"src/mcp_memory/management/task_sampling_summary.py" = ["E501"]
+"src/mcp_memory/mcp/internal_ingest_services.py" = ["E501"]
+"src/mcp_memory/mcp/internal_mutation_services.py" = ["E501"]
+"src/mcp_memory/mcp/internal_tools.py" = ["E501"]
+"src/mcp_memory/mcp/tools.py" = ["E501"]
+"src/mcp_memory/mcp/transport.py" = ["E501"]
+"src/mcp_memory/mutation_history_store.py" = ["E501"]
+"src/mcp_memory/operational_store_rows.py" = ["E501"]
+"src/mcp_memory/provider_policy_event_store.py" = ["E501"]
+"src/mcp_memory/provider_usage_store.py" = ["E501"]
+"src/mcp_memory/relational/repository.py" = ["E501"]
+"src/mcp_memory/retrieval_telemetry_store.py" = ["E501"]
+"src/mcp_memory/runtime_log_store.py" = ["E501"]
+"src/mcp_memory/sqlite_backup.py" = ["E501"]
+"src/mcp_memory/storage/direct_mutation_evidence_store.py" = ["E501"]
+"src/mcp_memory/storage/ingress_mutation_transaction.py" = ["E501"]
+"src/mcp_memory/storage/__init__.py" = ["E501"]
+"src/mcp_memory/storage/postgres_connection.py" = ["E501"]
+"src/mcp_memory/storage/postgres_curation_action_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_curation_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_direct_mutation_evidence_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_embedding_repair_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_ingress_mutation_transaction.py" = ["E501"]
+"src/mcp_memory/storage/postgres_journal.py" = ["E501"]
+"src/mcp_memory/storage/postgres_migrations.py" = ["E501"]
+"src/mcp_memory/storage/postgres_mutation_history_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_provider_usage_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_repository.py" = ["E501"]
+"src/mcp_memory/storage/postgres_task_queue.py" = ["E501"]
+"src/mcp_memory/storage/postgres_vector_store.py" = ["E501"]
+"src/mcp_memory/storage/postgres_work_item_store.py" = ["E501"]
+"src/mcp_memory/storage/shared_read_cache.py" = ["E501"]
+"src/mcp_memory/storage/skill_review.py" = ["E501"]
+"src/mcp_memory/storage/sqlite_task_queue.py" = ["E501"]
+"src/mcp_memory/storage/sqlite_work_item_store.py" = ["E501"]
+"src/mcp_memory/utils/db.py" = ["E501"]
+"tests/curation_fixtures.py" = ["E501"]
+"tests/large/test_e2e_user_flows.py" = ["E501"]
+"tests/medium/conftest.py" = ["E501"]
+"tests/medium/test_agent_runtime.py" = ["E501"]
+"tests/medium/test_cli_tui.py" = ["E501"]
+"tests/medium/test_config_bootstrap.py" = ["E501"]
+"tests/medium/test_curation_reconciliation.py" = ["E501"]
+"tests/medium/test_curator_verified_execution.py" = ["E501"]
+"tests/medium/test_daemon_lifecycle.py" = ["E501"]
+"tests/medium/test_management_api.py" = ["E501"]
+"tests/medium/test_management_cli.py" = ["E501"]
+"tests/medium/test_mcp_contract.py" = ["E501"]
+"tests/medium/test_postgres_curation_action_transaction.py" = ["E501"]
+"tests/medium/test_postgres_searchkernel_vector_parity.py" = ["E501"]
+"tests/medium/test_postgres_storage_integration.py" = ["E501"]
+"tests/medium/test_providers.py" = ["E501"]
+"tests/medium/test_server_bootstrap.py" = ["E501"]
+"tests/medium/test_task_execution_runtime.py" = ["E501"]
+"tests/small/curation_repository_contract.py" = ["E501"]
+"tests/small/test_analytics_curation.py" = ["E501"]
+"tests/small/test_analytics_quality.py" = ["E501"]
+"tests/small/test_cli_taxonomy.py" = ["E501"]
+"tests/small/test_config.py" = ["E501"]
+"tests/small/test_curation_action_store.py" = ["E501"]
+"tests/small/test_curation_executor.py" = ["E501"]
+"tests/small/test_curation_identity.py" = ["E501"]
+"tests/small/test_curation_models.py" = ["E501"]
+"tests/small/test_curation_policy.py" = ["E501"]
+"tests/small/test_curation_quality.py" = ["E501"]
+"tests/small/test_curator_candidate_acquisition.py" = ["E501"]
+"tests/small/test_curator_durability_benchmarks.py" = ["E501"]
+"tests/small/test_daemon_transport.py" = ["E501"]
+"tests/small/test_direct_mutation_evidence.py" = ["E501"]
+"tests/small/test_embedding_integrity_event_store.py" = ["E501"]
+"tests/small/test_embedding_repair_task.py" = ["E501"]
+"tests/small/test_ingest_claim_lifecycle.py" = ["E501"]
+"tests/small/test_ingress_identity.py" = ["E501"]
+"tests/small/test_ingress_mutation_transaction.py" = ["E501"]
+"tests/small/test_ingress_source.py" = ["E501"]
+"tests/small/test_instrumented_provider.py" = ["E501"]
+"tests/small/test_internal_ingest_services.py" = ["E501"]
+"tests/small/test_journal.py" = ["E501"]
+"tests/small/test_maintenance_framework.py" = ["E501"]
+"tests/small/test_maintenance_memory_gc.py" = ["E501"]
+"tests/small/test_management_scope_policy.py" = ["E501"]
+"tests/small/test_management_service.py" = ["E501"]
+"tests/small/test_mutation_restore.py" = ["E501"]
+"tests/small/test_postgres_buffered_writes.py" = ["E501"]
+"tests/small/test_postgres_curation_store.py" = ["E501"]
+"tests/small/test_postgres_ingress_mutation_transaction.py" = ["E501"]
+"tests/small/test_postgres_operational_stores.py" = ["E501"]
+"tests/small/test_postgres_provider_usage_store.py" = ["E501"]
+"tests/small/test_postgres_repository.py" = ["E501"]
+"tests/small/test_postgres_storage_primitives.py" = ["E501"]
+"tests/small/test_provider_usage_store.py" = ["E501"]
+"tests/small/test_relational_repository.py" = ["E501"]
+"tests/small/test_restore_executor.py" = ["E501"]
+"tests/small/test_retrieval_analytics.py" = ["E501"]
+"tests/small/test_selector_stats_reporting.py" = ["E501"]
+"tests/small/test_shared_read_cache_services.py" = ["E501"]
+"tests/small/test_sqlite_backup.py" = ["E501"]
+"tests/small/test_storage_factory.py" = ["E501"]
+"tests/small/test_tasks.py" = ["E501"]
+"tests/small/test_workspace_resolution.py" = ["E501"]
