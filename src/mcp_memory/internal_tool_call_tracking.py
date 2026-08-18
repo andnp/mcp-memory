@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
+from uuid import UUID
 
 from mcp_memory.core.curator_evidence import (
     current_curator_execution,
@@ -70,6 +71,7 @@ class InternalToolCallTracker:
         *,
         session_id: str | None = None,
         execution_epoch: int = 0,
+        run_id: UUID | None = None,
     ) -> None:
         normalized_task_id = _normalized_string(task_id)
         if normalized_task_id is None:
@@ -83,6 +85,7 @@ class InternalToolCallTracker:
             normalized_task_id,
             execution_epoch=execution_epoch,
             session_id=normalized_session_id,
+            run_id=run_id,
         )
 
     def bind_session_to_task(self, session_id: str | None, task_id: str | None) -> None:

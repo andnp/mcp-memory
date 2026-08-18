@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -16,6 +16,7 @@ from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.curation_store import CurationReceiptState, CurationRunState
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.transport import dispatch_internal_memory_tool
 
@@ -71,6 +72,11 @@ class _DirectProvider:
         *,
         allowed_tool_names: tuple[str, ...] | None = None,
     ) -> _DirectSession:
+        assert any(
+            run.frontier_key == "direct:direct-curator-task"
+            and run.state is CurationRunState.EXECUTING
+            for run in self._ctx.curation.list_runs()
+        )
         self.allowed_tools = allowed_tool_names
         return _DirectSession(
             self._ctx, "direct-curator-task", self._memory_id,
@@ -237,6 +243,27 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         assert "A direct MCP curator conclusion." not in str(result["tool_call_ledger"])
         refreshed = runtime.repository.get_memory(record.id)
         assert refreshed is not None and refreshed.summary == "A direct MCP curator conclusion."
+        run_id = UUID(result["curation_run_id"])
+        receipts = runtime.curation.list_receipts(run_id)
+        assert len(receipts) == 1
+        receipt = receipts[0]
+        assert receipt.status is CurationReceiptState.APPLIED_UNVERIFIED
+        connection = runtime.db_manager.get_connection()
+        history = connection.execute(
+            "SELECT curation_run_id, action_id FROM memory_mutation_events WHERE id = ?",
+            (str(receipt.mutation_event_id),),
+        ).fetchone()
+        assert history is not None
+        assert history[0] == str(run_id)
+        assert history[1] == str(receipt.action_id)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM memory_record_revisions WHERE event_id = ?",
+            (str(receipt.mutation_event_id),),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM embedding_repair_queue WHERE memory_id = ?",
+            (str(record.id),),
+        ).fetchone()[0] >= 1
         assert runtime.work_items.get_item(item.id).status == "completed"
     finally:
         runtime.close()
@@ -343,6 +370,7 @@ async def test_direct_campaign_preserves_execution_outcome_after_quality_regress
         assert result["actual_mutation_count"] == 1
         assert result["verified_mutation_count"] == 1
         assert result["curation_outcome"] == "applied_verified"
+        assert result["curation_outcome"] != "quality_rejected"
         assert result["curation_campaign_result"]["outcome"] == "applied_verified"
     finally:
         runtime.close()

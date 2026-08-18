@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, replace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 @dataclass(frozen=True)
@@ -12,6 +12,7 @@ class CuratorExecutionIdentity:
     task_id: str
     execution_epoch: int
     session_id: str | None = None
+    run_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,10 @@ class CuratorExecutionContext:
     def session_id(self) -> str | None:
         return self.identity.session_id
 
+    @property
+    def run_id(self) -> UUID | None:
+        return self.identity.run_id
+
 
 _current_context: ContextVar[CuratorExecutionContext | None] = ContextVar(
     "mcp_memory_curator_execution_context", default=None
@@ -43,9 +48,10 @@ def reset_curator_execution(
     *,
     execution_epoch: int = 0,
     session_id: str | None = None,
+    run_id: UUID | None = None,
 ) -> CuratorExecutionContext:
     context = CuratorExecutionContext(
-        identity=CuratorExecutionIdentity(task_id, execution_epoch, session_id)
+        identity=CuratorExecutionIdentity(task_id, execution_epoch, session_id, run_id)
     )
     _current_context.set(context)
     return context
@@ -70,6 +76,7 @@ def begin_tool_call(
                 task_id,
                 execution_epoch or 0,
                 session_id,
+                None,
             )
         )
     elif task_id is not None and task_id != current.task_id:
@@ -78,6 +85,7 @@ def begin_tool_call(
                 task_id,
                 current.execution_epoch if execution_epoch is None else execution_epoch,
                 session_id if session_id is not None else current.session_id,
+                current.run_id,
             ),
             sequence=current.sequence,
         )

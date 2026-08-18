@@ -83,9 +83,25 @@ async def run_curator_direct_mcp(
             reason="campaign_agentic_session_not_configured",
         )
 
+    run = _prepare_direct_run(ctx, _direct_quality_run(task))
+    if run is None:
+        if claimed_work_item is not None:
+            release_work_item(ctx, claimed_work_item.id)
+        return sampling_payload(
+            seed_batch,
+            sampled_records=sampled_records,
+            seed_records=seed_records,
+            extra=work_item_metadata,
+            execution_mode="curation_direct_mcp",
+            claimed_work_item_count=0,
+            tool_calls_executed=0,
+            mutations=0,
+            reason="curation_run_unavailable",
+        )
+
     budget = mutation_budget or CurationMutationBudget()
     session = None
-    reset_agentic_tool_tracking(ctx, task.id, execution_epoch=task.execution_epoch)
+    reset_agentic_tool_tracking(ctx, task.id, execution_epoch=task.execution_epoch, run_id=run.run_id)
     try:
         session = await cast(Callable[..., Awaitable[Any]], opener)(
             allowed_tool_names=CURATOR_AGENT_TOOLS,
@@ -124,6 +140,7 @@ async def run_curator_direct_mcp(
         task,
         direct_evidence,
         campaign_hypothesis=campaign_hypothesis,
+        run=run,
     )
     quality_evidence = quality_evaluation.evidence
     verified_mutations = productive_mutation_count(direct_evidence)
@@ -180,6 +197,7 @@ async def run_curator_direct_mcp(
         quality_evidence=[item.model_dump(mode="json") for item in quality_evidence],
         quality_evidence_status=quality_evidence_status,
         quality_evidence_reason=quality_evidence_reason,
+        curation_run_id=str(run.run_id),
     )
 
 
@@ -197,17 +215,24 @@ def _evaluate_direct_quality(
     evidence: list[Any],
     *,
     campaign_hypothesis: CampaignHypothesis | None,
+    run: CurationRun | None = None,
 ) -> _DirectQualityEvaluation:
     """Record quality observations without rejecting curator execution."""
-    if not evidence:
+    if not evidence and run is None:
         return _DirectQualityEvaluation((), "not_applicable")
     quality_repository = getattr(ctx, "curation_quality", None)
     if quality_repository is None:
+        if run is not None:
+            _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "unavailable", "quality_repository_unavailable")
     if ctx.db_manager is None:
+        if run is not None:
+            _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "unavailable", "database_unavailable")
     search_repository = cast(MemoryRepositoryPort | None, ctx.repository)
     if search_repository is None:
+        if run is not None:
+            _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "unavailable", "search_unavailable")
     sampler = CurationQualitySampler(
         db_manager=ctx.db_manager,
@@ -216,20 +241,23 @@ def _evaluate_direct_quality(
         candidate_repository=getattr(ctx, "curation", None),
         sample_rate=1.0,
     )
-    run = _direct_quality_run(task)
-    persisted_run = _persist_direct_quality_run(ctx, run)
-    if persisted_run is None:
-        return _DirectQualityEvaluation((), "unavailable", "curation_repository_unavailable")
+    if run is None:
+        run = _prepare_direct_run(ctx, _direct_quality_run(task))
+        if run is None:
+            return _DirectQualityEvaluation((), "unavailable", "curation_repository_unavailable")
+    if not evidence:
+        _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
+        return _DirectQualityEvaluation((), "not_applicable")
     quality_evidence = sampler.evaluate(
         run=run,
         mutations=[mutations_from_direct_evidence(item) for item in evidence],
         campaign_hypothesis=campaign_hypothesis,
     )
     if not quality_evidence:
-        _terminalize_direct_quality_run(ctx, persisted_run, CurationRunOutcome.APPLIED)
+        _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "not_observed", "no_sampled_mutations")
     run_outcome = CurationRunOutcome.APPLIED
-    _terminalize_direct_quality_run(ctx, persisted_run, run_outcome)
+    _terminalize_direct_quality_run(ctx, run, run_outcome)
     return _DirectQualityEvaluation(quality_evidence, "recorded", run_outcome=run_outcome)
 
 
@@ -249,6 +277,25 @@ def _persist_direct_quality_run(ctx: ApplicationContext, run: CurationRun) -> Cu
         if existing is None:
             raise
         return existing
+
+
+def _prepare_direct_run(ctx: ApplicationContext, run: CurationRun) -> CurationRun | None:
+    prepared = _persist_direct_quality_run(ctx, run)
+    if prepared is None:
+        return None
+    repository = cast(CurationRepository | None, getattr(ctx, "curation", None))
+    transition = getattr(repository, "transition_run", None)
+    if not callable(transition):
+        return prepared
+    if prepared.state is CurationRunState.CREATED:
+        planning = prepared.model_copy(update={"state": CurationRunState.PLANNING})
+        prepared = cast(CurationRun | None, transition(prepared.run_id, CurationRunState.CREATED, planning))
+        if prepared is None:
+            return None
+    if prepared.state is CurationRunState.PLANNING:
+        executing = prepared.model_copy(update={"state": CurationRunState.EXECUTING})
+        prepared = cast(CurationRun | None, transition(prepared.run_id, CurationRunState.PLANNING, executing))
+    return prepared
 
 
 def _terminalize_direct_quality_run(
@@ -274,7 +321,7 @@ def _direct_quality_run(task: TaskRecord) -> CurationRun:
         context_fingerprint=f"direct:{task.id}:{task.execution_epoch}",
         policy_version=str(task.data.get("policy_version", "direct-quality-v1")),
         selector_strategy=str(task.data.get("strategy", "direct")),
-        state=CurationRunState.PLANNING,
+        state=CurationRunState.CREATED,
     )
 
 

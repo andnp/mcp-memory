@@ -19,7 +19,14 @@ from mcp_memory.core.direct_mutation_evidence import (
     entity_deltas_for_payload,
     reconcile_direct_mutation_evidence,
 )
+from mcp_memory.curation_action_store import (
+    CurationActionContractError,
+    CurationActionFatalError,
+    CurationActionStaleError,
+    CurationActionTransientError,
+)
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker, internal_tool_is_mutating
+from mcp_memory.mcp.curator_action_adapter import execute_curator_mutation, is_curator_mutation_tool
 from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 
 ToolService = Callable[..., Any]
@@ -158,12 +165,39 @@ async def _dispatch_tool(
                 ledger_entry={},
             )
     try:
-        response = await call_service(
-            service,
-            ctx,
-            arguments,
-            compact_success=compact_success,
-        )
+        try:
+            execution = current_curator_execution()
+            if (
+                direct_evidence is not None
+                and is_curator_mutation_tool(name)
+                and execution is not None
+                and execution.run_id is not None
+                and getattr(ctx, "curation_action_store", None) is not None
+            ):
+                response = await asyncio.to_thread(
+                    execute_curator_mutation,
+                    ctx,
+                    name,
+                    arguments,
+                    cast(Callable[[ApplicationContext, dict[str, Any]], dict[str, Any]], service),
+                    direct_evidence,
+                )
+                response = text_response(response)
+            else:
+                response = await call_service(
+                    service,
+                    ctx,
+                    arguments,
+                    compact_success=compact_success,
+                )
+        except CurationActionContractError as exc:
+            response = text_response({"status": "error", "error": exc.code, "detail": str(exc)})
+        except CurationActionStaleError as exc:
+            response = text_response({"status": "error", "error": "curation_action_stale", "detail": str(exc)})
+        except CurationActionTransientError as exc:
+            response = text_response({"status": "error", "error": "curation_action_transient", "detail": str(exc)})
+        except CurationActionFatalError as exc:
+            response = text_response({"status": "error", "error": "curation_action_fatal", "detail": str(exc)})
         if on_success is not None:
             on_success(ctx, name, arguments, response)
         return response
