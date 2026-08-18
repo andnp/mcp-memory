@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.core.ports import EmbeddingMaintenancePort, SearchHealthPort
@@ -40,10 +40,15 @@ from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 logger = logging.getLogger(__name__)
 
 
+class _RuntimeController(Protocol):
+    has_runtime: bool
+    client_count: int
+
+
 @dataclass
 class RuntimeHealthServiceDependencies:
     runtime_info: Any
-    controller: Any
+    controller: _RuntimeController
     db_manager: Any
     storage_backend: str | None
     config: Any
@@ -108,20 +113,8 @@ class RuntimeHealthService:
                 if dependencies.runtime_info.db_path is not None
                 else None
             ),
-            runtime_active=bool(
-                getattr(
-                    dependencies.controller,
-                    "has_runtime",
-                    dependencies.runtime_info.runtime_active,
-                )
-            ),
-            client_count=int(
-                getattr(
-                    dependencies.controller,
-                    "client_count",
-                    dependencies.runtime_info.client_count,
-                )
-            ),
+            runtime_active=dependencies.controller.has_runtime,
+            client_count=dependencies.controller.client_count,
             task_queue_enabled=dependencies.runtime_info.task_queue_enabled,
             embeddings=embedder_status,
             search=build_search_health(

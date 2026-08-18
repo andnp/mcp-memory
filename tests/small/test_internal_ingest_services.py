@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, cast
@@ -33,7 +34,13 @@ from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.transport import internal_tool_services
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.storage.ingress_evidence_store import SQLiteIngressActionReceiptStore
-from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
+from mcp_memory.storage.ingress_mutation_transaction import (
+    IngressActionReceipt,
+    IngressDomainTransaction,
+    IngressMutationResult,
+    SourceCoverage,
+    SQLiteIngressMutationStore,
+)
 
 pytestmark = pytest.mark.small
 
@@ -318,14 +325,34 @@ class _CountingIngressMutationTransaction:
         self.store = store
         self.callback_calls = 0
 
-    def execute(self, **kwargs: Any) -> Any:
-        apply = kwargs["apply"]
-
-        def counted_apply(domain: Any) -> Any:
+    def execute(
+        self,
+        *,
+        batch_id: str,
+        operation: str,
+        entry_ids: Sequence[str],
+        target_ids: Sequence[str],
+        payload: object,
+        apply: Callable[[IngressDomainTransaction], IngressMutationResult],
+        source_coverage: Sequence[SourceCoverage] | None = None,
+        mutation_evidence_id: str | None = None,
+        journal_task_id: str | None = None,
+    ) -> IngressActionReceipt:
+        def counted_apply(domain: IngressDomainTransaction) -> IngressMutationResult:
             self.callback_calls += 1
             return apply(domain)
 
-        return self.store.execute(**{**kwargs, "apply": counted_apply})
+        return self.store.execute(
+            batch_id=batch_id,
+            operation=operation,
+            entry_ids=entry_ids,
+            target_ids=target_ids,
+            payload=payload,
+            apply=counted_apply,
+            source_coverage=source_coverage,
+            mutation_evidence_id=mutation_evidence_id,
+            journal_task_id=journal_task_id,
+        )
 
 
 def test_internal_ingest_enforce_exact_replay_skips_domain_callback(db_manager) -> None:

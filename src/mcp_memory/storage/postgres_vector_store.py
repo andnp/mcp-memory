@@ -619,7 +619,7 @@ class PostgresVectorStore:
                     rows = cursor.fetchall()
             fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
             scored = [(str(row[0]), _coerce_float(row[1])) for row in rows]
-            search_diagnostics = {
+            search_diagnostics: dict[str, object] = {
                 "backend": "postgres",
                 "requested_k": limit,
                 "row_count": len(rows),
@@ -688,7 +688,7 @@ class PostgresVectorStore:
         sort_started = time.perf_counter()
         scored.sort(key=lambda item: (-item[1], item[0]))
         sort_ms = (time.perf_counter() - sort_started) * 1000.0
-        search_diagnostics = {
+        search_diagnostics: dict[str, object] = {
             "backend": "postgres",
             "requested_k": limit,
             "row_count": len(rows),

@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from mcp_memory.core.ports import (
     EmbeddingMaintenancePort,
     MemoryIDResolutionPort,
@@ -7,19 +5,15 @@ from mcp_memory.core.ports import (
     SearchHealthPort,
     StartupHealthPort,
 )
-
-
-@dataclass
-class _Health:
-    available: bool = True
+from mcp_memory.management.models import SearchHealthPayload
 
 
 class _SearchCapabilities:
-    def get_health(self) -> _Health:
-        return _Health()
+    def get_health(self) -> SearchHealthPayload:
+        return SearchHealthPayload(available=True)
 
-    def run_startup_health_check(self) -> _Health:
-        return _Health()
+    def run_startup_health_check(self) -> SearchHealthPayload:
+        return SearchHealthPayload(available=True)
 
     def rebuild_semantic_index(self, *, limit: int = 10_000) -> dict[str, int]:
         return {"limit": limit}
@@ -32,6 +26,7 @@ class _SearchCapabilities:
 
 
 def test_search_capability_ports_are_independently_structural() -> None:
+    """Capability protocols remain independently runtime-checkable."""
     capabilities = _SearchCapabilities()
 
     assert isinstance(capabilities, SearchHealthPort)
@@ -42,6 +37,7 @@ def test_search_capability_ports_are_independently_structural() -> None:
 
 
 def test_search_capability_contracts_preserve_small_typed_operations() -> None:
+    """Capability methods preserve their small typed operations."""
     capabilities = _SearchCapabilities()
 
     assert capabilities.get_health().available
