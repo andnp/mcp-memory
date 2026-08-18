@@ -56,11 +56,18 @@ pg_restore \
   --exit-on-error \
   "${DUMP}"
 
+# The source database was created against a newer glibc than this image ships,
+# so text indexes were built under collation rules the container does not share.
+# Rebuilding them keeps keyword ordering faithful to the corpus being measured.
+echo "==> rebuilding indexes under the snapshot collation"
+psql --dbname="${SNAPSHOT_DSN}" --quiet --command "REINDEX DATABASE \"${REPLAY_DB}\";"
+psql --dbname="${SNAPSHOT_DSN}" --quiet --command "ALTER DATABASE \"${REPLAY_DB}\" REFRESH COLLATION VERSION;"
+
 echo "==> recording the snapshot fingerprint"
 psql --dbname="${SNAPSHOT_DSN}" --quiet --tuples-only --no-align --command "
   SELECT json_build_object(
     'captured_at', now(),
-    'source_server_version', current_setting('server_version'),
+    'snapshot_server_version', current_setting('server_version'),
     'memories', (SELECT count(*) FROM memories),
     'embeddings', (SELECT count(*) FROM embeddings),
     'search_documents', (SELECT count(*) FROM memory_search_documents)
