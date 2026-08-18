@@ -1,0 +1,26 @@
+services:
+  postgres:
+    # pgvector rather than the plain postgres image: the corpus carries an
+    # embeddings table whose column type comes from the vector extension.
+    image: pgvector/pgvector:pg17
+    container_name: mcp-memory-replay-snapshot
+    environment:
+      POSTGRES_DB: ${MCP_MEMORY_REPLAY_DB:-mcp_memory}
+      POSTGRES_USER: ${MCP_MEMORY_REPLAY_USER:-replay}
+      POSTGRES_PASSWORD: ${MCP_MEMORY_REPLAY_PASSWORD:-replay}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${MCP_MEMORY_REPLAY_PORT:-5455}:5432"
+    volumes:
+      - mcp-memory-replay-snapshot-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  mcp-memory-replay-snapshot-data:
