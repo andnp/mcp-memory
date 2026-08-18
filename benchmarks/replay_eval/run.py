@@ -11,6 +11,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import psycopg
+
 from mcp_memory.config import Config, load_config
 from mcp_memory.embeddings import build_embedder
 from mcp_memory.storage.postgres import build_postgres_runtime_components
@@ -19,6 +21,7 @@ from mcp_memory.storage.types import StorageBootstrapSpec
 from .labels import RelevanceLabel
 from .replay import DEFAULT_LIMIT, SearchFn, replay_labels
 from .report import compare_variants, sorted_query_keys
+from .retrievability import CorpusReach, partition_by_reach
 from .variants import Variant, default_variants
 
 DEFAULT_LABELS = Path("benchmarks/replay_eval/artifacts/labels.jsonl")
@@ -52,6 +55,18 @@ def sample_by_query(
     return [
         label for label in labels if (label.query, label.workspace_id) in chosen
     ]
+
+
+def load_reach(dsn: str) -> CorpusReach:
+    """Read from the snapshot what a replayed search could still return."""
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT id FROM memories WHERE status = 'active'")
+        active = {row[0] for row in cursor.fetchall()}
+        cursor.execute("SELECT memory_id, workspace_id FROM memory_workspaces")
+        workspaces: dict[str, set[str]] = {}
+        for memory_id, workspace_id in cursor.fetchall():
+            workspaces.setdefault(memory_id, set()).add(workspace_id)
+    return CorpusReach(active_ids=active, workspaces=workspaces)
 
 
 def snapshot_config(dsn: str) -> Config:
@@ -101,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     labels = load_labels(args.labels)
+    partition = partition_by_reach(labels, load_reach(args.dsn))
+    print(json.dumps(partition.to_mapping()), flush=True)
+    labels = list(partition.retrievable)
     if args.queries:
         labels = sample_by_query(labels, queries=args.queries, seed=args.seed)
 
@@ -127,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
     )
     payload = report.to_mapping()
+    payload["label_reach"] = partition.to_mapping()
     if args.fingerprint.exists():
         payload["corpus"] = json.loads(args.fingerprint.read_text(encoding="utf-8"))
 
