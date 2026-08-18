@@ -607,6 +607,16 @@ def test_pipeline_matches_native_graph_expansion_bounds() -> None:
     assert kernel_config.adaptive_graph_enabled is True
 
 
+def test_pipeline_passes_configured_rrf_k_to_kernel() -> None:
+    config = Config(search_ranking=SearchRankingConfig(rrf_k=17.0))
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository()),
+        config=config,
+    )
+
+    assert pipeline._pipeline._config.rrf_k == 17.0
+
+
 def test_pipeline_uses_searchkernel_failure_mode() -> None:
     """Keep failure-mode wiring compatible with existing searchkernel policy."""
     repository = FakeRepository()
