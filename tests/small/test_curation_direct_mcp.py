@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
+from mcp_memory.core.curation_direct_mcp import _direct_curator_prompt
 from mcp_memory.core.curation_feedback import (
     _feedback_termination_reason,
     _quality_feedback_payload,
@@ -16,7 +17,6 @@ from mcp_memory.core.curation_reconciliation import (
     ProviderAttemptIdentity,
     reconcile_provider_attempts,
 )
-from mcp_memory.core.curation_shadow import _direct_curator_prompt
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.curation_store import CurationRun

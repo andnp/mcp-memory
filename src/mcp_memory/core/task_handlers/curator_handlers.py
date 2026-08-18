@@ -5,11 +5,11 @@ from typing import Any, cast
 
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 from mcp_memory.context import ApplicationContext, TaskRuntimeContext
+from mcp_memory.core.curation_direct_mcp import (
+    run_curator_direct_mcp,
+)
 from mcp_memory.core.curation_models import (
     campaign_hypothesis_from_payload,
-)
-from mcp_memory.core.curation_shadow import (
-    run_curator_direct_mcp,
 )
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.ports.tasks import TaskRecord

@@ -24,7 +24,7 @@ def test_curator_config_has_no_legacy_execution_flags() -> None:
 
 
 def test_curator_requires_an_agentic_provider() -> None:
-    from mcp_memory.core.curation_shadow import _curator_agentic_provider
+    from mcp_memory.core.curation_direct_mcp import _curator_agentic_provider
 
     task = TaskRecord(
         id="curator-agentic-task",
@@ -56,7 +56,7 @@ def test_curator_requires_an_agentic_provider() -> None:
 
 
 def test_curator_prompt_requires_direct_mcp_mutations() -> None:
-    from mcp_memory.core.curation_shadow import _direct_curator_prompt
+    from mcp_memory.core.curation_direct_mcp import _direct_curator_prompt
 
     task = TaskRecord(
         id="direct-mcp-task",

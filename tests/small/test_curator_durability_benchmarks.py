@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from mcp_memory.core.curation_shadow import _direct_curator_prompt
+from mcp_memory.core.curation_direct_mcp import _direct_curator_prompt
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_support import (
