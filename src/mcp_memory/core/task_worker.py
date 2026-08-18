@@ -677,15 +677,7 @@ class RuntimeTaskWorker:
             current_task = await asyncio.to_thread(task_queue.get_task, task.id)
             if current_task.status != "running":
                 return
-            if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
-                cancelled_task = await asyncio.to_thread(
-                    task_queue.finalize_cancellation,
-                    task.id,
-                    cancelled_at=None,
-                    execution_epoch=task.execution_epoch,
-                )
-                await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
-            elif self._stop_event.is_set():
+            if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id) or self._stop_event.is_set():
                 cancelled_task = await asyncio.to_thread(
                     task_queue.finalize_cancellation,
                     task.id,

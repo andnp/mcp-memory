@@ -281,9 +281,7 @@ class RankingEngine:
             multiplier = self._weights.graph_expansion_only_penalty
         elif signals.matched_by_semantic and not signals.matched_by_keyword:
             multiplier = self._weights.semantic_only_keyword_penalty
-        elif not signals.matched_by_keyword:
-            multiplier = 1.0
-        elif signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
+        elif not signals.matched_by_keyword or signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
             multiplier = 1.0
         else:
             multiplier = max(self._weights.keyword_low_coverage_penalty, signals.keyword_token_coverage)
