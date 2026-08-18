@@ -10,6 +10,7 @@ from benchmarks.replay_eval.variants import (
     noise_control,
     saturation,
     sigmoid,
+    threshold_variant,
 )
 
 # The fused-score range the pipeline actually produces: a single lane at a deep
@@ -116,3 +117,18 @@ def test_variant_requires_a_name() -> None:
     """Refuse a variant a report could not attribute."""
     with pytest.raises(ValueError, match="name"):
         Variant(name=" ", description="d", calibrate=float)
+
+
+def test_threshold_variant_names_reflect_their_threshold() -> None:
+    """Let a sweep attribute each result back to its threshold."""
+    assert threshold_variant(0.02).name != threshold_variant(0.03).name
+
+
+def test_threshold_variant_calibrates_like_a_sigmoid_at_that_threshold() -> None:
+    """Reuse the shipped curve rather than a second calibration formula."""
+    assert threshold_variant(0.02).calibrate(0.025) == sigmoid(threshold=0.02).calibrate(0.025)
+
+
+def test_threshold_variant_is_not_a_control() -> None:
+    """Keep threshold sweeps out of the noise-control guard."""
+    assert threshold_variant(0.02).is_control is False
