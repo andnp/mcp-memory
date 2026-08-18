@@ -926,9 +926,9 @@ def build_memory_retrieval_facade(
 
 __all__ = [
     "MemoryRetrievalFacade",
-    "MemorySearchRequest",
     "MemoryRetrievalPort",
+    "MemorySearchRequest",
     "SearchExecutionDiagnostics",
-    "build_search_execution_diagnostics",
     "build_memory_retrieval_facade",
+    "build_search_execution_diagnostics",
 ]

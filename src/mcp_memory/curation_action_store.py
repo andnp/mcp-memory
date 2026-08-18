@@ -1064,8 +1064,8 @@ def _action_intent_hash(
 
 
 __all__ = [
-    "CurationActionError",
     "CurationActionContractError",
+    "CurationActionError",
     "CurationActionFatalError",
     "CurationActionInjectedFailure",
     "CurationActionStaleError",

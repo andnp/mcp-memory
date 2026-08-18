@@ -62,8 +62,8 @@ class MemoryIDResolutionPort(Protocol):
 
 
 __all__ = [
-    "EmbeddingMaintenancePort",
     "INTERNAL_SEARCH_TOOL_NAME",
+    "EmbeddingMaintenancePort",
     "MemoryIDResolutionPort",
     "ReadCacheValidationPort",
     "SearchHealthPort",

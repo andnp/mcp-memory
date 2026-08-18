@@ -115,8 +115,8 @@ class DatabaseManager:
 
 
 __all__ = [
-    "DatabaseManager",
     "SCHEMA_VERSION",
     "SQLITE_BUSY_TIMEOUT_MILLISECONDS",
     "SQLITE_BUSY_TIMEOUT_SECONDS",
+    "DatabaseManager",
 ]

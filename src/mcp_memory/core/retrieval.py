@@ -245,11 +245,11 @@ def _run_coroutine(factory: Callable[[], Coroutine[object, object, R]]) -> R:
 
 
 __all__ = [
-    "BoundedRetrievalService",
     "DEFAULT_RETRIEVAL_LIMIT",
     "MAX_RETRIEVAL_DIAGNOSTICS",
     "MAX_RETRIEVAL_LIMIT",
     "MAX_RETRIEVAL_QUERY_LENGTH",
+    "BoundedRetrievalService",
     "RetrievalDiagnostics",
     "RetrievalFailure",
     "RetrievalRequest",

@@ -337,6 +337,8 @@ def _serialized_link_tuples(links: list[MemoryLink]) -> list[tuple[str, str, str
 
 __all__ = [
     "FTS_QUERY_TOKEN_PATTERN",
+    "VALID_MEMORY_STATUSES",
+    "VALID_MEMORY_TYPES",
     "MemoryLink",
     "MemoryMaintenanceReadPort",
     "MemoryMutationPort",
@@ -345,8 +347,6 @@ __all__ = [
     "MemoryRecord",
     "MemoryRepositoryPort",
     "RankedMemoryCandidate",
-    "VALID_MEMORY_STATUSES",
-    "VALID_MEMORY_TYPES",
     "build_memory_summary",
     "build_read_cache_validation_token",
 ]

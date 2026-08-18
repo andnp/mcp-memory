@@ -460,9 +460,9 @@ __all__ = [
     "create_daemon_app",
     "daemon_url",
     "ensure_daemon_started",
+    "inspect_daemon",
     "prepare_daemon_start",
     "read_daemon_metadata",
-    "inspect_daemon",
     "stop_daemon",
 ]
 

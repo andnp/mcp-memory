@@ -13,9 +13,9 @@ __all__ = [
     "RelationalMemoryReadContext",
     "RelationalMemoryRecord",
     "RelationalMemoryRepository",
-    "SQLiteRelationalMemoryRepository",
     "RelationalMemorySearchService",
-    "import_markdown_memory",
+    "SQLiteRelationalMemoryRepository",
     "import_markdown_memories",
+    "import_markdown_memory",
     "parse_markdown_memory",
 ]

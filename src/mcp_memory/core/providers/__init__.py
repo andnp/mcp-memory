@@ -46,10 +46,10 @@ def build_agentic_ai_provider(ai_config: AIConfig, workspace_root: Path | None =
 __all__ = [
     "AIProvider",
     "AIResponse",
-    "CopilotSDKAgenticProvider",
-    "CopilotSDKProvider",
     "AgenticRunResult",
     "AgenticTaskProvider",
+    "CopilotSDKAgenticProvider",
+    "CopilotSDKProvider",
     "JSONTaskProvider",
     "ProviderJSONCall",
     "build_agentic_ai_provider",
