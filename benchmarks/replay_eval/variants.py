@@ -83,6 +83,22 @@ def saturation(
     )
 
 
+def identity_control() -> Variant:
+    """The baseline curve replayed under a second name.
+
+    The noise control proves the comparison can detect a degradation; it cannot
+    show that an unchanged ranker measures as unchanged. Anything but a delta of
+    exactly zero here means the replay is not reproducible and every other
+    number in the report is noise.
+    """
+    return Variant(
+        name="identity",
+        description="the baseline curve, replayed unchanged",
+        calibrate=sigmoid().calibrate,
+        is_control=True,
+    )
+
+
 def noise_control(
     *, magnitude: float = DEFAULT_NOISE_MAGNITUDE, seed: int = 0
 ) -> Variant:
@@ -115,4 +131,4 @@ def noise_control(
 
 def default_variants() -> tuple[Variant, ...]:
     """The comparison set, with the control always included."""
-    return (sigmoid(), saturation(), noise_control())
+    return (sigmoid(), saturation(), identity_control(), noise_control())
