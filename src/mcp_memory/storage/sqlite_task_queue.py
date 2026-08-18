@@ -604,13 +604,13 @@ class SQLiteTaskQueue:
                 if task.cancellation_requested_at is not None:
                     recovered.append(
                         self._retry_recovery_transition(
-                            lambda: self.finalize_cancellation(task.id, cancelled_at=current_time)
+                            lambda task=task: self.finalize_cancellation(task.id, cancelled_at=current_time)
                         )
                     )
                 else:
                     recovered.append(
                         self._retry_recovery_transition(
-                            lambda: self.fail_permanently(
+                            lambda task=task: self.fail_permanently(
                                 task.id,
                                 f"Provider subprocess {task.subprocess_pid} exited unexpectedly",
                                 failed_at=current_time,
@@ -621,14 +621,14 @@ class SQLiteTaskQueue:
             if task.cancellation_requested_at is not None:
                 recovered.append(
                     self._retry_recovery_transition(
-                        lambda: self.finalize_cancellation(task.id, cancelled_at=current_time)
+                        lambda task=task: self.finalize_cancellation(task.id, cancelled_at=current_time)
                     )
                 )
                 continue
             if is_stale:
                 recovered.append(
                     self._retry_recovery_transition(
-                        lambda: self.fail(
+                        lambda task=task: self.fail(
                             task.id,
                             "Task was abandoned without an active provider subprocess",
                             retry_delay_seconds=5.0,
