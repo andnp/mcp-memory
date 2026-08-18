@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_models import CurationRunOutcome
+from mcp_memory.core.curation_quality import CurationQualityEvidence
 from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
@@ -278,6 +282,68 @@ async def test_direct_campaign_does_not_report_unmatched_mutations_as_verified(
         assert result["curation_outcome"] == "applied_unverified"
         assert result["quality_evidence_status"] == "not_observed"
         assert result["quality_evidence_reason"] == "direct_mutation_evidence_missing"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_direct_campaign_reports_quality_rejection_after_measured_regression(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Expose a rejected quality wave instead of applied curator credit.
+
+    A measured retrieval regression must remain visible in the task result.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = create_runtime(cwd=workspace)
+    assert runtime.repository is not None and runtime.work_items is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Quality rejection target",
+            content="This record exercises the quality rejection contract.",
+            summary="Telemetry target.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert record is not None
+        runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": [record.id]},
+            idempotency_key="direct-curator-quality-rejection",
+        )
+        runtime.ai_agent_provider = _DirectProvider(runtime, record.id)
+        evidence = CurationQualityEvidence(
+            run_id=uuid4(),
+            action_id=uuid4(),
+            operation="rewrite_memory",
+            policy_version="direct-quality-v1",
+            status="regressed",
+            wave_status="rejected",
+            created_at=datetime.now(UTC),
+        )
+        monkeypatch.setattr(
+            "mcp_memory.core.curation_direct_mcp._evaluate_direct_quality",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                evidence=(evidence,),
+                status="recorded",
+                reason=None,
+                run_outcome=CurationRunOutcome.QUALITY_REJECTED,
+            ),
+        )
+
+        result = await handle_memory_curator_task(runtime, _task(runtime), object())
+
+        assert result["actual_mutation_count"] == 1
+        assert result["verified_mutation_count"] == 1
+        assert result["curation_outcome"] == CurationRunOutcome.QUALITY_REJECTED.value
+        assert result["curation_campaign_result"]["outcome"] == CurationRunOutcome.QUALITY_REJECTED.value
     finally:
         runtime.close()
 

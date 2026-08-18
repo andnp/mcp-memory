@@ -13,7 +13,8 @@ from mcp_memory.core.curation_direct_mcp import (
     _evaluate_direct_quality,
     _persist_direct_quality_run,
 )
-from mcp_memory.core.curation_quality import CurationQualitySampler
+from mcp_memory.core.curation_models import CurationRunOutcome
+from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualitySampler
 from mcp_memory.core.curation_quality_clusters import evaluate_cluster_utility
 from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
 from mcp_memory.core.curation_quality_inputs import (
@@ -167,6 +168,51 @@ def test_direct_quality_reports_missing_repository(db_manager) -> None:
     assert evaluation.evidence == ()
     assert evaluation.status == "unavailable"
     assert evaluation.reason == "quality_repository_unavailable"
+    assert evaluation.run_outcome is CurationRunOutcome.QUALITY_REJECTED
+
+
+def test_direct_quality_persists_rejected_wave(
+    monkeypatch: pytest.MonkeyPatch,
+    db_manager,
+) -> None:
+    """Fail closed when measured quality evidence rejects a mutation wave.
+
+    The durable quality run must carry the rejected outcome.
+    """
+    task = _task()
+    run = _direct_quality_run(task)
+    evidence = CurationQualityEvidence(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        operation="rewrite_memory",
+        policy_version="direct-quality-v1",
+        status=QualityOutcome.REGRESSED.value,
+        wave_status="rejected",
+        created_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        CurationQualitySampler,
+        "evaluate",
+        lambda _self, **_kwargs: (evidence,),
+    )
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        repository=cast(Any, _Search()),
+        curation=SQLiteCurationStore(db_manager),
+        curation_quality=SQLiteCurationQualityStore(db_manager),
+    )
+
+    evaluation = _evaluate_direct_quality(
+        ctx,
+        task,
+        [_direct_evidence()],
+        campaign_hypothesis=None,
+    )
+    stored = SQLiteCurationStore(db_manager).get_run(run.run_id)
+
+    assert evaluation.run_outcome is CurationRunOutcome.QUALITY_REJECTED
+    assert stored is not None
+    assert stored.outcome is CurationRunOutcome.QUALITY_REJECTED
 
 
 def test_direct_quality_run_recovers_from_concurrent_insert() -> None:
