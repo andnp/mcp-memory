@@ -48,7 +48,7 @@ def ensure_dashboard_frontend_built(*, static_root: Path) -> DashboardFrontendBu
 
     command = ["npm", "run", "build"]
     try:
-        completed = subprocess.run(  # noqa: S603
+        completed = subprocess.run(
             command,
             cwd=frontend_root,
             check=False,

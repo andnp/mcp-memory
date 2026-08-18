@@ -1076,7 +1076,7 @@ def test_load_validated_cached_projection_entries_filters_and_invalidates_stale_
     )
     ctx = _build_context(read_cache=cache, relational_search=search_service)
 
-    entries = services_module._load_validated_cached_projection_entries(  # noqa: SLF001
+    entries = services_module._load_validated_cached_projection_entries(
         ctx,
         ["memory-1", "memory-2", "memory-3"],
         caller_kind="external",

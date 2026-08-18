@@ -1210,7 +1210,7 @@ async def test_postgres_integration_runtime_worker_reconciles_running_conversati
 
         monkeypatch.setattr("mcp_memory.storage.postgres_task_queue._is_process_alive", lambda pid: False)
 
-        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")
 
         retried = queue.get_task(task.id)
         conversation = provider_usage.get_conversation("req-orphaned")[0]
@@ -1275,7 +1275,7 @@ async def test_postgres_integration_runtime_worker_uses_attempt_heartbeat_to_kee
 
         monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")
 
         running = queue.get_task(task.id)
         attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
@@ -1329,7 +1329,7 @@ async def test_postgres_integration_runtime_worker_reconciles_attempt_for_recove
 
         monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")
 
         retried = queue.get_task(task.id)
         attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
@@ -1542,7 +1542,7 @@ async def test_postgres_integration_runtime_worker_releases_leaked_work_items_an
             handlers={"memory-curator": lambda context, queued_task: None},
         )
 
-        worker._reconcile_terminal_task_state(cast(Any, completed_task))  # noqa: SLF001
+        worker._reconcile_terminal_task_state(cast(Any, completed_task))
 
         released_work_item = work_items.get_item(work_item.id)
         released_repair = repair_queue.get_item(repair_item.id)
@@ -1612,7 +1612,7 @@ async def test_postgres_integration_runtime_worker_periodic_reconciliation_relea
             abandoned_task_stale_after_seconds=300.0,
         )
 
-        await worker._run_reconciliation_pass(now=20.0, reason="periodic")  # noqa: SLF001
+        await worker._run_reconciliation_pass(now=20.0, reason="periodic")
 
         released_work_item = work_items.get_item(work_item.id)
         released_repair = repair_queue.get_item(repair_item.id)
@@ -1656,7 +1656,7 @@ async def test_postgres_integration_runtime_worker_recurring_follow_up_applies_j
 
         completed_task = queue.complete(task.id, completed_at=140.0, run_result={"mutations": 1}, execution_epoch=claimed.execution_epoch)
 
-        await worker._schedule_follow_up(cast(Any, claimed), cast(Any, completed_task))  # noqa: SLF001
+        await worker._schedule_follow_up(cast(Any, claimed), cast(Any, completed_task))
 
         follow_up = queue.find_open_task(CURATOR_TASK_NAME, None)
 

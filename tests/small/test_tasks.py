@@ -614,7 +614,7 @@ def test_runtime_task_worker_recover_running_task_marks_dead_subprocess_as_retry
 
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-    recovered = worker._recover_running_task(  # noqa: SLF001
+    recovered = worker._recover_running_task(
         queue,
         queue.get_task(task.id),
         attempt_repository=None,
@@ -654,7 +654,7 @@ def test_runtime_task_worker_recover_running_task_routes_requested_cancellation_
 
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-    recovered = worker._recover_running_task(  # noqa: SLF001
+    recovered = worker._recover_running_task(
         queue,
         queue.get_task(task.id),
         attempt_repository=None,
@@ -688,7 +688,7 @@ def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_i
         abandoned_task_stale_after_seconds=300.0,
     )
 
-    recovered = worker._recover_running_task(  # noqa: SLF001
+    recovered = worker._recover_running_task(
         queue,
         queue.get_task(task.id),
         attempt_repository=None,
@@ -733,7 +733,7 @@ def test_runtime_task_worker_recover_running_task_does_not_mark_retry_reason_aft
 
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-    recovered = worker._recover_running_task(  # noqa: SLF001
+    recovered = worker._recover_running_task(
         queue,
         queue.get_task(task.id),
         attempt_repository=None,
@@ -779,7 +779,7 @@ def test_runtime_task_worker_classifies_dead_subprocess_recovery_before_applying
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
     running_task = queue.get_task(task.id)
-    plan = worker._classify_running_task_recovery(  # noqa: SLF001
+    plan = worker._classify_running_task_recovery(
         running_task,
         attempt=None,
         current_time=1000.0,
@@ -791,7 +791,7 @@ def test_runtime_task_worker_classifies_dead_subprocess_recovery_before_applying
     assert plan.retry_delay_seconds == pytest.approx(45.0)
     assert queue.get_task(task.id).status == "running"
 
-    recovered = worker._apply_running_task_recovery_plan(queue, running_task, plan)  # noqa: SLF001
+    recovered = worker._apply_running_task_recovery_plan(queue, running_task, plan)
 
     assert recovered.task.status == "pending"
     assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
@@ -1212,13 +1212,13 @@ async def test_runtime_task_worker_start_is_idempotent_without_duplicate_executi
     )
 
     await worker.start()
-    runner = worker._runner  # noqa: SLF001
-    reconciliation_runner = worker._reconciliation_runner  # noqa: SLF001
+    runner = worker._runner
+    reconciliation_runner = worker._reconciliation_runner
     await worker.start()
     await worker.start()
 
-    assert worker._runner is runner  # noqa: SLF001
-    assert worker._reconciliation_runner is reconciliation_runner  # noqa: SLF001
+    assert worker._runner is runner
+    assert worker._reconciliation_runner is reconciliation_runner
     try:
         for _ in range(100):
             if queue.get_task(task.id).status == "completed":
@@ -1255,7 +1255,7 @@ async def test_runtime_task_worker_keeps_long_running_handler_fresh_without_subp
         abandoned_task_stale_after_seconds=0.03,
     )
 
-    await worker._process_task_with_reconciliation(claimed)  # noqa: SLF001
+    await worker._process_task_with_reconciliation(claimed)
 
     completed = queue.get_task(task.id)
     assert completed.status == "completed"
@@ -1282,7 +1282,7 @@ async def test_runtime_task_worker_excludes_owned_task_during_event_loop_starvat
 
     def run_recovery() -> None:
         try:
-            recovery_results.append(worker._recover_running_tasks(100.0))  # noqa: SLF001
+            recovery_results.append(worker._recover_running_tasks(100.0))
         except BaseException as exc:
             recovery_errors.append(exc)
         finally:
@@ -1300,7 +1300,7 @@ async def test_runtime_task_worker_excludes_owned_task_during_event_loop_starvat
         abandoned_task_stale_after_seconds=10.0,
     )
 
-    await worker._process_task_with_reconciliation(claimed)  # noqa: SLF001
+    await worker._process_task_with_reconciliation(claimed)
 
     if recovery_errors:
         raise recovery_errors[0]
@@ -1319,14 +1319,14 @@ async def test_runtime_task_worker_cleans_up_owned_task_after_processing(db_mana
 
     async def handler(context, queued_task):
         del context, queued_task
-        ownership_seen.append((task.id, claimed.execution_epoch) in worker._owned_task_attempts)  # noqa: SLF001
+        ownership_seen.append((task.id, claimed.execution_epoch) in worker._owned_task_attempts)
 
     worker = RuntimeTaskWorker(ctx, handlers={"owned-runtime-task": handler})
 
-    await worker._process_task_with_reconciliation(claimed)  # noqa: SLF001
+    await worker._process_task_with_reconciliation(claimed)
 
     assert ownership_seen == [True]
-    assert worker._owned_task_attempts == set()  # noqa: SLF001
+    assert worker._owned_task_attempts == set()
 
 
 @pytest.mark.asyncio
@@ -1395,7 +1395,7 @@ async def test_runtime_task_worker_pauses_idle_autonomous_recurring_maintenance(
         poll_interval_seconds=0.01,
     )
 
-    await worker._process_task(claimed)  # noqa: SLF001
+    await worker._process_task(claimed)
 
     completed = queue.get_task(task.id)
     run = queue.list_task_runs(task_id=task.id)[0]
@@ -1434,7 +1434,7 @@ async def test_runtime_task_worker_does_not_pause_manual_maintenance_runs_when_i
         poll_interval_seconds=0.01,
     )
 
-    await worker._process_task(claimed)  # noqa: SLF001
+    await worker._process_task(claimed)
 
     completed = queue.get_task(task.id)
     run = queue.list_task_runs(task_id=task.id)[0]
@@ -1725,7 +1725,7 @@ async def test_runtime_task_worker_recurring_follow_up_applies_jitter(db_manager
     worker = RuntimeTaskWorker(ctx, handlers={CURATOR_TASK_NAME: lambda ctx, task: None}, poll_interval_seconds=0.01)
     completed_task = queue.complete(task.id, completed_at=140.0, run_result={"mutations": 1})
 
-    await worker._schedule_follow_up(claimed, completed_task)  # noqa: SLF001
+    await worker._schedule_follow_up(claimed, completed_task)
 
     follow_up = queue.find_open_task(CURATOR_TASK_NAME, None)
     assert follow_up is not None
@@ -1756,7 +1756,7 @@ async def test_runtime_task_worker_does_not_reschedule_specialist_cleanup_tasks(
     )
     completed_task = queue.complete(task.id, completed_at=140.0, run_result={})
 
-    await worker._schedule_follow_up(claimed, completed_task)  # noqa: SLF001
+    await worker._schedule_follow_up(claimed, completed_task)
 
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is None
 
@@ -1795,7 +1795,7 @@ async def test_runtime_task_worker_uses_backlog_continuation_for_completed_inges
 
     worker = RuntimeTaskWorker(ctx, handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None}, poll_interval_seconds=0.01)
 
-    await worker._schedule_follow_up(  # noqa: SLF001
+    await worker._schedule_follow_up(
         claimed,
         completed,
         {"meaningful_actions": 1, "pending_remaining": 1},
@@ -1842,7 +1842,7 @@ async def test_runtime_task_worker_keeps_normal_ingest_scheduling_outside_backlo
 
     worker = RuntimeTaskWorker(ctx, handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None}, poll_interval_seconds=0.01)
 
-    await worker._schedule_follow_up(  # noqa: SLF001
+    await worker._schedule_follow_up(
         claimed,
         completed,
         {"meaningful_actions": 1, "pending_remaining": 0},
@@ -1875,7 +1875,7 @@ async def test_runtime_task_worker_runs_sync_handlers_off_loop(db_manager) -> No
         poll_interval_seconds=0.01,
     )
 
-    await worker._process_task(claimed)  # noqa: SLF001
+    await worker._process_task(claimed)
 
     completed = queue.get_task(task.id)
     assert completed.status == 'completed'
@@ -2129,8 +2129,8 @@ async def test_runtime_task_worker_logs_unchanged_overdue_pending_tasks_once(db_
     )
 
     with caplog.at_level("INFO"):
-        await worker._run_reconciliation_pass(now=120.0, reason="periodic")  # noqa: SLF001
-        await worker._run_reconciliation_pass(now=121.0, reason="periodic")  # noqa: SLF001
+        await worker._run_reconciliation_pass(now=120.0, reason="periodic")
+        await worker._run_reconciliation_pass(now=121.0, reason="periodic")
 
     matching_messages = [record for record in caplog.records if record.message == "Runtime reconciliation pass completed"]
 
@@ -2251,7 +2251,7 @@ async def test_runtime_task_worker_uses_attempt_heartbeat_to_keep_running_task_a
 
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-    await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=1000.0, reason="periodic")
 
     running = queue.get_task(task.id)
     attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
@@ -2287,7 +2287,7 @@ async def test_runtime_task_worker_preflights_curator_provider_startup(db_manage
     )
     monkeypatch.setattr("mcp_memory.core.task_worker.time.time", lambda: 100.0)
 
-    await worker._process_task(claimed)  # noqa: SLF001
+    await worker._process_task(claimed)
 
     completed = queue.get_task(task.id)
     assert completed.status == "completed"
@@ -2325,7 +2325,7 @@ async def test_runtime_task_worker_preserves_curator_startup_across_reconciliati
         curator_provider_startup_grace_seconds=30.0,
     )
 
-    await worker._run_reconciliation_pass(now=110.0, reason="startup")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=110.0, reason="startup")
 
     running = queue.get_task(task.id)
     assert running.status == "running"
@@ -2359,9 +2359,9 @@ async def test_runtime_task_worker_keeps_curator_preparation_alive_without_provi
         abandoned_task_stale_after_seconds=10.0,
         curator_provider_startup_grace_seconds=20.0,
     )
-    worker._owned_task_attempts.add((task.id, claimed.execution_epoch))  # noqa: SLF001
+    worker._owned_task_attempts.add((task.id, claimed.execution_epoch))
 
-    await worker._run_reconciliation_pass(now=130.0, reason="worker_loop", include_owned_task=True)  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=130.0, reason="worker_loop", include_owned_task=True)
 
     running = queue.get_task(task.id)
     assert running.status == "running"
@@ -2396,7 +2396,7 @@ async def test_runtime_task_worker_recovers_abandoned_curator_preparation_withou
         curator_provider_startup_grace_seconds=20.0,
     )
 
-    await worker._run_reconciliation_pass(now=130.0, reason="startup")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=130.0, reason="startup")
 
     recovered = queue.get_task(task.id)
     assert recovered.status == "pending"
@@ -2448,7 +2448,7 @@ async def test_runtime_task_worker_retries_stale_curator_startup_with_auditable_
         curator_provider_startup_grace_seconds=20.0,
     )
 
-    await worker._run_reconciliation_pass(now=130.0, reason="periodic")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=130.0, reason="periodic")
 
     retried = queue.get_task(task.id)
     attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
@@ -2479,9 +2479,9 @@ async def test_runtime_task_worker_only_excludes_owned_task_epoch(db_manager) ->
         handlers={"epoch-mismatch-task": lambda context, queued_task: None},
         abandoned_task_stale_after_seconds=10.0,
     )
-    worker._owned_task_attempts.add((task.id, claimed.execution_epoch + 1))  # noqa: SLF001
+    worker._owned_task_attempts.add((task.id, claimed.execution_epoch + 1))
 
-    await worker._run_reconciliation_pass(now=100.0, reason="epoch-mismatch")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=100.0, reason="epoch-mismatch")
 
     recovered = queue.get_task(task.id)
     assert recovered.status == "pending"
@@ -2523,7 +2523,7 @@ async def test_runtime_task_worker_reconciles_attempt_for_recovered_dead_process
 
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
-    await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=1000.0, reason="periodic")
 
     retried = queue.get_task(task.id)
     attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
@@ -2742,7 +2742,7 @@ async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await worker._process_task(claimed)  # noqa: SLF001
+        await worker._process_task(claimed)
 
     cancelled = queue.get_task(task.id)
     assert cancelled.status == "cancelled"
@@ -2920,7 +2920,7 @@ async def test_runtime_task_worker_refreshes_missing_handler_on_demand(db_manage
         poll_interval_seconds=0.01,
     )
 
-    await worker._process_task(claimed)  # noqa: SLF001
+    await worker._process_task(claimed)
 
     completed = queue.get_task(task.id)
     assert completed.status == "completed"

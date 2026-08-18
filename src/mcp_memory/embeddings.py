@@ -299,7 +299,7 @@ class SQLiteCachedEmbeddingProvider:
         content_hashes = [_embedding_content_hash(text, namespace) for text in texts]
         try:
             cached = cache.get_many(content_hashes)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._disable_cache(exc)
             return self._provider.embed(texts)
 
@@ -361,7 +361,7 @@ class SQLiteCachedEmbeddingProvider:
                 namespace,
                 dimension=0,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._disable_cache(exc)
             return None
         self._cache_namespace = namespace
@@ -387,7 +387,7 @@ class SQLiteCachedEmbeddingProvider:
             }
         try:
             cache.put_many(vectors_to_store)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._disable_cache(exc)
 
     def _disable_cache(self, exc: Exception) -> None:

@@ -2003,7 +2003,7 @@ async def test_runtime_task_worker_fails_unsupported_manual_maintenance_rows_wit
 
     assert unsupported_task_name not in worker._handlers
 
-    await worker._process_task(claimed)  # noqa: SLF001
+    await worker._process_task(claimed)
 
     failed = queue.get_task(task.id)
     assert failed.status == "failed"
@@ -2057,7 +2057,7 @@ async def test_runtime_task_worker_provider_routing_keeps_structural_seeders_pro
 
     worker = build_runtime_task_worker(ctx, provider=direct_provider)
 
-    result = await worker._handlers[task_name](ctx, task)  # noqa: SLF001
+    result = await worker._handlers[task_name](ctx, task)
 
     assert result == {"status": "ok"}
     if expect_direct_provider:
@@ -2818,8 +2818,8 @@ async def test_runtime_task_worker_recovers_genuinely_stale_task_on_startup(db_m
         abandoned_task_stale_after_seconds=10.0,
     )
 
-    assert worker._owned_task_attempts == set()  # noqa: SLF001
-    await worker._run_reconciliation_pass(now=100.0, reason="startup")  # noqa: SLF001
+    assert worker._owned_task_attempts == set()
+    await worker._run_reconciliation_pass(now=100.0, reason="startup")
 
     recovered = queue.get_task(task.id)
     assert recovered.status == "pending"
@@ -6247,8 +6247,8 @@ async def test_ingest_handler_clusters_semantically_related_thoughts(monkeypatch
     runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
     if runtime.relational_search is not None:
         search = cast(RelationalMemorySearchService, runtime.relational_search)
-        search._embedder = runtime.embedder  # noqa: SLF001
-        search._vector_store = runtime.vector_store  # noqa: SLF001
+        search._embedder = runtime.embedder
+        search._vector_store = runtime.vector_store
 
     try:
         first = runtime.journal.record("jwt refresh rollout")

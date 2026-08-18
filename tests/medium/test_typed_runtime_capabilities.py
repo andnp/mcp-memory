@@ -37,7 +37,7 @@ def test_runtime_composition_routes_typed_capabilities_to_consumers(tmp_path: Pa
         bootstrap_background_tasks(capabilities.background)
         worker = build_runtime_task_worker(capabilities.task)
 
-        assert SYSTEM1_INGEST_TASK_NAME in worker._handlers  # noqa: SLF001
+        assert SYSTEM1_INGEST_TASK_NAME in worker._handlers
         assert composition.context.task_queue.count_by_status()["pending"] >= 1
     finally:
         composition.close()

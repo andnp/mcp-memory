@@ -179,7 +179,7 @@ def _subscribe_to_token_usage(session: Any, accumulator: _CopilotTokenUsageAccum
         return lambda: None
     try:
         unsubscribe = on(accumulator.observe)
-    except Exception:  # noqa: BLE001 - telemetry must not break provider calls
+    except Exception:
         logger.debug("Copilot session does not support usage subscriptions", exc_info=True)
         return lambda: None
     return unsubscribe if callable(unsubscribe) else (lambda: None)
@@ -244,7 +244,7 @@ class CopilotSDKProvider:
             response = AIResponse(raw_text="", parsed=None, error="Command timed out")
             self._finish(attempt=attempt, prompt=prompt, started_at=started_at, status="timeout", response=response)
             return response
-        except Exception as exc:  # noqa: BLE001 - SDK raises plain Exception for connection/session failures
+        except Exception as exc:
             response = AIResponse(
                 raw_text="",
                 parsed=None,

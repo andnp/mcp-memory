@@ -24,7 +24,7 @@ def _decode_json_object(value: object) -> dict[str, Any]:
     return decoded if isinstance(decoded, dict) else {}
 
 
-__all__ = ["SQLiteTaskQueue", "TaskQueue", "TaskRecord", "TaskRunRecord", "TaskRunSummary"]  # noqa: F822
+__all__ = ["SQLiteTaskQueue", "TaskQueue", "TaskRecord", "TaskRunRecord", "TaskRunSummary"]
 
 
 def __getattr__(name: str) -> Any:

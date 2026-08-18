@@ -213,7 +213,7 @@ def build_search_execution_diagnostics(
     if debug and outcome.trace is not None:
         try:
             trace = outcome.trace.to_dict()
-        except Exception as error:  # noqa: BLE001 - diagnostics are best effort
+        except Exception as error:
             logger.warning(
                 "search diagnostics trace projection failed: %s",
                 type(error).__name__,
@@ -662,7 +662,7 @@ class MemoryRetrievalFacade:
                 total_ms=(perf_counter() - started_at) * 1000.0,
                 debug=debug,
             )
-        except Exception as error:  # noqa: BLE001 - diagnostics are best effort
+        except Exception as error:
             logger.warning(
                 "search diagnostics projection failed: %s",
                 type(error).__name__,

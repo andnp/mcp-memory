@@ -60,7 +60,7 @@ class SearchDiagnosticsSampler:
             self._sampled_searches = _bounded_increment(self._sampled_searches)
         try:
             payload = _diagnostic_payload(diagnostics)
-        except Exception:  # noqa: BLE001 - diagnostics must not affect searches
+        except Exception:
             with self._lock:
                 self._diagnostic_serialization_failures = _bounded_increment(
                     self._diagnostic_serialization_failures
