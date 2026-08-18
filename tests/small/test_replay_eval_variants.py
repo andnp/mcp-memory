@@ -7,6 +7,7 @@ import pytest
 from benchmarks.replay_eval.variants import (
     Variant,
     default_variants,
+    identity_control,
     noise_control,
     saturation,
     sigmoid,
@@ -132,3 +133,22 @@ def test_threshold_variant_calibrates_like_a_sigmoid_at_that_threshold() -> None
 def test_threshold_variant_is_not_a_control() -> None:
     """Keep threshold sweeps out of the noise-control guard."""
     assert threshold_variant(0.02).is_control is False
+
+
+def test_the_identity_control_passes_the_baseline_through() -> None:
+    """Keep the identity control an exact replay of the baseline curve."""
+    baseline = sigmoid().calibrate
+    control = identity_control().calibrate
+    scores = [OBSERVED_LOW + index * 0.0005 for index in range(40)]
+
+    assert [control(s) for s in scores] == [baseline(s) for s in scores]
+
+
+def test_the_identity_control_is_marked_as_a_control() -> None:
+    """Separate the harness's own guards from the candidates under test."""
+    assert identity_control().is_control is True
+
+
+def test_the_default_comparison_set_includes_the_identity_control() -> None:
+    """Never publish a comparison without proof the replay is reproducible."""
+    assert "identity" in {variant.name for variant in default_variants()}
