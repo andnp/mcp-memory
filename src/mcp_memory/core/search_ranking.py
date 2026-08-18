@@ -22,7 +22,6 @@ from mcp_memory.core.ports.memory import (
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
-RelationalMemoryRecord = MemoryRecord
 EXACT_IDENTIFIER_MATCH_MULTIPLIER = 1.1
 _TECHNICAL_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.:/-]*")
 
@@ -33,7 +32,7 @@ def _query_tokens(query: str) -> list[str]:
 
 def _has_exact_identifier_match(
     query: str,
-    record: RankedMemoryCandidate | RelationalMemoryRecord,
+    record: RankedMemoryCandidate | MemoryRecord,
 ) -> bool:
     """Return whether a technical query identifier appears in title or summary."""
     identifiers = [
@@ -61,7 +60,7 @@ def _is_technical_identifier(token: str) -> bool:
 
 def _keyword_token_coverage(
     query_tokens: Sequence[str],
-    record: RankedMemoryCandidate | RelationalMemoryRecord,
+    record: RankedMemoryCandidate | MemoryRecord,
 ) -> float:
     if not query_tokens:
         return 0.0
@@ -186,7 +185,7 @@ class RankingEngine:
             steepness=self._weights.calibration_steepness,
         )
 
-    def type_aware_recency_bonus(self, record: RelationalMemoryRecord) -> float:
+    def type_aware_recency_bonus(self, record: MemoryRecord) -> float:
         try:
             created_at = datetime.fromisoformat(record.created_at)
         except ValueError:
@@ -199,12 +198,12 @@ class RankingEngine:
         recency = self._config.memory.get_recency_config(record.type)
         return recency.max_boost_amount * (recency.boost_decay_rate ** age_days)
 
-    def workspace_multiplier(self, record: RelationalMemoryRecord, workspace_id: str | None) -> float:
+    def workspace_multiplier(self, record: MemoryRecord, workspace_id: str | None) -> float:
         if workspace_id is None or workspace_id not in record.workspace_ids:
             return 1.0
         return self._weights.workspace_multiplier
 
-    def access_bonus(self, record: RelationalMemoryRecord) -> float:
+    def access_bonus(self, record: MemoryRecord) -> float:
         current_access_score = _decayed_access_score_for_half_life(
             record.access_score,
             record.last_accessed_at,
@@ -214,14 +213,14 @@ class RankingEngine:
             return 0.0
         return self._weights.access_bonus_scale * math.log10(current_access_score + 1.0)
 
-    def adjusted_access_bonus(self, record: RelationalMemoryRecord, authority_counts: dict[str, int]) -> float:
+    def adjusted_access_bonus(self, record: MemoryRecord, authority_counts: dict[str, int]) -> float:
         bonus = self.access_bonus(record)
         supporting_links = authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0)
         if supporting_links <= 0 and record.type in {"journal", "plan"}:
             return bonus * 0.5
         return bonus
 
-    def authority_multiplier_for_candidate(self, candidate: RankedMemoryCandidate | RelationalMemoryRecord) -> float:
+    def authority_multiplier_for_candidate(self, candidate: RankedMemoryCandidate | MemoryRecord) -> float:
         if isinstance(candidate, RankedMemoryCandidate):
             weighted_links = _weighted_incoming_link_count(candidate.incoming_link_type_counts)
             incoming_links_count = weighted_links if weighted_links > 0 else float(candidate.incoming_links_count)
@@ -230,12 +229,12 @@ class RankingEngine:
         capped_links = min(incoming_links_count, self._weights.authority_link_cap)
         return 1.0 + (capped_links * self._weights.authority_link_step)
 
-    def degradation_multiplier(self, record: RelationalMemoryRecord) -> float:
+    def degradation_multiplier(self, record: MemoryRecord) -> float:
         if record.status not in {"stale", "degraded"}:
             return 1.0
         return self._weights.degradation_multiplier
 
-    def graph_support_bonus(self, record: RelationalMemoryRecord, authority_counts: dict[str, int]) -> float:
+    def graph_support_bonus(self, record: MemoryRecord, authority_counts: dict[str, int]) -> float:
         supporting_links = authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0)
         if supporting_links <= 0 or record.type not in {"fact", "observation", "reflection"}:
             return 0.0
@@ -266,14 +265,14 @@ class RankingEngine:
 
     def rank_records(
         self,
-        records: Sequence[RankedMemoryCandidate | RelationalMemoryRecord],
+        records: Sequence[RankedMemoryCandidate | MemoryRecord],
         rrf_scores: dict[str, float],
         workspace_id: str | None = None,
         *,
         ranking_signals: dict[str, RankingSignals] | None = None,
         keyword_candidates_present: bool = False,
-    ) -> list[tuple[RelationalMemoryRecord, float]]:
-        ranked: list[tuple[RelationalMemoryRecord, float]] = []
+    ) -> list[tuple[MemoryRecord, float]]:
+        ranked: list[tuple[MemoryRecord, float]] = []
         for candidate in records:
             record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
             if record.id not in rrf_scores:
@@ -297,7 +296,7 @@ class RankingEngine:
 
     def explain_candidate(
         self,
-        candidate: RankedMemoryCandidate | RelationalMemoryRecord,
+        candidate: RankedMemoryCandidate | MemoryRecord,
         rrf_score: float,
         workspace_id: str | None = None,
         *,

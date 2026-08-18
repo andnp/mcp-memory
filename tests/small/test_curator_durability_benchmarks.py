@@ -13,7 +13,7 @@ from mcp_memory.core.task_handlers.curator_support import (
     retrieval_friction_flags,
 )
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.relational.repository import RelationalMemoryRecord
+from mcp_memory.relational.repository import MemoryRecord
 
 pytestmark = pytest.mark.small
 
@@ -25,8 +25,8 @@ def _record(
     content: str,
     summary: str = "Focused durable summary.",
     memory_type: str = "fact",
-) -> RelationalMemoryRecord:
-    return RelationalMemoryRecord(
+) -> MemoryRecord:
+    return MemoryRecord(
         id=memory_id,
         title=title,
         content=content,

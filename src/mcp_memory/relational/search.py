@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 SearchRepositoryLike = MemoryReadPort
 MaintenanceReadRepositoryLike = MemoryMaintenanceReadPort
-RelationalMemoryRecord = MemoryRecord
 RelationalMemoryReadContext = MemoryReadContext
 
 
@@ -70,9 +69,9 @@ class RelationalSearchResult:
 
 @dataclass(slots=True)
 class RelationalReadResult:
-    record: RelationalMemoryRecord
+    record: MemoryRecord
     relationships: dict[str, list[MemoryLink]]
-    superseded: list[RelationalMemoryRecord]
+    superseded: list[MemoryRecord]
 
 
 def _to_relational_read_result(
@@ -347,7 +346,7 @@ class RelationalMemorySearchService(
 
         outgoing = self._repository.get_links(memory_id, direction="outgoing")
         incoming = self._repository.get_links(memory_id, direction="incoming")
-        superseded: list[RelationalMemoryRecord] = []
+        superseded: list[MemoryRecord] = []
         for link in outgoing:
             if link.link_type != "SUPERSEDES":
                 continue

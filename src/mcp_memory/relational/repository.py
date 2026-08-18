@@ -38,7 +38,6 @@ _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
 logger = logging.getLogger(__name__)
 
 
-RelationalMemoryRecord = MemoryRecord
 RelationalMemoryReadContext = MemoryReadContext
 
 
@@ -107,7 +106,7 @@ class RelationalMemoryRepository:
         *,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return []
@@ -156,10 +155,10 @@ class RelationalMemoryRepository:
             params,
         ).fetchall()
 
-        records_by_id: dict[str, RelationalMemoryRecord] = {}
+        records_by_id: dict[str, MemoryRecord] = {}
         for row in rows:
             metadata = json.loads(row["metadata"] or "{}")
-            records_by_id[str(row["id"])] = RelationalMemoryRecord(
+            records_by_id[str(row["id"])] = MemoryRecord(
                 id=row["id"],
                 memory_ref=row["memory_ref"],
                 title=row["title"],
@@ -529,7 +528,7 @@ class RelationalMemoryRepository:
         for row in rows:
             metadata = json.loads(row["metadata"] or "{}")
             ranked_by_id[str(row["id"])] = RankedMemoryCandidate(
-                record=RelationalMemoryRecord(
+                record=MemoryRecord(
                     id=row["id"],
                     memory_ref=row["memory_ref"],
                     title=row["title"],
@@ -573,7 +572,7 @@ class RelationalMemoryRepository:
         retrieval_min_searches: int = 2,
         retrieval_max_conversion_rate: float = 0.25,
         seed: int | str = 0,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         """Return a bounded, globally scoped maintenance candidate frontier.
 
         The strategy is evaluated and ordered in SQLite, so this method does not
@@ -733,7 +732,7 @@ class RelationalMemoryRepository:
         workspace_id: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "cold-storage",
             limit=limit,
@@ -749,7 +748,7 @@ class RelationalMemoryRepository:
         workspace_id: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "never-surfaced",
             limit=limit,
@@ -767,7 +766,7 @@ class RelationalMemoryRepository:
         include_superseded: bool = False,
         oversized_min_chars: int = _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
         thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "oversized/thin",
             limit=limit,
@@ -786,7 +785,7 @@ class RelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
         low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "orphan/low-support",
             limit=limit,
@@ -804,7 +803,7 @@ class RelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
         quality_signal: str | None = None,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "quality-signal",
             limit=limit,
@@ -818,7 +817,7 @@ class RelationalMemoryRepository:
         self, *, limit: int = _DEFAULT_CANDIDATE_LIMIT, workspace_id: str | None = None,
         status: str | None = None, include_superseded: bool = False,
         min_searches: int = 2, max_conversion_rate: float = 0.25,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "retrieval-quality", limit=limit, workspace_id=workspace_id, status=status,
             include_superseded=include_superseded, retrieval_min_searches=min_searches,
@@ -833,7 +832,7 @@ class RelationalMemoryRepository:
         workspace_id: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "seeded-random",
             limit=limit,
@@ -1358,7 +1357,7 @@ class RelationalMemoryRepository:
         *,
         limit: int,
         offset: int,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         """List the authoritative global open skill-observation ledger slice."""
         if limit <= 0 or offset < 0:
             raise ValueError("ledger limit and offset are invalid")
@@ -1449,7 +1448,7 @@ class RelationalMemoryRepository:
             (row["id"],),
         ).fetchall()
         metadata = json.loads(row["metadata"] or "{}")
-        return RelationalMemoryRecord(
+        return MemoryRecord(
             id=row["id"],
             memory_ref=row["memory_ref"],
             title=row["title"],
@@ -1474,8 +1473,8 @@ class RelationalMemoryRepository:
         *,
         workspace_ids: list[str] | None = None,
         tags: list[str] | None = None,
-    ) -> RelationalMemoryRecord:
-        return RelationalMemoryRecord(
+    ) -> MemoryRecord:
+        return MemoryRecord(
             id=row["id"],
             memory_ref=row["memory_ref"],
             title=row["title"],

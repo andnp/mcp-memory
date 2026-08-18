@@ -24,7 +24,7 @@ from mcp_memory.curation_store import (
     SQLiteCurationStore,
 )
 from mcp_memory.mutation_history import MutationActorKind
-from mcp_memory.relational.repository import RelationalMemoryRecord
+from mcp_memory.relational.repository import MemoryRecord
 
 pytestmark = pytest.mark.small
 
@@ -39,8 +39,8 @@ def _record(
     content: str | None = None,
     memory_type: str = "fact",
     metadata: dict[str, object] | None = None,
-) -> RelationalMemoryRecord:
-    return RelationalMemoryRecord(
+) -> MemoryRecord:
+    return MemoryRecord(
         id=memory_id,
         title=title or memory_id,
         content=content or f"Durable content for {memory_id}.",
@@ -80,7 +80,7 @@ def _task(strategy: str | None = None) -> TaskRecord:
 
 
 class _BackendRepository:
-    def __init__(self, records_by_strategy: dict[str, list[RelationalMemoryRecord]]) -> None:
+    def __init__(self, records_by_strategy: dict[str, list[MemoryRecord]]) -> None:
         self.records_by_strategy = records_by_strategy
         self.calls: list[dict[str, object]] = []
         self.by_id = {
@@ -89,13 +89,13 @@ class _BackendRepository:
             for record in records
         }
 
-    def query_maintenance_candidates(self, strategy: str, **kwargs: object) -> list[RelationalMemoryRecord]:
+    def query_maintenance_candidates(self, strategy: str, **kwargs: object) -> list[MemoryRecord]:
         self.calls.append({"strategy": strategy, **kwargs})
         records = self.records_by_strategy.get(strategy, [])
         limit = kwargs.get("limit")
         return records[: int(limit)] if isinstance(limit, int) else records
 
-    def get_memory(self, memory_id: str) -> RelationalMemoryRecord | None:
+    def get_memory(self, memory_id: str) -> MemoryRecord | None:
         return self.by_id.get(memory_id)
 
     def get_links(self, _memory_id: str, direction: str = "outgoing") -> list[object]:

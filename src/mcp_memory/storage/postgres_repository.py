@@ -33,7 +33,6 @@ from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionMana
 
 _SUMMARY_UNSET = object()
 RelationalMemoryReadContext = MemoryReadContext
-RelationalMemoryRecord = MemoryRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,7 +141,7 @@ class PostgresRelationalMemoryRepository:
         *,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return []
@@ -206,10 +205,10 @@ class PostgresRelationalMemoryRepository:
                 )
                 rows = cursor.fetchall()
 
-        records_by_id: dict[str, RelationalMemoryRecord] = {}
+        records_by_id: dict[str, MemoryRecord] = {}
         for row in rows:
             memory_id = str(row[0])
-            records_by_id[memory_id] = RelationalMemoryRecord(
+            records_by_id[memory_id] = MemoryRecord(
                 id=memory_id,
                 title=str(row[1]),
                 content=str(row[2]),
@@ -650,10 +649,10 @@ class PostgresRelationalMemoryRepository:
                 workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, memory_ids)
                 tags_by_memory_id = self._tags_by_memory_id(cursor, memory_ids)
 
-        records_by_id: dict[str, RelationalMemoryRecord] = {}
+        records_by_id: dict[str, MemoryRecord] = {}
         for row in rows:
             memory_id = str(row[0])
-            records_by_id[memory_id] = RelationalMemoryRecord(
+            records_by_id[memory_id] = MemoryRecord(
                 id=memory_id,
                 title=str(row[1]),
                 content=str(row[2]),
@@ -679,7 +678,7 @@ class PostgresRelationalMemoryRepository:
         *,
         limit: int,
         offset: int,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         """List the authoritative global open skill-observation ledger slice."""
         if limit <= 0 or offset < 0:
             raise ValueError("ledger limit and offset are invalid")
@@ -709,7 +708,7 @@ class PostgresRelationalMemoryRepository:
                 workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, memory_ids)
                 tags_by_memory_id = self._tags_by_memory_id(cursor, memory_ids)
         return [
-            RelationalMemoryRecord(
+            MemoryRecord(
                 id=str(row[0]),
                 title=str(row[1]),
                 content=str(row[2]),
@@ -980,7 +979,7 @@ class PostgresRelationalMemoryRepository:
             has_incoming_supersedes = self._coerce_int(row[18]) > 0
             candidates.append(
                 RankedMemoryCandidate(
-                    record=RelationalMemoryRecord(
+                    record=MemoryRecord(
                         id=str(row[0]),
                         title=str(row[1]),
                         content=str(row[2]),
@@ -1027,7 +1026,7 @@ class PostgresRelationalMemoryRepository:
         retrieval_min_searches: int = 2,
         retrieval_max_conversion_rate: float = 0.25,
         seed: int | str = 0,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         """Return a bounded, globally scoped maintenance candidate frontier."""
         normalized_strategy = strategy.strip().lower()
         strategy_aliases = {
@@ -1180,7 +1179,7 @@ class PostgresRelationalMemoryRepository:
                 rows = cursor.fetchall()
 
         return [
-            RelationalMemoryRecord(
+            MemoryRecord(
                 id=str(row[0]),
                 title=str(row[1]),
                 content=str(row[2]),
@@ -1209,7 +1208,7 @@ class PostgresRelationalMemoryRepository:
         workspace_id: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "cold-storage",
             limit=limit,
@@ -1225,7 +1224,7 @@ class PostgresRelationalMemoryRepository:
         workspace_id: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "never-surfaced",
             limit=limit,
@@ -1243,7 +1242,7 @@ class PostgresRelationalMemoryRepository:
         include_superseded: bool = False,
         oversized_min_chars: int = _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
         thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "oversized/thin",
             limit=limit,
@@ -1262,7 +1261,7 @@ class PostgresRelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
         low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "orphan/low-support",
             limit=limit,
@@ -1280,7 +1279,7 @@ class PostgresRelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
         quality_signal: str | None = None,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "quality-signal",
             limit=limit,
@@ -1294,7 +1293,7 @@ class PostgresRelationalMemoryRepository:
         self, *, limit: int = _DEFAULT_CANDIDATE_LIMIT, workspace_id: str | None = None,
         status: str | None = None, include_superseded: bool = False,
         min_searches: int = 2, max_conversion_rate: float = 0.25,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "retrieval-quality", limit=limit, workspace_id=workspace_id, status=status,
             include_superseded=include_superseded, retrieval_min_searches=min_searches,
@@ -1309,7 +1308,7 @@ class PostgresRelationalMemoryRepository:
         workspace_id: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]:
+    ) -> list[MemoryRecord]:
         return self.query_maintenance_candidates(
             "seeded-random",
             limit=limit,
@@ -1712,7 +1711,7 @@ class PostgresRelationalMemoryRepository:
             )
         return link_counts_by_memory_id
 
-    def _hydrate_record(self, cursor: CursorLike, row: tuple[object, ...]) -> RelationalMemoryRecord:
+    def _hydrate_record(self, cursor: CursorLike, row: tuple[object, ...]) -> MemoryRecord:
         memory_id = str(row[0])
         cursor.execute(
             "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC",
@@ -1730,7 +1729,7 @@ class PostgresRelationalMemoryRepository:
             (memory_id,),
         )
         tag_rows = cursor.fetchall()
-        return RelationalMemoryRecord(
+        return MemoryRecord(
             id=memory_id,
             title=str(row[1]),
             content=str(row[2]),
@@ -1756,8 +1755,8 @@ class PostgresRelationalMemoryRepository:
         *,
         workspace_ids: list[str] | None = None,
         tags: list[str] | None = None,
-    ) -> RelationalMemoryRecord:
-        return RelationalMemoryRecord(
+    ) -> MemoryRecord:
+        return MemoryRecord(
             id=str(row[0]),
             title=str(row[1]),
             content=str(row[2]),
