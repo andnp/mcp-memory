@@ -111,6 +111,7 @@ class _MemorySearchSignalContext:
     semantic_candidate_count: int = 0
     semantic_only_candidate_count: int = 0
     semantic_abstention_count: int = 0
+    max_raw_semantic_score: float = 0.0
     top_semantic_score: float = 0.0
     top_score: float = float("-inf")
     top_record_id: str = ""
@@ -670,9 +671,14 @@ def _result_allowed(
     ):
         signal_context.semantic_abstention_count += 1
         return False
+    if semantic is not None:
+        signal_context.max_raw_semantic_score = max(
+            signal_context.max_raw_semantic_score,
+            semantic.raw_score,
+        )
     allowed = (
         signal_context.keyword_candidates_present
-        or signal_context.top_semantic_score
+        or signal_context.max_raw_semantic_score
         >= signal_context.semantic_only_abstain_threshold
     )
     if semantic_only and not allowed:
@@ -702,6 +708,11 @@ def _adjust_score(
     keyword = provenance.strategy_details.get("keyword")
     semantic = provenance.strategy_details.get("vector")
     signal_context = _signal_context()
+    if signal_context is not None and semantic is not None:
+        signal_context.max_raw_semantic_score = max(
+            signal_context.max_raw_semantic_score,
+            semantic.raw_score,
+        )
     keyword_candidates_present = (
         signal_context.keyword_candidates_present
         if signal_context is not None
