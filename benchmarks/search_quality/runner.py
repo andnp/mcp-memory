@@ -669,7 +669,7 @@ def _policy_fingerprint(
 
 
 def _diagnostics_complete(diagnostics: Mapping[str, object] | None) -> bool:
-    return diagnostics is not None and _REQUIRED_DIAGNOSTIC_KEYS <= diagnostics.keys()
+    return diagnostics is not None and diagnostics.keys() >= _REQUIRED_DIAGNOSTIC_KEYS
 
 
 def _diagnostic_mapping(

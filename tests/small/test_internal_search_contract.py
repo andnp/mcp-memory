@@ -11,13 +11,13 @@ from mcp_memory.mcp.transport import internal_tool_services
 
 def test_internal_search_inventory_covers_verified_consumer_boundaries() -> None:
     """The inventory names every verified registration and consumer boundary."""
-    assert INTERNAL_SEARCH_CONSUMER_NAMES == {
+    assert {
         "tool_registration",
         "call_tracking",
         "provider_allowlist",
         "task_handlers",
         "analytics_and_cli",
-    }
+    } == INTERNAL_SEARCH_CONSUMER_NAMES
     assert all(consumer.files and consumer.symbols and consumer.contract for consumer in INTERNAL_SEARCH_CONSUMERS)
 
 
