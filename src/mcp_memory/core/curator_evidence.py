@@ -83,11 +83,10 @@ def begin_tool_call(
         current = CuratorExecutionContext(
             CuratorExecutionIdentity(
                 task_id,
-                current.execution_epoch if execution_epoch is None else execution_epoch,
+                0 if execution_epoch is None else execution_epoch,
                 session_id if session_id is not None else current.session_id,
-                current.run_id,
+                None,
             ),
-            sequence=current.sequence,
         )
     elif session_id is not None and session_id != current.session_id:
         current = replace(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
@@ -47,8 +48,11 @@ def execute_curator_mutation(
     if repository is None:
         return service(ctx, arguments)
 
-    action_id = direct_action_id(evidence.evidence_id)
     target_ids = _target_ids(name, arguments)
+    if any(memory_id.startswith("ext:") for memory_id in target_ids):
+        return service(ctx, arguments)
+
+    action_id = direct_action_id(evidence.evidence_id)
     operation = _operation(name, arguments)
     receipt_store = getattr(ctx, "curation", None)
     get_receipt = getattr(receipt_store, "get_receipt", None)
@@ -71,15 +75,12 @@ def execute_curator_mutation(
     captured: dict[str, Any] = {}
 
     def apply(transaction: CurationTransaction) -> MutationResult:
-        previous_repository = ctx.repository
-        previous_task_queue = ctx.task_queue
-        ctx.repository = _TransactionRepository(transaction)
-        ctx.task_queue = None
-        try:
-            payload = service(ctx, arguments)
-        finally:
-            ctx.repository = previous_repository
-            ctx.task_queue = previous_task_queue
+        transaction_ctx = replace(
+            ctx,
+            repository=_TransactionRepository(transaction),
+            task_queue=None,
+        )
+        payload = service(transaction_ctx, arguments)
         if payload.get("status") == "error":
             error = str(payload.get("error", "mutation_rejected"))
             detail = payload.get("detail")

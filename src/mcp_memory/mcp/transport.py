@@ -137,11 +137,17 @@ async def _dispatch_tool(
     execution_token = None
     direct_evidence: DirectMutationEvidence | None = None
     if on_success is not None:
+        active_execution = current_curator_execution()
         raw_task_id = arguments.get("task_id")
         task_id = raw_task_id if isinstance(raw_task_id, str) else None
         raw_epoch = arguments.get("execution_epoch")
         execution_epoch = _resolve_execution_epoch(ctx, task_id, raw_epoch)
-        if task_id is not None and ctx.task_queue is not None and execution_epoch is None:
+        if (
+            task_id is not None
+            and ctx.task_queue is not None
+            and execution_epoch is None
+            and active_execution is not None
+        ):
             raise ValueError("execution_epoch_unavailable")
         if current_curator_execution() is not None or task_id is not None:
             execution_token = begin_tool_call(
@@ -233,7 +239,10 @@ def _resolve_execution_epoch(
 
     if task_id is None or ctx.task_queue is None:
         return None
-    return ctx.task_queue.get_task(task_id).execution_epoch
+    try:
+        return ctx.task_queue.get_task(task_id).execution_epoch
+    except (KeyError, ValueError):
+        return None
 
 
 def tool_services() -> dict[str, ToolService]:

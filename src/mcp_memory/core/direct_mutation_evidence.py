@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
 from typing import Any, Iterable
-from uuid import uuid4
 
 
 class DirectMutationOutcome(StrEnum):
@@ -68,13 +67,17 @@ class DirectMutationEvidence:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> DirectMutationEvidence:
-        key = call_id or _missing_call_id_key(
+        identity_key = _missing_call_id_key(
             task_id=task_id, execution_epoch=execution_epoch,
+            session_id=session_id, sequence=sequence,
             tool_name=tool_name, arguments=arguments,
         )
+        key = call_id or identity_key
         now = _now()
         return cls(
-            evidence_id=uuid4().hex,
+            evidence_id=sha256(
+                f"mcp-memory:direct-evidence:{identity_key}".encode()
+            ).hexdigest(),
             task_id=task_id,
             execution_epoch=execution_epoch,
             session_id=session_id,
@@ -245,12 +248,15 @@ def _json_safe(value: Any) -> Any:
 
 def _missing_call_id_key(
     *, task_id: str | None, execution_epoch: int | None,
+    session_id: str | None, sequence: int | None,
     tool_name: str, arguments: dict[str, Any],
 ) -> str:
     identity = json.dumps(
         {
             "task_id": task_id,
             "execution_epoch": execution_epoch,
+            "session_id": session_id,
+            "sequence": sequence,
             "tool_name": tool_name,
             "arguments": arguments,
         }, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str,
