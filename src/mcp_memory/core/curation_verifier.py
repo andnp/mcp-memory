@@ -463,16 +463,6 @@ class CurationVerifier:
         return latest
 
 
-def verify_curation_receipt(
-    curation_store: CurationRepository,
-    maintenance_reads: MaintenanceReadRepositoryLike,
-    receipt: CurationActionReceipt,
-    action: VerifiedCurationAction,
-) -> CurationActionReceipt:
-    """Functional entry point for authoritative typed receipt verification."""
-    return CurationVerifier(curation_store, maintenance_reads).verify(receipt, action)
-
-
 def _merge_ids(canonical_id: Any, source_ids: Sequence[Any]) -> list[str]:
     values = [str(canonical_id), *[str(source_id) for source_id in source_ids if str(source_id) != str(canonical_id)]]
     return sorted(dict.fromkeys(values), key=lambda value: value.encode("utf-8"))
@@ -568,5 +558,4 @@ def _split_child_ids(read_context: RelationalMemoryReadContext) -> list[str]:
 __all__ = [
     "CurationVerificationError",
     "CurationVerifier",
-    "verify_curation_receipt",
 ]
