@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -30,7 +30,7 @@ def test_get_filtering_timestamp_uses_file_mtime_fallback(tmp_path: Path) -> Non
 
 
 def test_passes_time_filter_and_recency_boost_behave_consistently() -> None:
-    created_at = datetime.now(timezone.utc)
+    created_at = datetime.now(UTC)
 
     assert passes_time_filter(created_at, int(created_at.timestamp()) - 10, None) is True
     assert apply_recency_boost(0.4, created_at, 14, 0.2, 0.95) > 0.4

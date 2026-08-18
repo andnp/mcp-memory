@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from searchkernel.search.adaptive_limit import resolve_adaptive_result_limit
@@ -24,7 +24,7 @@ def _record(
     summary: str = "summary",
     tags: list[str] | None = None,
 ) -> MemoryRecord:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return MemoryRecord(
         id=memory_id,
         title=title or memory_id,

@@ -9,7 +9,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
 from searchkernel.search.calibration import calibrate_score
@@ -200,9 +200,9 @@ class RankingEngine:
             return 0.0
 
         if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
+            created_at = created_at.replace(tzinfo=UTC)
 
-        age_days = max((datetime.now(timezone.utc) - created_at).days, 0)
+        age_days = max((datetime.now(UTC) - created_at).days, 0)
         recency = self._config.memory.get_recency_config(record.type)
         return recency.max_boost_amount * (recency.boost_decay_rate ** age_days)
 
@@ -396,8 +396,8 @@ def _decayed_access_score_for_half_life(access_score: float, last_accessed_at: s
     except ValueError:
         return max(access_score, 0.0)
     if accessed_at.tzinfo is None:
-        accessed_at = accessed_at.replace(tzinfo=timezone.utc)
-    elapsed = datetime.now(timezone.utc) - accessed_at
+        accessed_at = accessed_at.replace(tzinfo=UTC)
+    elapsed = datetime.now(UTC) - accessed_at
     elapsed_days = max(elapsed / timedelta(days=1), 0.0)
     return access_score * (0.5 ** (elapsed_days / half_life_days))
 

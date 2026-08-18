@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -15,7 +15,7 @@ def normalize_time_filters(
     if relative_days is not None:
         if relative_days < 0:
             raise ValueError("relative_days must be non-negative")
-        cutoff = datetime.now(timezone.utc) - timedelta(days=relative_days)
+        cutoff = datetime.now(UTC) - timedelta(days=relative_days)
         return int(cutoff.timestamp()), None
 
     return after_timestamp, before_timestamp
@@ -37,7 +37,7 @@ def get_filtering_timestamp(chunk_data: dict) -> datetime | None:
     if file_path and isinstance(file_path, str):
         path = Path(file_path)
         if path.exists():
-            return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            return datetime.fromtimestamp(path.stat().st_mtime, UTC)
     return None
 
 
@@ -50,7 +50,7 @@ def passes_time_filter(
         return True
 
     if filtering_timestamp.tzinfo is None:
-        filtering_timestamp = filtering_timestamp.replace(tzinfo=timezone.utc)
+        filtering_timestamp = filtering_timestamp.replace(tzinfo=UTC)
 
     timestamp = int(filtering_timestamp.timestamp())
     if after_timestamp is not None and timestamp < after_timestamp:

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -24,7 +24,7 @@ def test_run_transitions_are_explicit_and_terminalization_is_first_write_wins() 
     run = make_run()
     run = transition_run(run, CurationRunState.PLANNING)
     run = transition_run(run, CurationRunState.EXECUTING)
-    finished_at = datetime.now(timezone.utc)
+    finished_at = datetime.now(UTC)
     run = terminalize_run(run, CurationRunOutcome.APPLIED, terminalized_at=finished_at)
 
     late = terminalize_run(run, CurationRunOutcome.CANCELLED)

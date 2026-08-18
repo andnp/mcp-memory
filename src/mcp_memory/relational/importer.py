@@ -3,7 +3,7 @@ from __future__ import annotations
 import glob
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -182,14 +182,14 @@ def _parse_created_at(value: object):
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
-            return datetime.now(timezone.utc).isoformat()
+            return datetime.now(UTC).isoformat()
         return _ensure_timezone(parsed).isoformat()
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _ensure_timezone(value: datetime):
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def apply_recency_boost(
@@ -14,9 +14,9 @@ def apply_recency_boost(
         return score
 
     if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at = created_at.replace(tzinfo=UTC)
 
-    age_days = (datetime.now(timezone.utc) - created_at).days
+    age_days = (datetime.now(UTC) - created_at).days
     if age_days > boost_window_days:
         return score
 

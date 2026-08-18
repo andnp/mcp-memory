@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
 from typing import Any, Iterable
@@ -259,4 +259,4 @@ def _missing_call_id_key(
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

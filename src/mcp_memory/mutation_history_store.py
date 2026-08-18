@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -434,7 +434,7 @@ def _bounded_limit(limit: int) -> int:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _uuid_text(value: UUID | None) -> str | None:

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -12,7 +12,7 @@ pytestmark = pytest.mark.medium
 def test_ranking_ladder_orders_working_and_fresh_above_stale_generic_match(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     evergreen = repository.create_memory(
         title="Platform design note",

@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
@@ -214,8 +214,8 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
         storage_key="workspace:memory-id",
         title="Mapped result",
         body="Body fallback for a result without summary metadata.",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         status=status,
         metadata={
             "memory_ref": "mem-42",
@@ -688,7 +688,7 @@ def test_read_memory_preserves_access_and_superseded_breadcrumbs(db_manager) -> 
     repository.record_access(
         current_fact.id,
         access_score=4.0,
-        accessed_at=(datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),
+        accessed_at=(datetime.now(UTC) - timedelta(days=7)).isoformat(),
     )
 
     result = service.read_memory(current_fact.id)
