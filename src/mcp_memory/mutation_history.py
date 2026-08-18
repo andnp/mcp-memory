@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -163,43 +163,6 @@ class RestoreResult(MutationHistoryModel):
     target_event_id: UUID
     conflict_reason: str | None = None
     conflict_details: dict[str, Any] = Field(default_factory=dict)
-
-
-class MutationHistoryStore(Protocol):
-    """Backend-neutral contract for authoritative mutation history storage."""
-
-    def append_event(self, event: MutationEvent) -> MutationEvent: ...
-
-    def append_record_revisions(self, revisions: Sequence[RecordRevision]) -> None: ...
-
-    def append_link_revisions(self, revisions: Sequence[LinkRevision]) -> None: ...
-
-    def get_event(self, event_id: UUID) -> MutationEvent | None: ...
-
-    def list_events(
-        self,
-        *,
-        memory_id: UUID | None = None,
-        actor_kind: MutationActorKind | str | None = None,
-        family: str | None = None,
-        operation: str | None = None,
-        created_after: datetime | None = None,
-        created_before: datetime | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[MutationEvent]: ...
-
-    def get_record_revisions(self, event_id: UUID, *, limit: int | None = None) -> list[RecordRevision]: ...
-
-    def get_link_revisions(self, event_id: UUID, *, limit: int | None = None) -> list[LinkRevision]: ...
-
-    def get_protections(self, memory_id: UUID) -> list[Protection]: ...
-
-    def set_protection(self, protection: Protection) -> Protection: ...
-
-    def remove_protection(self, memory_id: UUID, mode: ProtectionMode) -> None: ...
-
-    def request_restore(self, request: RestoreRequest) -> RestoreResult: ...
 
 
 def semantic_snapshot(
