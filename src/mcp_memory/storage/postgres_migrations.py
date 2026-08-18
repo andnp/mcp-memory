@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-POSTGRES_SCHEMA_VERSION = 35
+POSTGRES_SCHEMA_VERSION = 36
 
 
 @dataclass(frozen=True)
@@ -1029,6 +1029,16 @@ POSTGRES_MIGRATIONS = (
                 created_at TEXT NOT NULL
             )
             """,
+        ),
+    ),
+    PostgresMigration(
+        version=36,
+        name="add_curator_packet_attribution",
+        statements=(
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS curation_packet_id TEXT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS curation_packet_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_provider_usage_curation_packet_id ON provider_usage(curation_packet_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_conversations_curation_packet_id ON ai_conversations(curation_packet_id)",
         ),
     ),
 )

@@ -29,6 +29,7 @@ class ProviderUsageRepository:
         task_name: str | None,
         task_id: str | None,
         execution_epoch: int | None = None,
+        curation_packet_id: str | None = None,
         request_id: str | None,
         attempt: int | None = None,
         attempt_identity: str | None = None,
@@ -55,12 +56,13 @@ class ProviderUsageRepository:
             attempt_identity=attempt_identity,
         )
         self._db_manager.get_connection().execute(
-            "INSERT INTO provider_usage (workspace_id, task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, subprocess_pid, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO provider_usage (workspace_id, task_name, task_id, execution_epoch, curation_packet_id, request_id, attempt, attempt_identity, subprocess_pid, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._workspace_id,
                 task_name,
                 task_id,
                 execution_epoch,
+                curation_packet_id,
                 request_id,
                 attempt,
                 attempt_identity,
@@ -94,6 +96,7 @@ class ProviderUsageRepository:
         task_name: str | None,
         task_id: str | None,
         execution_epoch: int | None = None,
+        curation_packet_id: str | None = None,
         attempt_identity: str | None = None,
         provider_key: str,
         provider_name: str,
@@ -122,13 +125,14 @@ class ProviderUsageRepository:
         )
         attempt = resolved_attempt or attempt
         self._db_manager.get_connection().execute(
-            "INSERT OR REPLACE INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, retry_delay_seconds, started_at, completed_at, duration_seconds, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, curation_packet_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, retry_delay_seconds, started_at, completed_at, duration_seconds, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 request_id,
                 attempt,
                 self._workspace_id,
                 task_name,
                 task_id,
+                curation_packet_id,
                 provider_key,
                 provider_name,
                 model_name,
@@ -386,7 +390,7 @@ class ProviderUsageRepository:
         current_time = time.time() if now is None else now
         params: list[object] = []
         query = (
-            "SELECT task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source "
+            "SELECT task_name, task_id, execution_epoch, request_id, attempt, attempt_identity, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source, curation_packet_id "
             "FROM provider_usage"
         )
         active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id

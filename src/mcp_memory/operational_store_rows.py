@@ -224,6 +224,7 @@ class AIConversationRecord:
     reasoning_tokens: int | None = None
     total_tokens: int | None = None
     token_usage_source: str | None = None
+    curation_packet_id: str | None = None
 
     @classmethod
     def from_sqlite_row(cls, row: Mapping[str, object]) -> Self:
@@ -256,6 +257,7 @@ class AIConversationRecord:
             reasoning_tokens=_optional_int(row["reasoning_tokens"]) if "reasoning_tokens" in row.keys() else None,
             total_tokens=_optional_int(row["total_tokens"]) if "total_tokens" in row.keys() else None,
             token_usage_source=_optional_str(row["token_usage_source"]) if "token_usage_source" in row.keys() else None,
+            curation_packet_id=_optional_str(row["curation_packet_id"]) if "curation_packet_id" in row.keys() else None,
         )
 
     @classmethod
@@ -289,6 +291,7 @@ class AIConversationRecord:
             reasoning_tokens=_optional_int(row[25]) if len(row) > 25 else None,
             total_tokens=_optional_int(row[26]) if len(row) > 26 else None,
             token_usage_source=_optional_str(row[27]) if len(row) > 27 else None,
+            curation_packet_id=_optional_str(row[28]) if len(row) > 28 else None,
         )
 
 
@@ -411,6 +414,7 @@ class ProviderUsageSample:
     reasoning_tokens: int | None = None
     total_tokens: int | None = None
     token_usage_source: str | None = None
+    curation_packet_id: str | None = None
 
     @classmethod
     def from_sqlite_row(cls, row: Mapping[str, object]) -> Self:
@@ -435,6 +439,7 @@ class ProviderUsageSample:
             reasoning_tokens=_optional_int(row["reasoning_tokens"]) if "reasoning_tokens" in row.keys() else None,
             total_tokens=_optional_int(row["total_tokens"]) if "total_tokens" in row.keys() else None,
             token_usage_source=_optional_str(row["token_usage_source"]) if "token_usage_source" in row.keys() else None,
+            curation_packet_id=_optional_str(row["curation_packet_id"]) if "curation_packet_id" in row.keys() else None,
         )
 
     @classmethod
@@ -460,6 +465,7 @@ class ProviderUsageSample:
             reasoning_tokens=_optional_int(row[17]) if len(row) > 17 else None,
             total_tokens=_optional_int(row[18]) if len(row) > 18 else None,
             token_usage_source=_optional_str(row[19]) if len(row) > 19 else None,
+            curation_packet_id=_optional_str(row[20]) if len(row) > 20 else None,
         )
 
     @property

@@ -123,6 +123,104 @@ def test_provider_usage_repository_summarizes_token_usage(db_manager) -> None:
     assert summary.token_usage_source == "test"
 
 
+def test_provider_usage_repository_round_trips_curation_packet_id(db_manager) -> None:
+    """Provider calls and conversations retain their curator packet identity.
+
+    The packet ID is persisted independently on both provider telemetry rows.
+    """
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+
+    repository.record_call(
+        task_name="memory-curator",
+        task_id="curator-task",
+        request_id="packet-request",
+        curation_packet_id="packet-123",
+        subprocess_pid=None,
+        provider_key="provider",
+        provider_name="Provider",
+        model_name="model",
+        status="success",
+        duration_seconds=1.0,
+        created_at=100.0,
+        error_text=None,
+    )
+    repository.record_conversation(
+        request_id="packet-conversation",
+        attempt=1,
+        task_name="memory-curator",
+        task_id="curator-task",
+        curation_packet_id="packet-123",
+        provider_key="provider",
+        provider_name="Provider",
+        model_name="model",
+        subprocess_pid=None,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="success",
+        error_text=None,
+        started_at=100.0,
+        completed_at=101.0,
+    )
+
+    provider_row = db_manager.get_connection().execute(
+        "SELECT curation_packet_id FROM provider_usage WHERE request_id = ?",
+        ("packet-request",),
+    ).fetchone()
+    conversation = repository.get_conversation("packet-conversation")[0]
+
+    assert tuple(provider_row) == ("packet-123",)
+    assert conversation.curation_packet_id == "packet-123"
+
+
+def test_provider_usage_repository_defaults_omitted_curation_packet_id_to_none(db_manager) -> None:
+    """Existing callers that omit packet attribution persist a null value.
+
+    Legacy non-curator provider usage remains explicitly unattributed.
+    """
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+
+    repository.record_call(
+        task_name="worker",
+        task_id=None,
+        request_id="unattributed-request",
+        subprocess_pid=None,
+        provider_key="provider",
+        provider_name="Provider",
+        model_name="model",
+        status="success",
+        duration_seconds=1.0,
+        created_at=100.0,
+        error_text=None,
+    )
+    repository.record_conversation(
+        request_id="unattributed-conversation",
+        attempt=1,
+        task_name="worker",
+        task_id=None,
+        provider_key="provider",
+        provider_name="Provider",
+        model_name="model",
+        subprocess_pid=None,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="success",
+        error_text=None,
+        started_at=100.0,
+        completed_at=101.0,
+    )
+
+    provider_row = db_manager.get_connection().execute(
+        "SELECT curation_packet_id FROM provider_usage WHERE request_id = ?",
+        ("unattributed-request",),
+    ).fetchone()
+    conversation = repository.get_conversation("unattributed-conversation")[0]
+
+    assert tuple(provider_row) == (None,)
+    assert conversation.curation_packet_id is None
+
+
 def test_provider_usage_repository_derives_attempt_identity_from_lifecycle(db_manager) -> None:
     db_manager.get_connection().execute(
         "INSERT INTO task_execution_attempts (task_id, execution_epoch, workspace_id, task_name, request_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",

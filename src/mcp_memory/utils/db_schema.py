@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -184,7 +184,8 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             cache_write_tokens INTEGER,
             reasoning_tokens INTEGER,
             total_tokens INTEGER,
-            token_usage_source TEXT
+            token_usage_source TEXT,
+            curation_packet_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS task_execution_attempts (
@@ -236,6 +237,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             reasoning_tokens INTEGER,
             total_tokens INTEGER,
             token_usage_source TEXT,
+            curation_packet_id TEXT,
             UNIQUE(request_id, attempt)
         );
 
@@ -447,6 +449,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "provider_usage", "reasoning_tokens", "INTEGER")
     ensure_column(conn, "provider_usage", "total_tokens", "INTEGER")
     ensure_column(conn, "provider_usage", "token_usage_source", "TEXT")
+    ensure_column(conn, "provider_usage", "curation_packet_id", "TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS task_execution_attempts (
@@ -480,6 +483,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "ai_conversations", "reasoning_tokens", "INTEGER")
     ensure_column(conn, "ai_conversations", "total_tokens", "INTEGER")
     ensure_column(conn, "ai_conversations", "token_usage_source", "TEXT")
+    ensure_column(conn, "ai_conversations", "curation_packet_id", "TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS provider_admission_state (
