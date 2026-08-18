@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 CalibrationFn = Callable[[float], float]
 
@@ -50,6 +50,15 @@ def sigmoid(
         description=f"logistic, midpoint {threshold}, steepness {steepness}",
         calibrate=calibrate,
     )
+
+
+def threshold_variant(threshold: float) -> Variant:
+    """Name a sigmoid variant by its threshold so a sweep can tell them apart.
+
+    A sweep replays several thresholds in one run, so each needs a distinct
+    name; ``sigmoid()`` always names itself "sigmoid" regardless of threshold.
+    """
+    return replace(sigmoid(threshold=threshold), name=f"threshold_{threshold:g}")
 
 
 def saturation(
