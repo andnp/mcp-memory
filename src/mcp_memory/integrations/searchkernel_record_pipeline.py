@@ -235,12 +235,12 @@ class MemoryRecordSearchPipeline:
         *,
         repository: MemoryRepositoryPort,
         semantic_only_abstain_threshold: float = 0.8,
-        diagnostics: MemoryRecordPipelineDiagnostics = MemoryRecordPipelineDiagnostics(),
+        diagnostics: MemoryRecordPipelineDiagnostics | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._repository = repository
         self._semantic_only_abstain_threshold = semantic_only_abstain_threshold
-        self.diagnostics = diagnostics
+        self.diagnostics = diagnostics if diagnostics is not None else MemoryRecordPipelineDiagnostics()
 
     async def search(
         self,
