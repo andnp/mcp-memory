@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,12 @@ import pytest
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 
 pytestmark = pytest.mark.small
+
+
+def _set_frontend_mtime(static_root: Path, timestamp: float) -> None:
+    for path in static_root.with_name("frontend").rglob("*"):
+        if path.is_file():
+            os.utime(path, (timestamp, timestamp))
 
 
 def _seed_frontend_tree(tmp_path: Path) -> tuple[Path, Path]:
@@ -29,6 +36,8 @@ def test_ensure_dashboard_frontend_built_skips_when_bundle_is_current(tmp_path: 
     source_file = tmp_path / "frontend" / "src" / "App.tsx"
     source_file.touch()
     dist_index.touch()
+    _set_frontend_mtime(static_root, 1.0)
+    os.utime(dist_index, (2.0, 2.0))
 
     result = ensure_dashboard_frontend_built(static_root=static_root)
 
@@ -43,6 +52,8 @@ def test_ensure_dashboard_frontend_built_runs_build_when_bundle_is_stale(tmp_pat
     source_file = tmp_path / "frontend" / "src" / "App.tsx"
     source_file.write_text("export const App = () => <div />;", encoding="utf-8")
     source_file.touch()
+    _set_frontend_mtime(static_root, 2.0)
+    os.utime(dist_index, (1.0, 1.0))
 
     called: dict[str, object] = {}
 
@@ -75,6 +86,8 @@ def test_ensure_dashboard_frontend_built_reports_missing_npm(tmp_path: Path, mon
     source_file = tmp_path / "frontend" / "src" / "App.tsx"
     source_file.write_text("export const App = () => <div />;", encoding="utf-8")
     source_file.touch()
+    _set_frontend_mtime(static_root, 2.0)
+    os.utime(dist_index, (1.0, 1.0))
 
     result = ensure_dashboard_frontend_built(static_root=static_root)
 
@@ -88,6 +101,8 @@ def test_ensure_dashboard_frontend_built_skips_repeat_build_after_failure(tmp_pa
     source_file = tmp_path / "frontend" / "src" / "App.tsx"
     source_file.write_text("export const App = () => <div />;", encoding="utf-8")
     source_file.touch()
+    _set_frontend_mtime(static_root, 2.0)
+    os.utime(dist_index, (1.0, 1.0))
 
     call_count = 0
 
@@ -115,6 +130,8 @@ def test_ensure_dashboard_frontend_built_times_out(tmp_path: Path, monkeypatch) 
     source_file = tmp_path / "frontend" / "src" / "App.tsx"
     source_file.write_text("export const App = () => <div />;", encoding="utf-8")
     source_file.touch()
+    _set_frontend_mtime(static_root, 2.0)
+    os.utime(dist_index, (1.0, 1.0))
 
     def _hanging_run(command, *, cwd, check, capture_output, text, timeout):
         raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
