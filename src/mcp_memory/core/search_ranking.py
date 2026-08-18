@@ -187,10 +187,7 @@ class ScoreComponents:
 
     def compose(self) -> float:
         """Combine the parts into the score used for ordering."""
-        score = min(
-            self.calibrated_score + self.recency_bonus + self.graph_support_bonus,
-            1.0,
-        )
+        score = self.calibrated_score + self.recency_bonus + self.graph_support_bonus
         score *= self.workspace_multiplier
         score += self.access_bonus
         score *= self.authority_multiplier
