@@ -7,7 +7,6 @@ import pytest
 
 from mcp_memory.storage.postgres_provider_policy_event_store import PostgresProviderPolicyEventRepository
 
-
 pytestmark = pytest.mark.small
 
 

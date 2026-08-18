@@ -12,8 +12,8 @@ from mcp.types import TextContent
 
 from mcp_memory.cli import main
 from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
-from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
+from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.tools import (
     SKILL_REVIEW_READ_ONLY_SCOPE,
     SKILL_REVIEW_WRITER_SCOPE,
@@ -22,7 +22,6 @@ from mcp_memory.mcp.tools import (
 )
 from mcp_memory.server import MCPServer
 from tests.sdk.mcp import FakeAsyncContextManager
-
 
 pytestmark = pytest.mark.medium
 

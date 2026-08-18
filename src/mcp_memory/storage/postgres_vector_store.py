@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
+
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 from mcp_memory.embedding_integrity_event_store import (
     EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
@@ -12,8 +14,6 @@ from mcp_memory.embedding_integrity_event_store import (
 )
 from mcp_memory.embeddings import EmbeddingRecord, is_fallback_embedding_model
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
-from searchkernel.utils.similarity import cosine_similarity_lists
-
 
 logger = logging.getLogger(__name__)
 

@@ -12,8 +12,8 @@ from typing import Any, Protocol
 from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchOutcome
 
-from mcp_memory.config import Config
 from mcp_memory.application.ports import LegacyNativeSearchPort
+from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.core.retrieval import (
     RetrievalDiagnostics,
@@ -23,12 +23,11 @@ from mcp_memory.core.retrieval import (
     run_coroutine_sync,
 )
 from mcp_memory.integrations.searchkernel_record_pipeline import (
-    MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     _ACTIVE_QUERY_EMBEDDING_CACHE,
+    MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     MemoryRecordSearchPipeline,
     build_memory_record_pipeline,
 )
-
 
 logger = logging.getLogger(__name__)
 

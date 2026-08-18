@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from mcp_memory.core.ports.tasks import is_process_alive
 import time
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypedDict
 
 from mcp_memory.core.ports import SearchHealthPort
+from mcp_memory.core.ports.tasks import is_process_alive
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     EmbeddingIntegrityEventSummaryPayload,
     EmbeddingStatusPayload,
     ExecutionAttemptHealthPayload,
-    SearchHealthPayload,
     SearchDiagnosticsPayload,
+    SearchHealthPayload,
 )
-from mcp_memory.management.reporting_rows import fetch_running_task_attempt_rows
-from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
-
+from mcp_memory.management.reporting_rows import RunningTaskAttemptRow, fetch_running_task_attempt_rows
 
 type RunningTaskAttemptRowFetcher = Callable[[object], Sequence[RunningTaskAttemptRow]]
 type ProcessAliveChecker = Callable[[int], bool]

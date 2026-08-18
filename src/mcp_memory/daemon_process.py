@@ -6,9 +6,7 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import asdict
-from dataclasses import dataclass
-from dataclasses import fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -18,8 +16,8 @@ except ImportError:  # pragma: no cover - daemon deployment targets Unix
     fcntl = None  # type: ignore[assignment]
 
 from mcp_memory.config import resolve_daemon_startup_log_path
-from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.daemon_models import DaemonMetadata
+from mcp_memory.daemon_transport import request_daemon_json
 
 
 class _PollableProcess(Protocol):

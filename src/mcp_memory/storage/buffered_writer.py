@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import Callable, Sequence
 import logging
 import threading
 import time
+from collections import deque
+from collections.abc import Callable, Sequence
 from typing import Generic, TypeVar
-
 
 logger = logging.getLogger(__name__)
 

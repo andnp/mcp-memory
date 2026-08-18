@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
-from textual.widgets import DataTable, Footer, Header, Static, TabPane, TabbedContent
+from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime

@@ -5,7 +5,6 @@ import pytest
 from mcp_memory.core.task_handlers.maintenance_housekeeping import reconcile_dangling_links
 from mcp_memory.relational.repository import RelationalMemoryRepository
 
-
 pytestmark = pytest.mark.small
 
 

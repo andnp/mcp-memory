@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 import shlex
 import signal
 import time
-from dataclasses import dataclass
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 from mcp_memory.config import (
     DEFAULT_APP_NAME,
@@ -24,11 +23,21 @@ from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.daemon_process import (
     DaemonHealthAssessment,
     DaemonSpawnDetails,
-    assess_daemon_health as _assess_daemon_health,
-    find_free_port as _find_free_port,
-    is_daemon_healthy as _is_daemon_healthy,
     remove_metadata,
+)
+from mcp_memory.daemon_process import (
+    assess_daemon_health as _assess_daemon_health,
+)
+from mcp_memory.daemon_process import (
+    find_free_port as _find_free_port,
+)
+from mcp_memory.daemon_process import (
+    is_daemon_healthy as _is_daemon_healthy,
+)
+from mcp_memory.daemon_process import (
     read_daemon_metadata as _read_daemon_metadata,
+)
+from mcp_memory.daemon_process import (
     spawn_daemon_process as _spawn_daemon_process,
 )
 from mcp_memory.daemon_transport import DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS
@@ -39,7 +48,6 @@ from mcp_memory.process_termination import ProcessTerminationResult as _DaemonTe
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _shared_wait_for_process_exit
-
 
 logger = logging.getLogger(__name__)
 _UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS = 3

@@ -11,7 +11,6 @@ from mcp_memory.storage.postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
 from tests.small.mutation_history_repository_contract import assert_mutation_history_repository_contract
 
-
 pytestmark = pytest.mark.small
 
 class FakePostgresCursor:

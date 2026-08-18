@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
-import logging
 from typing import Any, cast
 
 from mcp_memory.application.ports import (
@@ -19,7 +19,6 @@ from mcp_memory.serialization import (
     search_result_payload_compact,
     search_result_payload_with_debug_fields,
 )
-
 
 SEARCH_READ_GUIDANCE = (
     "Read promising memory_ref values with read_memory_record or read_memory_records."

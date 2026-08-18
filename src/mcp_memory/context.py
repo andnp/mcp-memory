@@ -6,13 +6,6 @@ from typing import Any, Protocol, cast
 
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
-from mcp_memory.core.ports.providers import (
-    ProviderPolicyEventPort,
-    ProviderUsagePort,
-    TaskExecutionAttemptPort,
-)
-from mcp_memory.core.ports.tasks import TaskQueue
-from mcp_memory.core.ports.work_items import WorkItemRepository
 from mcp_memory.core.ports import (
     EmbeddingMaintenancePort,
     MemoryIDResolutionPort,
@@ -20,6 +13,13 @@ from mcp_memory.core.ports import (
     SearchHealthPort,
     StartupHealthPort,
 )
+from mcp_memory.core.ports.providers import (
+    ProviderPolicyEventPort,
+    ProviderUsagePort,
+    TaskExecutionAttemptPort,
+)
+from mcp_memory.core.ports.tasks import TaskQueue
+from mcp_memory.core.ports.work_items import WorkItemRepository
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider, JSONTaskProvider
 
 TaskQueueProtocol = TaskQueue

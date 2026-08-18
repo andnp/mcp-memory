@@ -5,16 +5,17 @@ import pytest
 
 from mcp_memory.config import Config
 from mcp_memory.context import (
+    ApplicationContext,
     BackgroundTaskCapabilities,
     ManagementRuntimeCapabilities,
     MemoryReadCapabilities,
     MutationCapabilities,
     ProviderCapabilities,
     TaskRuntimeCapabilities,
-    ApplicationContext,
 )
-from mcp_memory.daemon_runtime import DaemonRuntimeSession
+from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
 from mcp_memory.daemon_lifecycle import FilesystemLock
+from mcp_memory.daemon_runtime import DaemonRuntimeSession
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.mcp.runtime import (
     RuntimeCapabilityBundles,
@@ -23,7 +24,6 @@ from mcp_memory.mcp.runtime import (
     WorkspaceRuntimeSpec,
     create_runtime_composition,
 )
-from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
 from mcp_memory.storage.types import StorageBackendResources
 
 

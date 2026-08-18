@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import re
 from typing import Any, Callable, cast
 from uuid import UUID
 
@@ -15,6 +15,8 @@ from mcp_memory.core.curation_models import (
     campaign_hypothesis_from_payload,
 )
 from mcp_memory.core.ports.curation import CandidateDisposition, CurationCandidateState
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
@@ -25,15 +27,12 @@ from mcp_memory.core.sampling import (
     SEMANTIC_STRATEGY,
     SamplingBatch,
 )
-
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
     sample_maintenance_candidates,
     support_counts_for_candidates,
 )
-from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalPort,
     build_memory_retrieval_facade,

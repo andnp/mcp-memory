@@ -16,17 +16,16 @@ from searchkernel.ports.federation import (
     SourceCapabilities,
     SourceIdentity,
 )
-from searchkernel.runtime.query_embedding_cache import clear_query_embedding_cache
 from searchkernel.runtime.federation import FederationExecutor
+from searchkernel.runtime.query_embedding_cache import clear_query_embedding_cache
 
 from benchmarks.searchkernel_ingest_search import (
     IngestSearchHarness,
     sample_memories,
 )
+from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.integrations.searchkernel_adapters import MemoryRecordAdapter
 from mcp_memory.integrations.searchkernel_ingestion import MemoryRecordIngestor
-from mcp_memory.integrations.federation_source import MemoryFederationSource
-
 
 pytestmark = pytest.mark.medium
 

@@ -9,7 +9,6 @@ from mcp_memory.application.skill_review_contract import (
     parse_skill_review_ledger_request,
 )
 
-
 pytestmark = pytest.mark.small
 
 

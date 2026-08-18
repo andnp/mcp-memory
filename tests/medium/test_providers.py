@@ -5,32 +5,26 @@ from collections import deque
 from typing import Any, Self
 
 import pytest
-
-from copilot.session_events import AssistantMessageData
-from copilot.session_events import SessionErrorData
-from copilot.session_events import AssistantUsageData
+from copilot.session_events import AssistantMessageData, AssistantUsageData, SessionErrorData
 
 from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.providers import copilot_sdk as copilot_sdk_module
-from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider
-from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
-from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
-from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
-from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
-from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
-from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
-from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
-from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
-from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
+from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider, CopilotSDKProvider
+from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
+from mcp_memory.core.providers.interfaces import (
+    ProviderAdmissionDeferred,
+    ProviderAttemptFinishedEvent,
+    ProviderAttemptHeartbeatEvent,
+    ProviderAttemptStartedEvent,
+    ProviderAuthenticationRequired,
+    ProviderBudgetExceeded,
+    ProviderRateLimitExceeded,
+)
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
-from tests.sdk.providers import FakeCopilotClient
-from tests.sdk.providers import FakeCopilotClientFactory
-from tests.sdk.providers import FakeCopilotSession
-from tests.sdk.providers import FakeCopilotSessionEvent
-
+from tests.sdk.providers import FakeCopilotClient, FakeCopilotClientFactory, FakeCopilotSession, FakeCopilotSessionEvent
 
 pytestmark = pytest.mark.medium
 

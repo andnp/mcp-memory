@@ -4,11 +4,12 @@ from typing import get_type_hints
 
 import pytest
 
+from mcp_memory.core.curation_quality_policy import QualityOutcome
 from mcp_memory.core.ingress_evidence import (
     IngressActionReceipt,
     IngressBatchEvidence,
-    IngressReceiptStatus,
     IngressQualityEvidence,
+    IngressReceiptStatus,
     IngressSourceSnapshot,
     SourceCoverage,
     SourceCoverageOutcome,
@@ -16,10 +17,9 @@ from mcp_memory.core.ingress_evidence import (
 from mcp_memory.core.ports.ingress import (
     IngressActionReceiptRepository,
     IngressBatchEvidenceRepository,
-    SourceCoverageRepository,
     IngressQualityEvidenceRepository,
+    SourceCoverageRepository,
 )
-from mcp_memory.core.curation_quality_policy import QualityOutcome
 
 pytestmark = pytest.mark.small
 

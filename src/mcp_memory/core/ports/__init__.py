@@ -36,8 +36,8 @@ if TYPE_CHECKING:
         SearchHealthSnapshot,
         StartupHealthPort,
     )
-    from .work_items import WorkItemRecord, WorkItemRecordLike, WorkItemRepository
     from .tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
+    from .work_items import WorkItemRecord, WorkItemRecordLike, WorkItemRepository
 
 _EXPORTS = {
     "CurationActionStore": ("curation", "CurationActionStore"),

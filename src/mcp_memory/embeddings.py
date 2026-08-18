@@ -12,13 +12,13 @@ from hashlib import blake2b
 from pathlib import Path
 from typing import Any, Callable, ClassVar, cast
 
-from mcp_memory.config import EmbeddingsConfig
-from mcp_memory.utils.db import DatabaseManager
 from searchkernel.indexing.embedding_cache import SQLiteEmbeddingCache
 from searchkernel.indexing.semantic import embedding_identity
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.utils.similarity import cosine_similarity_lists
 
+from mcp_memory.config import EmbeddingsConfig
+from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

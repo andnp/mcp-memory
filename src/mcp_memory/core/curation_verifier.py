@@ -11,8 +11,8 @@ from mcp_memory.core.curation_identity import canonical_token, record_snapshot
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
     ClaimManifest,
-    CurationVerificationDescriptor,
     CreateLinkAction,
+    CurationVerificationDescriptor,
     MergeMemoriesAction,
     NormalizeMemoryAction,
     RemoveLinkAction,
@@ -24,8 +24,8 @@ from mcp_memory.core.ports.curation import (
     CurationReceiptState,
     CurationRepository,
 )
-from mcp_memory.core.ports.memory import MemoryLink, MemoryReadContext
 from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
+from mcp_memory.core.ports.memory import MemoryLink, MemoryReadContext
 
 RelationalMemoryReadContext = MemoryReadContext
 

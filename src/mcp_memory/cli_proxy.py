@@ -6,7 +6,6 @@ import click
 
 from mcp_memory.cli_stdio_proxy_commands import build_stdio_proxy_command_family
 
-
 workspace_root_option = click.option("--workspace-root", help="Override the active workspace root")
 
 

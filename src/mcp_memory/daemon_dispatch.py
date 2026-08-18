@@ -4,11 +4,11 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from searchkernel.ports.federation import SearchRequest
+
 from mcp_memory.config import resolve_workspace_id
 from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.management.scope_policy import resolve_workspace_id_for_policy, scope_policy_for_endpoint
-from searchkernel.ports.federation import SearchRequest
-
 
 _DEFAULT_LIST_LIMIT = 20
 _DEFAULT_LOG_LIMIT = 50

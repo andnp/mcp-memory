@@ -12,7 +12,6 @@ from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.tasks import TaskRecord
 
-
 pytestmark = pytest.mark.medium
 
 

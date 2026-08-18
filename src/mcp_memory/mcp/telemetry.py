@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from hashlib import sha256
-from logging import getLogger
 import os
-from threading import Lock
-from time import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from hashlib import sha256
+from logging import getLogger
+from threading import Lock
+from time import time
 from uuid import uuid4
 
 from mcp_memory.application.ports import MemoryReadContext
 from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
-
 
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 _DEFAULT_SEARCH_DIAGNOSTICS_SAMPLE_RATE = 0.1

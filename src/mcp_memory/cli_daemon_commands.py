@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import click
 
-
 type DaemonStartAction = Callable[[bool, str, int | None, bool], None]
 type DaemonCommandAction = Callable[[], None]
 

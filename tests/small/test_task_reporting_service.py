@@ -7,7 +7,6 @@ from mcp_memory.management.task_reporting_service import (
     TaskReportingServiceDependencies,
 )
 
-
 pytestmark = pytest.mark.small
 
 

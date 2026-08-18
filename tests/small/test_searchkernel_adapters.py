@@ -19,7 +19,6 @@ from mcp_memory.integrations.searchkernel_adapters import (
     MemoryVectorStore,
 )
 
-
 pytestmark = pytest.mark.small
 
 

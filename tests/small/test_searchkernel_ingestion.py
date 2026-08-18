@@ -8,7 +8,6 @@ from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord
 from mcp_memory.integrations.searchkernel_ingestion import MemoryRecordIngestor
 
-
 pytestmark = pytest.mark.small
 
 

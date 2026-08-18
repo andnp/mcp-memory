@@ -66,8 +66,8 @@ def internal_get_next_curator_batch_service(ctx: ApplicationContext, arguments: 
 
     from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
     from mcp_memory.core.task_handlers.curator_support import (
-        CuratorCandidateRequest,
         CURATOR_MAX_SEED_RECORDS,
+        CuratorCandidateRequest,
         acquire_curator_candidates,
     )
 

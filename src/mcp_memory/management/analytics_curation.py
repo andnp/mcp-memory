@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from mcp_memory.core.curation_quality_policy import QualityOutcome
+from mcp_memory.core.curator_telemetry import classify_quality_utility
 from mcp_memory.management.models import (
     CurationCandidateMetricsPayload,
     CurationHistoryMetricsPayload,
@@ -19,8 +21,6 @@ from mcp_memory.management.query_runner import (
     ManagementQueryAdapter,
     ManagementQueryRunner,
 )
-from mcp_memory.core.curator_telemetry import classify_quality_utility
-from mcp_memory.core.curation_quality_policy import QualityOutcome
 
 _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
 _VALID_PLAN_OUTCOMES = frozenset(

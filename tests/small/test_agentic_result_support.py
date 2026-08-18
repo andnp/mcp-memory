@@ -6,7 +6,6 @@ from mcp_memory.core.task_handlers.agentic_result_support import (
     extract_embedded_json_object,
 )
 
-
 pytestmark = __import__("pytest").mark.small
 
 

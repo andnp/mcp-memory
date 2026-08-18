@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import sys
+import time
+import webbrowser
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
-import json
-import logging
 from pathlib import Path
-import sys
-import time
 from types import SimpleNamespace
 from typing import Any, TypeVar
-import webbrowser
 
 import click
+import uvicorn
 from rich.console import Console
 from rich.table import Table
-import uvicorn
 
 from mcp_memory.cli_admin_commands import (
     build_admin_agent_command_family,
@@ -33,6 +33,7 @@ from mcp_memory.cli_daemon_commands import build_daemon_command_family
 from mcp_memory.cli_hook_runner_commands import build_hook_runner_command
 from mcp_memory.cli_memory import build_memory_group
 from mcp_memory.cli_stdio_proxy_commands import build_stdio_proxy_command_family
+from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
@@ -46,13 +47,12 @@ from mcp_memory.daemon import (
     stop_daemon,
 )
 from mcp_memory.daemon_process import find_free_port
-from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
-from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
+from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.service import ManagementService
-from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
+from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.mcp.runtime import create_runtime, resolve_global_daemon_bootstrap_spec
 from mcp_memory.mcp.services import search_memory_records_service
 from mcp_memory.relational.importer import (

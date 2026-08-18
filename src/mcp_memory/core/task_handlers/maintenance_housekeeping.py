@@ -1,21 +1,20 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
-import json
 from pathlib import Path
-import sqlite3
 from typing import Any, ContextManager, TypedDict, cast
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
 )
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_workspace_id as _resolve_workspace_id
-from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.storage.session import CursorLike, DbConnectionLike
-
 
 BackendConnection = sqlite3.Connection | DbConnectionLike
 _LINEAGE_METADATA_WARNING_BYTES = 2_000

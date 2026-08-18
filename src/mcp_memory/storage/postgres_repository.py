@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
 
-from mcp_memory.core.summaries import build_deterministic_summary
 from mcp_memory.core.ports.memory import (
     _DEFAULT_CANDIDATE_LIMIT,
     _DEFAULT_LOW_SUPPORT_MAX,
@@ -18,6 +17,8 @@ from mcp_memory.core.ports.memory import (
     _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
     _QUALITY_SIGNAL_ALIASES,
     FTS_QUERY_TOKEN_PATTERN,
+    VALID_MEMORY_STATUSES,
+    VALID_MEMORY_TYPES,
     MemoryCreateRequest,
     MemoryLink,
     MemoryReadContext,
@@ -25,12 +26,10 @@ from mcp_memory.core.ports.memory import (
     RankedMemoryCandidate,
     build_read_cache_validation_token,
     parse_memory_ref,
-    VALID_MEMORY_STATUSES,
-    VALID_MEMORY_TYPES,
 )
+from mcp_memory.core.summaries import build_deterministic_summary
 from mcp_memory.storage.buffered_writer import BufferedWriter
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
-
 
 _SUMMARY_UNSET = object()
 RelationalMemoryReadContext = MemoryReadContext

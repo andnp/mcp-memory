@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
-from hashlib import sha1
-from pathlib import Path
-from typing import Any, Literal, cast
 import logging
 import os
 import re
 import tempfile
 import tomllib
+from dataclasses import dataclass, field, fields
+from hashlib import sha1
+from pathlib import Path
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 import tomlkit
-
 
 logger = logging.getLogger(__name__)
 

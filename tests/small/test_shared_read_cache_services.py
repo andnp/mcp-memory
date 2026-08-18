@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import gc
+import sqlite3
+import warnings
 from dataclasses import replace
 from pathlib import Path
-import sqlite3
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import cast
-import warnings
 
 import pytest
 
@@ -21,11 +21,10 @@ from mcp_memory.mcp.services import read_memory_record_service, record_thought_s
 from mcp_memory.storage.shared_read_cache import (
     SharedReadCache,
     SharedReadCacheProjectionUpsert,
-    SharedReadCacheSearchRequest,
     SharedReadCacheSearchPurgedError,
+    SharedReadCacheSearchRequest,
 )
 from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
-
 
 pytestmark = pytest.mark.small
 

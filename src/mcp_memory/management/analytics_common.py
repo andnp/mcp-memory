@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
 import math
+from datetime import datetime
 
 
 def _bucket_starts(*, cutoff: float, generated_at: float, bucket_seconds: int) -> list[int]:

@@ -8,7 +8,6 @@ from mcp_memory.core.curator_rollout_gate import (
     assess_curator_rollout,
 )
 
-
 pytestmark = pytest.mark.small
 
 

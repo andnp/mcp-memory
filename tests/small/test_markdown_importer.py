@@ -10,7 +10,6 @@ from mcp_memory.relational.importer import (
 )
 from mcp_memory.relational.repository import RelationalMemoryRepository
 
-
 pytestmark = pytest.mark.small
 
 

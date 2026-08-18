@@ -7,7 +7,6 @@ import pytest
 
 from benchmarks import search_quality_live
 
-
 pytestmark = pytest.mark.small
 
 

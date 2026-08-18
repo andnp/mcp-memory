@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from searchkernel.runtime import clear_query_embedding_cache
+from searchkernel.search.record_pipeline import RecordSearchOutcome, RecordSearchResult
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports import (
@@ -25,12 +27,9 @@ from mcp_memory.relational.search import (
     SearchExecutionDiagnostics,
     _to_relational_search_result,
 )
-from searchkernel.runtime import clear_query_embedding_cache
-from searchkernel.search.record_pipeline import RecordSearchOutcome, RecordSearchResult
 from tests.small.maintenance_read_repository_contract import (
     assert_maintenance_read_preserves_telemetry,
 )
-
 
 pytestmark = pytest.mark.small
 

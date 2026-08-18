@@ -5,12 +5,13 @@ from typing import Protocol
 
 from mcp_memory.config import AIConfig
 from mcp_memory.core.providers._json_cli import AIResponse
-from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider
-from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
-from mcp_memory.core.providers.interfaces import AgenticRunResult
-from mcp_memory.core.providers.interfaces import AgenticTaskProvider
-from mcp_memory.core.providers.interfaces import JSONTaskProvider
-from mcp_memory.core.providers.interfaces import ProviderJSONCall
+from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider, CopilotSDKProvider
+from mcp_memory.core.providers.interfaces import (
+    AgenticRunResult,
+    AgenticTaskProvider,
+    JSONTaskProvider,
+    ProviderJSONCall,
+)
 
 
 class AIProvider(Protocol):

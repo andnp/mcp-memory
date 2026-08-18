@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from mcp_memory.internal_tool_call_tracking import (
-    InternalToolCallSnapshot,
-    InternalToolCallTracker,
-)
 from mcp_memory.core.curator_evidence import begin_tool_call, finish_tool_call
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     validate_agentic_tool_tracking_snapshot,
+)
+from mcp_memory.internal_tool_call_tracking import (
+    InternalToolCallSnapshot,
+    InternalToolCallTracker,
 )
 
 

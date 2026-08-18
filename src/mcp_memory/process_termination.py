@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-
 TerminationScope = Literal["pid", "process_group"]
 
 

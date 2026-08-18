@@ -1,17 +1,17 @@
 from collections import deque
 
 import pytest
-
 from copilot.session_events import AssistantMessageData
 
-from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
 from mcp_memory.core.providers import copilot_sdk as copilot_sdk_module
-from tests.sdk.providers import FakeAIProvider
-from tests.sdk.providers import FakeCopilotClient
-from tests.sdk.providers import FakeCopilotClientFactory
-from tests.sdk.providers import FakeCopilotSession
-from tests.sdk.providers import FakeCopilotSessionEvent
-
+from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
+from tests.sdk.providers import (
+    FakeAIProvider,
+    FakeCopilotClient,
+    FakeCopilotClientFactory,
+    FakeCopilotSession,
+    FakeCopilotSessionEvent,
+)
 
 pytestmark = pytest.mark.medium
 

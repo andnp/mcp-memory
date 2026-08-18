@@ -7,14 +7,13 @@ import pytest
 
 from mcp_memory.core.curation_shadow import _direct_curator_prompt
 from mcp_memory.core.curation_validation import CurationMutationBudget
+from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_support import (
     curator_seed_payload_item,
     retrieval_friction_flags,
 )
-from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.relational.repository import RelationalMemoryRecord
-
 
 pytestmark = pytest.mark.small
 

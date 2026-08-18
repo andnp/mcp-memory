@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 
-from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES
+from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
     AgentRunPayload,
@@ -12,14 +12,14 @@ from mcp_memory.management.models import (
     RunResultMetadataPayload,
 )
 from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
-from mcp_memory.management.reporting_rows import AgentRunHistoryRow, adapt_agent_run_history_row
 from mcp_memory.management.reporting_rows import (
+    AgentRunHistoryRow,
     JsonObject,
     TaskResultSource,
+    adapt_agent_run_history_row,
     coerce_task_result_view,
     decode_task_result_payload,
 )
-
 
 CURATOR_PROVIDER_FAILURE = "provider_failure"
 CURATOR_NARRATIVE_ONLY = "narrative_only"

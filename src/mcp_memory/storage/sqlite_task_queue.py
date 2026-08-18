@@ -13,7 +13,6 @@ from mcp_memory.core.ports.tasks import TaskRecord, TaskRunRecord, TaskRunSummar
 from mcp_memory.core.task_results import TaskRunResultSource, coerce_task_run_result
 from mcp_memory.utils.db import DatabaseManager
 
-
 _ANY_WORKSPACE = object()
 _RECOVERY_LOCK_RETRY_ATTEMPTS = 3
 _RECOVERY_LOCK_RETRY_DELAY_SECONDS = 0.05

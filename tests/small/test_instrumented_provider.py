@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
-from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
-from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
-from mcp_memory.core.providers.interfaces import ProviderObserverEvent
-from mcp_memory.core.providers.interfaces import AgenticRunResult
-from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
+from mcp_memory.core.providers.interfaces import (
+    AgenticRunResult,
+    ProviderAttemptFinishedEvent,
+    ProviderAttemptHeartbeatEvent,
+    ProviderAttemptStartedEvent,
+    ProviderBudgetExceeded,
+    ProviderObserverEvent,
+)
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
-
 
 pytestmark = pytest.mark.small
 

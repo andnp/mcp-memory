@@ -18,8 +18,8 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
-from mcp_memory.core.journal import RECOVERABLE_RETENTION_SECONDS
 from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
+from mcp_memory.core.journal import RECOVERABLE_RETENTION_SECONDS
 from mcp_memory.core.ports.ingress import (
     IngressActionReceiptIdentityConflictError,
     SourceCoverageAssignmentConflictError,

@@ -9,7 +9,6 @@ import pytest
 
 from benchmarks.searchkernel_ingest_search import _run_benchmark
 
-
 pytestmark = pytest.mark.small
 
 

@@ -1,11 +1,13 @@
-from concurrent.futures import ThreadPoolExecutor
 import builtins
 import os
 import sys
 import threading
 import time
-
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
+
+from searchkernel.ports import CandidateFilterSupport
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.embeddings import (
@@ -18,8 +20,6 @@ from mcp_memory.embeddings import (
     build_embedder,
     with_local_embedding_cache,
 )
-from searchkernel.ports import CandidateFilterSupport
-from searchkernel.utils.similarity import cosine_similarity_lists
 
 
 class FakeTorch:

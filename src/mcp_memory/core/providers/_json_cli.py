@@ -5,10 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from mcp_memory.core.providers.interfaces import ProviderObserver
-from mcp_memory.core.providers.interfaces import ProviderObserverEvent
-from mcp_memory.core.providers.interfaces import ProviderTokenUsage
-
+from mcp_memory.core.providers.interfaces import ProviderObserver, ProviderObserverEvent, ProviderTokenUsage
 
 logger = logging.getLogger(__name__)
 PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS = 20.0

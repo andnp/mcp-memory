@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
-from uuid import UUID, NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 
 @dataclass(frozen=True, slots=True)

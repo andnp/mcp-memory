@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Generator
 import os
 import re
 import socket
 import time
 import uuid
+from collections.abc import Generator
 from dataclasses import dataclass
 
 import pytest
 
 from mcp_memory.config import PostgresStorageConfig
 from mcp_memory.storage.postgres_connection import load_postgres_driver_modules
-
 
 POSTGRES_IMAGE = os.getenv("MCP_MEMORY_TEST_POSTGRES_IMAGE", "postgres")
 POSTGRES_TAG = os.getenv("MCP_MEMORY_TEST_POSTGRES_TAG", "17")

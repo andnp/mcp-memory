@@ -4,14 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_OPERATOR_REVIEW
 from mcp_memory.core.task_handlers.maintenance_work_items import (
     enqueue_producer_remediation_signals,
 )
-from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_OPERATOR_REVIEW
 from mcp_memory.management.analytics_quality import build_quality_remediation_signals
 from mcp_memory.management.reporting_rows import ScopedMemoryRow
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
-
 
 pytestmark = pytest.mark.small
 

@@ -10,8 +10,8 @@ from mcp_memory.application.ports import (
     MemorySearchPort,
     RetrievalTelemetryPort,
 )
-from mcp_memory.core.retrieval import RetrievalRequest, RetrievalResult
 from mcp_memory.core.ports import SearchHealthPort
+from mcp_memory.core.retrieval import RetrievalRequest, RetrievalResult
 from mcp_memory.mcp.adapters import parse_search_arguments
 from mcp_memory.mcp.tools import get_memory_tools
 

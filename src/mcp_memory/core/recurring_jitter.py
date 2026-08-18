@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 
-
 DEFAULT_AUTONOMOUS_RECURRING_JITTER_RATIO = 0.05
 DEFAULT_AUTONOMOUS_RECURRING_MAX_SECONDS = 120.0
 

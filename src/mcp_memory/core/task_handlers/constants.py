@@ -1,5 +1,7 @@
 from mcp_memory.core.maintenance_schedule import (
 	AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES as _AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES,
+)
+from mcp_memory.core.maintenance_schedule import (
 	CONFLICT_DETECTOR_TASK_NAME,
 	CURATOR_TASK_NAME,
 	DEDUPLICATOR_TASK_NAME,
@@ -12,7 +14,6 @@ from mcp_memory.core.maintenance_schedule import (
 	SWEEPER_TASK_NAME,
 	TAXONOMIST_TASK_NAME,
 )
-
 
 SYSTEM1_INGEST_TASK_NAME = "ingest-system1"
 EMBEDDING_REPAIR_TASK_NAME = "embedding-repair"

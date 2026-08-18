@@ -4,8 +4,6 @@ import json
 import time
 from uuid import uuid4
 
-from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
-from mcp_memory.storage.session import DbConnectionLike, SessionManager
 from mcp_memory.core.ports.work_items import (
     DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS,
     WORK_ITEM_STATUS_COMPLETED,
@@ -14,6 +12,8 @@ from mcp_memory.core.ports.work_items import (
     WORK_ITEM_STATUS_RUNNING,
     WorkItemRecord,
 )
+from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
+from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
 def _coerce_int(value: object) -> int:

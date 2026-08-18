@@ -2,9 +2,9 @@ import json
 from types import SimpleNamespace
 
 from mcp_memory.application.payloads import (
+    MAX_SEARCH_EVIDENCE_EXCERPT_CHARS,
     build_read_payload,
     build_search_result_payloads,
-    MAX_SEARCH_EVIDENCE_EXCERPT_CHARS,
 )
 from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
 from mcp_memory.relational.search import RelationalReadResult, RelationalSearchResult

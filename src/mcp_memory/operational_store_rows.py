@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-import json
 from typing import Self
-
 
 type JsonScalar = None | bool | int | float | str
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]

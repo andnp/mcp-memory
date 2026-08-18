@@ -3,26 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+
 import psycopg
 import pytest
 
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import AIConfig, Config, PostgresStorageConfig, ProviderRoutingConfig, StorageConfig
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
-from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec, WorkspaceRuntimeSpec, _build_provider_registry, create_runtime_from_spec
-from mcp_memory.relational.search import RelationalMemorySearchService
-from mcp_memory.storage.factory import build_storage_runtime_components
-from mcp_memory.storage.bootstrap import StorageBootstrapState
-from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
-from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
-from mcp_memory.storage.shared_read_cache import SharedReadCache
-from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
-from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
-from mcp_memory.storage.postgres_ingress_evidence_store import (
-    PostgresIngressActionReceiptRepository,
-    PostgresIngressBatchEvidenceRepository,
-    PostgresSourceCoverageRepository,
+from mcp_memory.mcp.runtime import (
+    GlobalDaemonBootstrapSpec,
+    WorkspaceRuntimeSpec,
+    _build_provider_registry,
+    create_runtime_from_spec,
 )
+from mcp_memory.relational.search import RelationalMemorySearchService
+from mcp_memory.storage.bootstrap import StorageBootstrapState
+from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressActionReceiptStore,
     SQLiteIngressBatchEvidenceStore,
@@ -30,9 +26,18 @@ from mcp_memory.storage.ingress_evidence_store import (
 )
 from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
 from mcp_memory.storage.ingress_quality_store import SQLiteIngressQualityEvidenceStore
+from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
+from mcp_memory.storage.postgres_ingress_evidence_store import (
+    PostgresIngressActionReceiptRepository,
+    PostgresIngressBatchEvidenceRepository,
+    PostgresSourceCoverageRepository,
+)
 from mcp_memory.storage.postgres_ingress_quality_store import PostgresIngressQualityEvidenceStore
+from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
+from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
+from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
-
 
 pytestmark = pytest.mark.small
 

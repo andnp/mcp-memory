@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from mcp_memory.hook_reminders import HookConversationRecord, REMINDER_MESSAGE
+from mcp_memory.hook_reminders import REMINDER_MESSAGE, HookConversationRecord
 
 
 class HookReminderServiceLike(Protocol):

@@ -7,7 +7,6 @@ from tests.small.maintenance_candidate_query_contract import (
     assert_maintenance_candidate_query_contract,
 )
 
-
 pytestmark = pytest.mark.small
 
 

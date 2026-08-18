@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 import json
-from pathlib import Path
 import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC
-from mcp_memory.core.direct_mutation_evidence import DirectMutationEntityDelta, DirectMutationEvidence
 from mcp_memory.core.agent_runtime import (
     FACT_CHECKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
@@ -22,6 +20,8 @@ from mcp_memory.core.agent_runtime import (
     handle_project_manager_task,
     handle_sweeper_task,
 )
+from mcp_memory.core.direct_mutation_evidence import DirectMutationEntityDelta, DirectMutationEvidence
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC
 from mcp_memory.core.task_handlers import (
     CURATOR_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
@@ -35,13 +35,13 @@ from mcp_memory.hook_reminders import REMINDER_MESSAGE
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.handlers import call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
-from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_direct_mutation_evidence_store import PostgresDirectMutationEvidenceStore
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
+from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
@@ -53,7 +53,6 @@ from tests.small.work_item_repository_contract import (
     assert_heartbeat_extends_leases_and_allows_expired_reclaim,
     assert_release_defer_and_complete_items,
 )
-
 
 pytestmark = pytest.mark.medium
 

@@ -17,13 +17,12 @@ from mcp_memory.mutation_history import (
     Protection,
     ProtectionMode,
     RecordRevision,
-    RevisionRole,
     RestoreRequest,
     RestoreResult,
     RestoreResultStatus,
+    RevisionRole,
 )
 from mcp_memory.utils.db import DatabaseManager
-
 
 MAX_HISTORY_READ_LIMIT = 1000
 

@@ -7,7 +7,6 @@ import pytest
 
 from mcp_memory.daemon import DaemonLockTimeoutError, FilesystemLock
 
-
 pytestmark = pytest.mark.large
 
 

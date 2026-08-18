@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
-    DEFRAGMENTER_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
@@ -22,7 +22,6 @@ from mcp_memory.management.models import (
     NerdMaintenanceSummaryRowPayload,
 )
 from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow, TaskResultView
-
 
 _RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
     ("created", "created_count"),

@@ -4,7 +4,6 @@ import pytest
 
 from mcp_memory.core.storage import ensure_memory_dirs
 
-
 pytestmark = pytest.mark.small
 
 

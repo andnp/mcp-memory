@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 
 from mcp_memory.core.curation_identity import graph_token, link_token, record_token
 from mcp_memory.core.curation_models import CurationVerificationDescriptor
+from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
 from mcp_memory.curation_action_store import (
     CurationActionError,
     CurationActionFatalError,
@@ -26,11 +27,11 @@ from mcp_memory.curation_action_store import (
     CurationActionTransientError,
     CurationTransaction,
     MutationResult,
-    _build_summary,
     _action_intent_hash,
-    _check_replay_identity,
+    _build_summary,
     _canonical_id,
     _canonical_target_ids,
+    _check_replay_identity,
     _field,
     _link_mapping,
     _normalize_link_type,
@@ -51,11 +52,8 @@ from mcp_memory.mutation_history import (
     MutationEventStatus,
     RevisionRole,
 )
-from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
-
 from mcp_memory.storage.postgres_curation_store import _receipt_from_row
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
-
 
 logger = logging.getLogger(__name__)
 

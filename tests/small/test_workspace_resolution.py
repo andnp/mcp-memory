@@ -4,11 +4,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.core.task_handlers.workspace_resolution import (
     resolve_task_or_context_workspace_id,
     resolve_task_workspace_id,
 )
+from mcp_memory.core.tasks import TaskRecord
 
 
 def test_resolve_task_workspace_id_prefers_task_payload_then_task_field() -> None:

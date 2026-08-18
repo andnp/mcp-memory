@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 from typing import cast
-import sqlite3
 
 import pytest
 
@@ -10,7 +10,6 @@ from mcp_memory.config import LoggingConfig
 from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
-
 
 pytestmark = pytest.mark.small
 

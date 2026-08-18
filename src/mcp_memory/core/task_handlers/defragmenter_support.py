@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from inspect import isawaitable
 import re
+from inspect import isawaitable
 from typing import Any
 
 from mcp_memory.core.sampling import COLD_STORAGE_STRATEGY, ORPHAN_LOW_SUPPORT_STRATEGY, SEMANTIC_STRATEGY

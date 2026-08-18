@@ -19,8 +19,7 @@ from mcp_memory.application.ports import (
     RetrievalTelemetryPort,
 )
 from mcp_memory.core.ports import MemoryIDResolutionPort
-from mcp_memory.management.analytics_reporting import build_retrieval_analytics
-from mcp_memory.management.analytics_reporting import build_nerd_metrics
+from mcp_memory.management.analytics_reporting import build_nerd_metrics, build_retrieval_analytics
 from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
 from mcp_memory.mcp.internal_services import internal_search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
@@ -28,7 +27,6 @@ from mcp_memory.mcp.services import read_memory_record_service, search_memory_re
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.search import SearchExecutionDiagnostics
 from mcp_memory.utils.db import DatabaseManager
-
 
 pytestmark = pytest.mark.small
 

@@ -4,7 +4,6 @@ import pytest
 
 from mcp_memory.utils.atomic_io import atomic_write_json, atomic_write_text
 
-
 pytestmark = pytest.mark.small
 
 

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import sqlite3
 import time
 from collections.abc import Mapping
 from typing import Any
 
 from mcp_memory.storage.buffered_writer import BufferedWriter
-
 
 logger = logging.getLogger(__name__)
 _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1

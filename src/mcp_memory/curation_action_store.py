@@ -28,6 +28,7 @@ from mcp_memory.core.curation_identity import (
     record_token,
 )
 from mcp_memory.core.curation_models import CurationVerificationDescriptor
+from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -39,10 +40,7 @@ from mcp_memory.mutation_history import (
     MutationEventStatus,
     RevisionRole,
 )
-from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
-
 from mcp_memory.utils.db import DatabaseManager
-
 
 logger = logging.getLogger(__name__)
 

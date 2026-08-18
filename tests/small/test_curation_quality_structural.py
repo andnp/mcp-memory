@@ -4,7 +4,6 @@ import pytest
 
 from mcp_memory.core.curation_quality_structural import evaluate_structural_mutation
 
-
 pytestmark = pytest.mark.small
 
 

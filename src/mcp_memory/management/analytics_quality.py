@@ -20,7 +20,6 @@ from mcp_memory.management.models import (
 )
 from mcp_memory.management.reporting_rows import ScopedMemoryRow
 
-
 _QUALITY_SIGNAL_DEFS: tuple[tuple[str, str], ...] = (
     ("trace_like_memory_count", "Trace-like memories"),
     ("generic_summary_count", "Generic summaries"),

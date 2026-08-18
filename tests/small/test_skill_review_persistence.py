@@ -6,19 +6,18 @@ from uuid import uuid4
 import pytest
 
 from mcp_memory.application.skill_review_contract import (
+    ReviewOutcome,
     SkillReviewCommitRequest,
     SkillReviewDisposition,
     SkillReviewEvidence,
-    ReviewOutcome,
 )
 from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.storage.skill_review import (
-    SQLiteSkillReviewCommitStore,
     SkillReviewCommitConflict,
     SkillReviewCommitRejected,
+    SQLiteSkillReviewCommitStore,
 )
 from mcp_memory.utils.db import DatabaseManager
-
 
 pytestmark = pytest.mark.small
 

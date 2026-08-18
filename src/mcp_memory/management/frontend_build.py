@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess
-
 
 _BUILD_TIMEOUT_SECONDS = 120.0
 _FAILURE_MARKER_NAME = ".build-failed-marker"

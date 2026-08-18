@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from mcp_memory.core.provider_policy import ProviderSelectionInputs, ProviderSelectionRequest, select_provider_for_request
-from mcp_memory.core.task_handlers.constants import CONFLICT_DETECTOR_TASK_NAME, DEDUPLICATOR_TASK_NAME
+from mcp_memory.core.provider_policy import (
+    ProviderSelectionInputs,
+    ProviderSelectionRequest,
+    select_provider_for_request,
+)
 from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES
+from mcp_memory.core.task_handlers.constants import CONFLICT_DETECTOR_TASK_NAME, DEDUPLICATOR_TASK_NAME
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES, DEFAULT_LOW_PRIORITY_TASK_NAMES, task_class_for_task
 from mcp_memory.management.models import TaskRouteAuditPayload
-
 
 _RUNTIME_PROVIDERLESS_TASK_NAMES = frozenset(
     {

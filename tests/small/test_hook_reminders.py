@@ -10,7 +10,6 @@ from tests.small.hook_reminder_contract import (
     assert_session_end_marks_conversation_ended,
 )
 
-
 pytestmark = pytest.mark.small
 
 

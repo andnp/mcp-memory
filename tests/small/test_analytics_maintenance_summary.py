@@ -4,9 +4,7 @@ import pytest
 
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.management.analytics_reporting import build_maintenance_summary
-from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
-from mcp_memory.management.reporting_rows import coerce_task_result_view
-
+from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow, coerce_task_result_view
 
 pytestmark = pytest.mark.small
 

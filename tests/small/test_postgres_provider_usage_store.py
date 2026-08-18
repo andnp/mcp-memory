@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 
 import pytest
 
@@ -10,7 +10,6 @@ from tests.small.provider_usage_conversation_contract import (
     assert_normalizes_invalid_persisted_conversation_payloads,
     assert_preserves_first_terminal_conversation_finalization,
 )
-
 
 pytestmark = pytest.mark.small
 

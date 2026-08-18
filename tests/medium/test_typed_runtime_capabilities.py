@@ -16,7 +16,6 @@ from mcp_memory.mcp.services import (
     search_memory_records_service,
 )
 
-
 pytestmark = pytest.mark.medium
 
 

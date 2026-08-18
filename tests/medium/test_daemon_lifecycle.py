@@ -1,24 +1,37 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from pathlib import Path
 import signal
 import sys
-from types import SimpleNamespace
 import threading
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
 
-from click.testing import CliRunner
 import pytest
+from click.testing import CliRunner
+
 import mcp_memory.daemon as daemon_module
 import mcp_memory.daemon_process as daemon_process_module
-from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
-
 from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
-from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, inspect_daemon, read_daemon_metadata, stop_daemon
-from mcp_memory.daemon_process import DaemonHealthAssessment, DaemonSpawnDetails, assess_daemon_health, is_daemon_healthy, remove_metadata, spawn_daemon_process
-
+from mcp_memory.daemon import (
+    DaemonMetadata,
+    DaemonStopResult,
+    ensure_daemon_started,
+    inspect_daemon,
+    read_daemon_metadata,
+    stop_daemon,
+)
+from mcp_memory.daemon_process import (
+    DaemonHealthAssessment,
+    DaemonSpawnDetails,
+    assess_daemon_health,
+    is_daemon_healthy,
+    remove_metadata,
+    spawn_daemon_process,
+)
+from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 
 pytestmark = pytest.mark.medium
 

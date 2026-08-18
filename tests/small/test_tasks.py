@@ -1,54 +1,53 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core import tasks as tasks_module
+from mcp_memory.core._recovery_actions import RecoveryAction
+from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.maintenance_idle import (
+    AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS,
+    drain_legacy_cleanup_tasks,
+    resume_paused_recurring_maintenance,
+    should_pause_autonomous_recurring_maintenance,
+)
 from mcp_memory.core.ports import (
     MemoryIDResolutionPort,
     ReadCacheValidationPort,
     SearchHealthPort,
     StartupHealthPort,
 )
-from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.journal_operations import RecordThoughtOperation
-from mcp_memory.core.maintenance_idle import (
-    AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS,
-    drain_legacy_cleanup_tasks,
-    should_pause_autonomous_recurring_maintenance,
-    resume_paused_recurring_maintenance,
-)
-from mcp_memory.core._recovery_actions import RecoveryAction
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
-from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
+    PROJECT_MANAGER_TASK_NAME,
+    RECURRING_TASK_INTERVAL_SECONDS,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
     SYSTEM1_INGEST_TASK_NAME,
-    RECURRING_TASK_INTERVAL_SECONDS,
-    PROJECT_MANAGER_TASK_NAME,
 )
-from mcp_memory.core import tasks as tasks_module
+from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
+from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
-from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
-
 
 pytestmark = pytest.mark.small
 

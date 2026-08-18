@@ -14,7 +14,6 @@ from mcp_memory.operational_store_rows import (
 )
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
-
 _USE_REPOSITORY_WORKSPACE = object()
 
 

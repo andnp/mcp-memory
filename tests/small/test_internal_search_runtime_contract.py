@@ -5,8 +5,8 @@ import json
 import pytest
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider
 from mcp_memory.core.task_handlers import ingest
 from mcp_memory.core.task_handlers.tool_loop import InternalToolLoopResult
 from mcp_memory.internal_tool_call_tracking import internal_tool_is_mutating

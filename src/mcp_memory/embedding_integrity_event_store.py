@@ -11,7 +11,6 @@ from mcp_memory.operational_store_rows import (
 )
 from mcp_memory.utils.db import DatabaseManager
 
-
 EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY = "integrity_scan_summary"
 EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE = "blocked_fallback_write"
 

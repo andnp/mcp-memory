@@ -27,7 +27,6 @@ from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
 
-
 pytestmark = pytest.mark.small
 
 

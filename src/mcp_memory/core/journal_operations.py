@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from threading import Event, Lock, Thread
 import time
+from dataclasses import dataclass
+from threading import Event, Lock, Thread
 from typing import cast
 
-from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
-from mcp_memory.core.system1_scheduling import System1IngestScheduleResult, schedule_system1_ingest
 from mcp_memory.core.journal import JournalEntry, System1Journal
+from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
 from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord
+from mcp_memory.core.system1_scheduling import System1IngestScheduleResult, schedule_system1_ingest
 from mcp_memory.storage.shared_read_cache import SharedReadCache
-
 
 logger = logging.getLogger(__name__)
 _RECORD_THOUGHT_AUTHORITATIVE_TIMEOUT_SECONDS = 5.0

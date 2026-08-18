@@ -9,7 +9,6 @@ from mcp_memory.utils.db_schema import (
     finalize_schema_setup,
 )
 
-
 pytestmark = pytest.mark.small
 
 

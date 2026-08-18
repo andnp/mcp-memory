@@ -6,7 +6,6 @@ from mcp_memory.storage.postgres import build_postgres_runtime_components
 from mcp_memory.storage.sqlite import build_sqlite_runtime_components
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
 
-
 __all__ = [
     "PostgresBackendNotImplementedError",
     "StorageBackendResources",

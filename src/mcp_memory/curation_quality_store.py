@@ -12,7 +12,6 @@ from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQu
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 from mcp_memory.utils.db import DatabaseManager
 
-
 _POSTGRES_QUALITY_EVIDENCE_SELECT = """
     SELECT run_id, action_id, operation, affected_memory_ids_json,
            policy_version, query_id, status, before_ranked_ids_json,

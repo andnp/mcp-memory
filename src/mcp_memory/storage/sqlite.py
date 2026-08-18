@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from searchkernel.runtime import QueryEmbeddingCache
+
 from mcp_memory.application.memory_embedding_maintenance import (
     MemoryEmbeddingMaintenance,
 )
@@ -16,18 +18,17 @@ from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
-from searchkernel.runtime import QueryEmbeddingCache
 from mcp_memory.runtime_log_store import RuntimeLogRepository
-from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
-from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 from mcp_memory.storage.direct_mutation_evidence_store import SQLiteDirectMutationEvidenceStore
 from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressActionReceiptStore,
     SQLiteIngressBatchEvidenceStore,
     SQLiteSourceCoverageStore,
 )
-from mcp_memory.storage.ingress_quality_store import SQLiteIngressQualityEvidenceStore
 from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
+from mcp_memory.storage.ingress_quality_store import SQLiteIngressQualityEvidenceStore
+from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager

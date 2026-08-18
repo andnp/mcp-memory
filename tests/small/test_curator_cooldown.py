@@ -9,13 +9,12 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.curator_support import (
     _quality_feedback_candidates,
-    curator_quality_feedback,
     curator_candidate_revision_token,
+    curator_quality_feedback,
     filter_curator_candidates,
 )
 from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState, SQLiteCurationStore
 from mcp_memory.mutation_history import MutationActorKind
-
 
 pytestmark = pytest.mark.small
 

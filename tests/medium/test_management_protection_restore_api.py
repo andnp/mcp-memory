@@ -16,7 +16,6 @@ from mcp_memory.management.service import ManagementService
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 
-
 pytestmark = pytest.mark.medium
 
 

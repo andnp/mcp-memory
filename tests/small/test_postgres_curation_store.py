@@ -5,11 +5,10 @@ from typing import Any, cast
 
 import pytest
 
-from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
 from mcp_memory.curation_store import CurationReceiptHydrationError
+from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
 from mcp_memory.storage.postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION
 from tests.small.curation_repository_contract import assert_curation_repository_contract
-
 
 pytestmark = pytest.mark.small
 
@@ -188,8 +187,8 @@ def test_postgres_migration_adds_persistent_search_epochs() -> None:
 def test_postgres_json_hydration_accepts_native_jsonb_values() -> None:
     from uuid import uuid4
 
-    from mcp_memory.storage.postgres_curation_store import _json_value, _receipt_from_row
     from mcp_memory.curation_store import CurationReceiptState
+    from mcp_memory.storage.postgres_curation_store import _json_value, _receipt_from_row
 
     run_id, action_id, memory_id = uuid4(), uuid4(), uuid4()
     descriptor = {

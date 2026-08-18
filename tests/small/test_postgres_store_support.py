@@ -6,9 +6,8 @@ from typing import cast
 import psycopg
 import pytest
 
-from mcp_memory.storage.session import SessionManager
 from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
-
+from mcp_memory.storage.session import SessionManager
 
 pytestmark = pytest.mark.small
 

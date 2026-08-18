@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from collections.abc import Iterator, Sequence
 from typing import Any, cast
 from uuid import UUID
 
@@ -20,8 +19,8 @@ from mcp_memory.curation_store import (
     CandidateDisposition,
     CurationActionReceipt,
     CurationCandidateState,
-    CurationReceiptIdentityConflictError,
     CurationReceiptHydrationError,
+    CurationReceiptIdentityConflictError,
     CurationReceiptState,
     CurationRun,
     CurationRunState,

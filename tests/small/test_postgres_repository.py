@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
-from collections.abc import Iterator
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, TypeAlias
 from uuid import UUID
 
 import pytest
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import (
@@ -22,12 +21,10 @@ from mcp_memory.core.ports.memory import (
 from mcp_memory.embeddings import EmbeddingRecord
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
-from searchkernel.utils.similarity import cosine_similarity_lists
 from tests.small.maintenance_candidate_query_contract import (
     assert_maintenance_candidate_query_contract,
 )
 from tests.small.maintenance_read_repository_contract import assert_maintenance_read_preserves_telemetry
-
 
 pytestmark = pytest.mark.small
 

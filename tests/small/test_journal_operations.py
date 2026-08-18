@@ -13,7 +13,6 @@ from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 
-
 pytestmark = pytest.mark.small
 
 

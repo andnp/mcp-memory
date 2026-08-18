@@ -1,19 +1,19 @@
 from typing import Any
 
+from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.agent_run_reporting import (
-    build_agent_run_history_payload,
-    build_recent_agent_runs,
-    classify_curator_run,
     CURATOR_NARRATIVE_ONLY,
     CURATOR_OBSERVED_MUTATION,
     CURATOR_PROVIDER_FAILURE,
     CURATOR_UNKNOWN_LEGACY,
     CURATOR_VALID_NO_OP,
+    build_agent_run_history_payload,
+    build_recent_agent_runs,
+    classify_curator_run,
     decode_run_result,
     extract_ingest_audit,
     extract_run_result_metadata,
 )
-from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
 from mcp_memory.management.query_runner import ManagementQueryAdapter
 from mcp_memory.management.reporting_rows import coerce_task_result_view

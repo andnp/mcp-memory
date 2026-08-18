@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
 import logging
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.integrations.federation_source import MemoryFederationSource
+from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.service import ManagementService
-
 
 logger = logging.getLogger(__name__)
 

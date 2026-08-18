@@ -13,7 +13,6 @@ from benchmarks.search_quality import (
     run_search_quality,
 )
 
-
 pytestmark = pytest.mark.small
 
 

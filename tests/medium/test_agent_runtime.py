@@ -1,13 +1,15 @@
-import json
 import asyncio
+import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import time
 from typing import cast
 
 import pytest
 
 import mcp_memory.core.agent_runtime as _agent_runtime_module
+import mcp_memory.core.task_handlers.ingest as _ingest_agentic_support
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import (
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     CONFLICT_DETECTOR_TASK_NAME,
@@ -21,11 +23,12 @@ from mcp_memory.core.agent_runtime import (
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
     TAXONOMIST_TASK_NAME,
+    _provider_for_task,
     bootstrap_background_tasks,
     build_runtime_task_worker,
-    handle_defragmenter_task,
     handle_conflict_detector_task,
     handle_deduplicator_task,
+    handle_defragmenter_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
     handle_ingest_system1_task,
@@ -33,19 +36,20 @@ from mcp_memory.core.agent_runtime import (
     handle_summarize_memory_task,
     handle_sweeper_task,
     handle_taxonomist_task,
-    _provider_for_task,
 )
+from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.maintenance_schedule import RECURRING_TASK_INTERVAL_SECONDS
-from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
-from mcp_memory.context import ApplicationContext
 from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 from mcp_memory.core.providers import AgenticRunResult
+from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
+from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY
 from mcp_memory.core.task_handlers.curator_support import (
     CURATOR_MAX_MEMORY_CHARS,
     CURATOR_MAX_SEED_RECORDS,
+)
+from mcp_memory.core.task_handlers.curator_support import (
     select_curator_seed_records as _select_curator_seed_records,
 )
-from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.task_handlers.deduplicator_handlers import (
     DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
     build_deduplicator_agent_prompt,
@@ -56,17 +60,14 @@ from mcp_memory.core.task_handlers.ingest import (
     _build_ingest_agent_prompt,
     _normalize_ingest_agentic_result,
 )
-import mcp_memory.core.task_handlers.ingest as _ingest_agentic_support
-from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY
-from mcp_memory.embeddings import SQLiteVectorStore
-from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
-from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.relational.search import RelationalMemorySearchService
 from tests.sdk.providers import FakeAIProvider
-
 
 pytestmark = pytest.mark.medium
 

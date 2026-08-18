@@ -9,8 +9,8 @@ from mcp_memory.mcp.services import (
     _record_search_invocation,
     read_memory_record_service,
     read_memory_records_service,
-    search_memory_records_service,
     search_memory_records_async_service,
+    search_memory_records_service,
 )
 from mcp_memory.mcp.validation import optional_bool, optional_positive_int, optional_string, require_string
 from mcp_memory.serialization import (
@@ -18,7 +18,6 @@ from mcp_memory.serialization import (
     agent_memory_record_payload,
     agent_memory_record_payload_with_metadata,
 )
-
 
 _DEFAULT_MAINTENANCE_SEARCH_LIMIT = 10
 _DEFAULT_MAINTENANCE_RELATIONSHIP_LIMIT = 20

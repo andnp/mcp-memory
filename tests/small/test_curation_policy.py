@@ -1,7 +1,5 @@
 from uuid import uuid4
 
-from mcp_memory.mutation_history import ProtectionMode
-
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
     ClaimManifest,
@@ -19,6 +17,7 @@ from mcp_memory.core.curation_policy import (
     is_status_shaped_content,
     policy_mode,
 )
+from mcp_memory.mutation_history import ProtectionMode
 
 
 def test_policy_enables_all_supported_operations() -> None:

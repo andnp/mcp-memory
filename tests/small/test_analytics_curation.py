@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import json
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 
-from mcp_memory.management.analytics_curation import build_curation_metrics
 from mcp_memory.core.curation_quality import CurationQualityEvidence
 from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
-
+from mcp_memory.management.analytics_curation import build_curation_metrics
 
 pytestmark = pytest.mark.small
 

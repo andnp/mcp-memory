@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-import mcp_memory.daemon_app as daemon_app_module
 import mcp_memory.core.journal_operations as journal_operations_module
+import mcp_memory.daemon_app as daemon_app_module
 from mcp_memory.config import Config, StorageCacheMode
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.storage.shared_read_cache import SharedReadCache
-
 
 pytestmark = pytest.mark.small
 

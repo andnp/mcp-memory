@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import time
-from typing import Any
-from typing import cast
+from typing import Any, cast
 
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.maintenance_schedule import (
-    CONFLICT_DETECTOR_TASK_NAME,
     AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES,
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+    CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
@@ -18,11 +17,10 @@ from mcp_memory.core.maintenance_schedule import (
     RECURRING_TASK_INTERVAL_SECONDS,
     TAXONOMIST_TASK_NAME,
 )
-from mcp_memory.core.task_handlers import task_priority
-from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
-from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskRunSummary
-
+from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
+from mcp_memory.core.task_handlers import task_priority
+from mcp_memory.core.task_results import TaskRunResult
 
 AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS = 3600.0
 AUTONOMOUS_MAINTENANCE_TRIGGERS = {"recurring_schedule", "recurring_follow_up"}

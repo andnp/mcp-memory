@@ -7,12 +7,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from searchkernel.search.record_pipeline import RecordSearchOutcome
 
 import mcp_memory.integrations.memory_retrieval as memory_retrieval
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.integrations.memory_retrieval import MemoryRetrievalFacade, MemorySearchRequest
-from searchkernel.search.record_pipeline import RecordSearchOutcome
-
 
 pytestmark = pytest.mark.small
 

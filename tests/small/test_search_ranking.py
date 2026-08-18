@@ -13,7 +13,6 @@ from mcp_memory.core.search_ranking import (
     _has_exact_identifier_match,
 )
 
-
 pytestmark = pytest.mark.small
 
 

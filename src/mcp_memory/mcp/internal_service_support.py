@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 import re
+import sqlite3
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_policy import is_generic_summary
-
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _OVERSIZED_MEMORY_WARNING_CHARS = 4_000

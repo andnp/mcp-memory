@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import json
-from hashlib import sha256
 import math
 import time
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal, Protocol, TypedDict, cast
 
-from mcp_memory.daemon import ensure_daemon_started
-from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord
+from mcp_memory.daemon import ensure_daemon_started
+from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService

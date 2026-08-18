@@ -7,7 +7,6 @@ import pytest
 from mcp_memory.config import AIConfig, Config, ProviderRoutingConfig
 from mcp_memory.mcp import runtime
 
-
 pytestmark = pytest.mark.medium
 
 

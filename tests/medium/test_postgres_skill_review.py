@@ -8,10 +8,10 @@ import pytest
 
 from mcp_memory.application.memory_use_cases import CommitSkillReviewUseCase
 from mcp_memory.application.skill_review_contract import (
+    ReviewOutcome,
     SkillReviewCommitRequest,
     SkillReviewDisposition,
     SkillReviewEvidence,
-    ReviewOutcome,
 )
 from mcp_memory.context import ApplicationContext
 from mcp_memory.storage.postgres import ensure_postgres_schema
@@ -21,7 +21,6 @@ from mcp_memory.storage.skill_review import (
     PostgresSkillReviewCommitStore,
     SkillReviewCommitConflict,
 )
-
 
 pytestmark = pytest.mark.medium
 

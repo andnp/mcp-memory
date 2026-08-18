@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.ports.work_items import (
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_CONFLICT_REVIEW,
+    WORK_FAMILY_GRAPH_LINK_REVIEW,
+)
 from mcp_memory.core.sampling import (
     BOUNDED_NOISE_STRATEGY,
     CONFLICT_FRONTIER_STRATEGY,
@@ -23,13 +30,6 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     run_claimed_review_work_item,
     run_sparse_frontier_review_task,
     work_item_result_metadata,
-)
-import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
-from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.core.ports.work_items import (
-    EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_CONFLICT_REVIEW,
-    WORK_FAMILY_GRAPH_LINK_REVIEW,
 )
 
 # ---------------------------------------------------------------------------

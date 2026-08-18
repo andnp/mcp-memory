@@ -1,10 +1,14 @@
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 import pytest
 
-from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, detect_shared_storage_risks, log_shared_storage_risks, prune_old_backups
-
+from mcp_memory.sqlite_backup import (
+    create_and_prune_sqlite_backup,
+    detect_shared_storage_risks,
+    log_shared_storage_risks,
+    prune_old_backups,
+)
 
 pytestmark = pytest.mark.small
 

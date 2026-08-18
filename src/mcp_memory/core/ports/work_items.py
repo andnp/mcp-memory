@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-
 WORK_ITEM_STATUS_PENDING = "pending"
 WORK_ITEM_STATUS_RUNNING = "running"
 WORK_ITEM_STATUS_COMPLETED = "completed"

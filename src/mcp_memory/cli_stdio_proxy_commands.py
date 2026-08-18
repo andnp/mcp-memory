@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import click
 
-
 type StdioProxyCommandAction = Callable[[bool, str | None], None]
 
 

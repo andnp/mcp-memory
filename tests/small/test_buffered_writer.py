@@ -6,7 +6,6 @@ import pytest
 
 from mcp_memory.storage.buffered_writer import BufferedWriter
 
-
 pytestmark = pytest.mark.small
 
 

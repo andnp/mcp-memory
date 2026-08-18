@@ -4,14 +4,13 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
-from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
+from mcp_memory.utils.db import SCHEMA_VERSION, DatabaseManager
 from mcp_memory.utils.db_schema import (
     apply_legacy_additive_migrations,
     create_current_schema,
     finalize_schema_setup,
 )
 from tests.small.mutation_history_repository_contract import assert_mutation_history_repository_contract
-
 
 pytestmark = pytest.mark.small
 

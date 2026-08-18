@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 from typing import Any, cast
 
 from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
@@ -10,50 +10,29 @@ from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.ports import EmbeddingMaintenancePort
-from mcp_memory.management.analytics_service import AnalyticsService, AnalyticsServiceDependencies
-from mcp_memory.management.context_resources import (
-    ManagementContextResources,
-    _build_default_embedding_integrity_events as _context_build_default_embedding_integrity_events,
-    _build_default_provider_usage as _context_build_default_provider_usage,
-    ensure_management_context_resources,
-)
-from mcp_memory.management.capabilities import ManagementCapabilities
-from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
-from mcp_memory.management.runtime_health_service import (
-    RuntimeHealthService,
-    RuntimeHealthServiceDependencies,
-    _coerce_transport_diagnostics_payload,  # noqa: F401 - retained for management helper compatibility
-    _embedding_integrity_snapshot_payload,  # noqa: F401 - retained for management helper compatibility
-)
-from mcp_memory.management.runtime_log_service import (
-    RuntimeLogService,
-    RuntimeLogServiceDependencies,
-    _ensure_dashboard_base_href,  # noqa: F401 - retained for management helper compatibility
-    _resolve_log_workspace_id,  # noqa: F401 - retained for management helper compatibility
-)
-from mcp_memory.management.mutation_history_service import (
-    MutationHistoryService,
-    MutationHistoryServiceDependencies,
-)
-from mcp_memory.management.memory_service import (
-    MemoryService,
-    MemoryServiceDependencies,
-    _USE_SERVICE_WORKSPACE,
-    _resolve_service_workspace_id,  # noqa: F401 - retained for management helper compatibility
-)
-from mcp_memory.management.task_reporting_service import (
-    TaskReportingService,
-    TaskReportingServiceDependencies,
-)
-from mcp_memory.management.task_administration import (
-    TaskAdministrationService,
-    TaskAdministrationServiceDependencies,
-)
+from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalPort,
     build_memory_retrieval_facade,
 )
-from mcp_memory.integrations.federation_source import MemoryFederationSource
+from mcp_memory.management.analytics_service import AnalyticsService, AnalyticsServiceDependencies
+from mcp_memory.management.capabilities import ManagementCapabilities
+from mcp_memory.management.context_resources import (
+    ManagementContextResources,
+    ensure_management_context_resources,
+)
+from mcp_memory.management.context_resources import (
+    _build_default_embedding_integrity_events as _context_build_default_embedding_integrity_events,
+)
+from mcp_memory.management.context_resources import (
+    _build_default_provider_usage as _context_build_default_provider_usage,
+)
+from mcp_memory.management.memory_service import (
+    _USE_SERVICE_WORKSPACE,
+    MemoryService,
+    MemoryServiceDependencies,
+    _resolve_service_workspace_id,  # noqa: F401 - retained for management helper compatibility
+)
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     AIConversationListPayload,
@@ -67,24 +46,48 @@ from mcp_memory.management.models import (
     ProtectionListPayload,
     ProtectionMutationPayload,
     QualityCleanupCandidatesPayload,
+    RestoreEligibilityPayload,
+    RestoreRequestPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogSummaryPayload,
-    RestoreEligibilityPayload,
-    RestoreRequestPayload,
     SelectorStatsPayload,
     TaskDetailPayload,
-    TaskSamplingSummaryPayload,
     TaskListPayload,
+    TaskSamplingSummaryPayload,
+)
+from mcp_memory.management.mutation_history_service import (
+    MutationHistoryService,
+    MutationHistoryServiceDependencies,
+)
+from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
+from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
+from mcp_memory.management.runtime_health_service import (
+    RuntimeHealthService,
+    RuntimeHealthServiceDependencies,
+    _coerce_transport_diagnostics_payload,  # noqa: F401 - retained for management helper compatibility
+    _embedding_integrity_snapshot_payload,  # noqa: F401 - retained for management helper compatibility
+)
+from mcp_memory.management.runtime_log_service import (
+    RuntimeLogService,
+    RuntimeLogServiceDependencies,
+    _ensure_dashboard_base_href,  # noqa: F401 - retained for management helper compatibility
+    _resolve_log_workspace_id,  # noqa: F401 - retained for management helper compatibility
+)
+from mcp_memory.management.task_administration import (
+    TaskAdministrationService,
+    TaskAdministrationServiceDependencies,
+)
+from mcp_memory.management.task_reporting_service import (
+    TaskReportingService,
+    TaskReportingServiceDependencies,
 )
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
-from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.serialization import (
     task_payload,
 )
-
 
 _build_default_provider_usage = _context_build_default_provider_usage
 _build_default_embedding_integrity_events = _context_build_default_embedding_integrity_events

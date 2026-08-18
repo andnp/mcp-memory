@@ -24,7 +24,6 @@ from mcp_memory.core.task_handlers.constants import (
 )
 from mcp_memory.core.task_policy import DEFAULT_TASK_CLASS_BY_NAME
 
-
 pytestmark = pytest.mark.small
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import time
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from mcp_memory.management.models import (
@@ -10,13 +10,12 @@ from mcp_memory.management.models import (
     SelectorClassificationBreakdownPayload,
     SelectorFeatureRollupRowPayload,
     SelectorFeatureSnapshotPayload,
-    SelectorPopulationSnapshotPayload,
     SelectorOutcomeRowPayload,
+    SelectorPopulationSnapshotPayload,
     SelectorRecentDiagnosticPayload,
     SelectorStatsPayload,
     SelectorStatsSummaryPayload,
 )
-
 
 UNKNOWN_SELECTOR_MODE = "unspecified"
 UNKNOWN_SELECTOR_STRATEGY = "unknown"

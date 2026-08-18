@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from mcp_memory.core.journal import JournalEntry, RECOVERABLE_RETENTION_SECONDS, _ALL_WORKSPACES
+from mcp_memory.core.journal import _ALL_WORKSPACES, RECOVERABLE_RETENTION_SECONDS, JournalEntry
 from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
 import logging
+from collections.abc import Sequence
 
 import pytest
 
@@ -14,7 +14,6 @@ from tests.small.task_execution_attempt_contract import (
     assert_records_attempt_lifecycle,
     assert_reopens_terminal_attempt_for_new_provider_call,
 )
-
 
 pytestmark = pytest.mark.small
 

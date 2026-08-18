@@ -14,7 +14,6 @@ from mcp_memory.core.task_handlers.maintenance_housekeeping import (
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.relational.repository import RelationalMemoryRepository
 
-
 pytestmark = pytest.mark.small
 
 

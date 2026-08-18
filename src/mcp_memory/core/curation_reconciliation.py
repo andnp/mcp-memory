@@ -29,7 +29,6 @@ from mcp_memory.core.ports.curation import (
 )
 from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
 
-
 CURATION_RECONCILIATION_LOCK_RETRY_ATTEMPTS = 3
 CURATION_RECONCILIATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 CURATION_RECONCILIATION_RUN_LIMIT = 200

@@ -6,10 +6,6 @@ from typing import Literal
 
 import pytest
 
-from mcp_memory.config import Config, SearchKernelConfig
-from mcp_memory.embeddings import SQLiteVectorStore
-from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.utils.db import DatabaseManager
 from benchmarks.search_quality import (
     QueryClass,
     SearchObservation,
@@ -27,7 +23,10 @@ from benchmarks.search_quality.runner import (
     SearchPolicyReport,
     evaluate_policy_acceptance,
 )
-
+from mcp_memory.config import Config, SearchKernelConfig
+from mcp_memory.embeddings import SQLiteVectorStore
+from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.utils.db import DatabaseManager
 
 pytestmark = pytest.mark.small
 

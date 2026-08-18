@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
-import shlex
 from typing import Any, TextIO
 from urllib.error import HTTPError, URLError
 
@@ -11,7 +11,6 @@ from mcp_memory.config import resolve_workspace_root
 from mcp_memory.daemon import ensure_daemon_started
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.utils.atomic_io import atomic_write_json
-
 
 SUPPORTED_INSTALL_TOOLS = ("copilot", "claude", "gemini")
 SUPPORTED_INSTALL_COMPONENTS = ("hooks", "mcp")

@@ -9,7 +9,6 @@ from tests.small.provider_usage_conversation_contract import (
     assert_preserves_first_terminal_conversation_finalization,
 )
 
-
 pytestmark = pytest.mark.small
 
 

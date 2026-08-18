@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.mcp.validation import optional_positive_int, optional_string, require_string, string_list
 from mcp_memory.core.ports.work_items import compatibility_group_families
+from mcp_memory.mcp.validation import optional_positive_int, optional_string, require_string, string_list
 
 
 def normalize_internal_workspace_scope(workspace_id: str | None) -> str | None:

@@ -20,7 +20,6 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.storage.noop import NoopProviderUsageRepository
 from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
 
-
 pytestmark = pytest.mark.small
 
 

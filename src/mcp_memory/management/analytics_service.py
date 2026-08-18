@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp_memory.application.ports import MemorySearchPort
+from mcp_memory.core.ports import SearchHealthPort
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.models import (
@@ -17,8 +18,6 @@ from mcp_memory.management.models import (
 from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
-from mcp_memory.core.ports import SearchHealthPort
-
 
 _LOW_CONVERSION_DEFAULT_MIN_SEARCH_COUNT = 3
 _LOW_CONVERSION_DEFAULT_MAX_RATE = 0.25

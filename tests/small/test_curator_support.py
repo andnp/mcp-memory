@@ -4,7 +4,6 @@ import pytest
 
 from mcp_memory.core.task_handlers.curator_support import curator_summary_claims_mutating_actions
 
-
 pytestmark = pytest.mark.small
 
 

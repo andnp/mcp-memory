@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_quality_clusters import evaluate_cluster_utility
 from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
@@ -27,10 +28,8 @@ from mcp_memory.core.curation_shadow import (
     _persist_direct_quality_run,
 )
 from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.context import ApplicationContext
 from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
 from mcp_memory.curation_store import SQLiteCurationStore
-
 
 pytestmark = pytest.mark.small
 

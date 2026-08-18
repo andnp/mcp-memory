@@ -19,22 +19,21 @@ from mcp_memory.core.curation_models import (
     NormalizeMemoryAction,
 )
 from mcp_memory.core.curation_reconciliation import (
-    CurationReconciliationDisposition,
     CurationReconciler,
+    CurationReconciliationDisposition,
 )
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import (
     CurationReceiptState,
+    CurationRepository,
     CurationRun,
     CurationRunOutcome,
     CurationRunState,
-    CurationRepository,
 )
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.relational.search import MaintenanceReadRepositoryLike
-
 
 pytestmark = pytest.mark.medium
 

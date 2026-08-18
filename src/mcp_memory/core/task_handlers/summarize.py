@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.summaries import build_deterministic_summary
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.summaries import build_deterministic_summary
 
 
 async def handle_summarize_memory_task(

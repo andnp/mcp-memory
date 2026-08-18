@@ -9,7 +9,6 @@ from random import Random
 from statistics import median
 from typing import Any, Generic, Protocol, TypeVar
 
-
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
 CURATOR_TASK_NAME = "memory-curator"

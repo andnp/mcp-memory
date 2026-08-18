@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "curation"
 _TOP_LEVEL_KEYS = {
     "schema_version",

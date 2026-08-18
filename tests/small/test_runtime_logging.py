@@ -9,7 +9,6 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 
-
 pytestmark = pytest.mark.small
 
 

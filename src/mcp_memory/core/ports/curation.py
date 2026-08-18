@@ -1,5 +1,4 @@
 """Application-owned curation port compatibility surface."""
-from mcp_memory.curation_store import (CandidateDisposition, CurationActionReceipt, CurationCandidateState, CurationReceiptHydrationError, CurationReceiptState, CurationRepository, CurationRun, CurationRunOutcome, CurationRunState)
 from mcp_memory.curation_action_store import (
     CurationActionContractError,
     CurationActionFatalError,
@@ -9,6 +8,18 @@ from mcp_memory.curation_action_store import (
     CurationTransaction,
     MutationResult,
 )
+from mcp_memory.curation_store import (
+    CandidateDisposition,
+    CurationActionReceipt,
+    CurationCandidateState,
+    CurationReceiptHydrationError,
+    CurationReceiptState,
+    CurationRepository,
+    CurationRun,
+    CurationRunOutcome,
+    CurationRunState,
+)
+
 __all__ = [
     "CandidateDisposition",
     "CurationActionContractError",

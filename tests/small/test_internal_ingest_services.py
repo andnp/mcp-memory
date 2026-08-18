@@ -16,21 +16,24 @@ from mcp_memory.core.ingest_claim_lifecycle import (
     _reset_recorded_ingest_handled_entry_ids,
 )
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.task_handlers import (
+    SUMMARIZE_MEMORY_PRIORITY,
+    SUMMARIZE_MEMORY_TASK_NAME,
+    SYSTEM1_INGEST_TASK_NAME,
+)
 from mcp_memory.core.task_submission import enqueue_summary_refresh_task
-from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME, SYSTEM1_INGEST_TASK_NAME
 from mcp_memory.core.tasks import SQLiteTaskQueue
-from mcp_memory.mcp.internal_service_support import _enqueue_summary_task
 from mcp_memory.mcp.internal_ingest_services import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
     INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
 )
+from mcp_memory.mcp.internal_service_support import _enqueue_summary_task
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.transport import internal_tool_services
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.storage.ingress_evidence_store import SQLiteIngressActionReceiptStore
 from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
-
 
 pytestmark = pytest.mark.small
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import time
 from time import perf_counter
 from typing import Any, cast
 from uuid import uuid4
@@ -32,7 +32,6 @@ from mcp_memory.serialization import (
     search_result_payload,
 )
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
-
 
 _USE_SERVICE_WORKSPACE = object()
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0

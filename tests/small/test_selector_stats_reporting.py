@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_memory.management.models import SelectorFeatureSnapshotPayload
-from mcp_memory.management.models import AgentRunHistoryPayload, RunResultMetadataPayload
+from mcp_memory.management.models import (
+    AgentRunHistoryPayload,
+    RunResultMetadataPayload,
+    SelectorFeatureSnapshotPayload,
+)
 from mcp_memory.management.selector_stats_reporting import (
     FRESH_SELECTOR,
     SEEDED_CLAIMED,
@@ -11,7 +14,6 @@ from mcp_memory.management.selector_stats_reporting import (
     build_selector_stats_payload,
     classify_selector_run,
 )
-
 
 pytestmark = pytest.mark.small
 

@@ -13,7 +13,6 @@ from mcp_memory.core.retrieval import (
     RetrievalResult,
 )
 
-
 pytestmark = pytest.mark.small
 
 

@@ -11,8 +11,8 @@ from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.mcp.transport import dispatch_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.mcp.transport import dispatch_internal_memory_tool
 
 pytestmark = pytest.mark.medium
 

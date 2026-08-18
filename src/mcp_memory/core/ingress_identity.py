@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from collections.abc import Sequence
 from unicodedata import normalize
 from uuid import UUID
 

@@ -4,10 +4,9 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.curation_store import SQLiteCurationStore
-from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
+from mcp_memory.utils.db import SCHEMA_VERSION, DatabaseManager
 from mcp_memory.utils.db_schema import apply_legacy_additive_migrations, create_current_schema, finalize_schema_setup
 from tests.small.curation_repository_contract import assert_curation_repository_contract
-
 
 pytestmark = pytest.mark.small
 

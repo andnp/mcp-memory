@@ -4,9 +4,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from mcp_memory.core.journal import System1Journal, _ALL_WORKSPACES
+from mcp_memory.core.journal import _ALL_WORKSPACES, System1Journal
 from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord
-
 
 _ALL_WORKSPACES_WIRE = "*"
 

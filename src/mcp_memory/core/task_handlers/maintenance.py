@@ -2,21 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp_memory.context import ApplicationContext
-from mcp_memory.core.task_handlers.maintenance_framework import (
-    sample_maintenance_candidates,
-    sampling_payload,
-)
 import mcp_memory.core.task_handlers.curator_handlers as _curator_handlers
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 import mcp_memory.core.task_handlers.deduplicator_handlers as _deduplicator_handlers
 import mcp_memory.core.task_handlers.defragmenter_support as _defragmenter_support
 import mcp_memory.core.task_handlers.maintenance_housekeeping as _maintenance_housekeeping
-from mcp_memory.core.task_handlers.maintenance_normalization import normalize_tag_values
 import mcp_memory.core.task_handlers.relationship_review_handlers as _relationship_review_handlers
 import mcp_memory.core.task_handlers.taxonomist_handlers as _taxonomist_handlers
-from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
+from mcp_memory.core.task_handlers.maintenance_framework import (
+    sample_maintenance_candidates,
+    sampling_payload,
+)
+from mcp_memory.core.task_handlers.maintenance_normalization import normalize_tag_values
 
 handle_project_manager_task = _maintenance_housekeeping.handle_project_manager_task
 handle_fact_checker_task = _maintenance_housekeeping.handle_fact_checker_task

@@ -4,7 +4,7 @@ from collections.abc import Callable, Generator
 
 import pytest
 
-from mcp_memory.hook_reminders import HookReminderService, REMINDER_MESSAGE
+from mcp_memory.hook_reminders import REMINDER_MESSAGE, HookReminderService
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from tests.small.hook_reminder_contract import (
@@ -13,7 +13,6 @@ from tests.small.hook_reminder_contract import (
     assert_post_tool_use_only_reminds_after_interval,
     assert_session_end_marks_conversation_ended,
 )
-
 
 pytestmark = pytest.mark.medium
 

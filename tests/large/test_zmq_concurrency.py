@@ -15,7 +15,6 @@ from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.mcp.runtime import create_runtime
 
-
 pytestmark = pytest.mark.large
 
 

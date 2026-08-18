@@ -9,7 +9,6 @@ from mcp_memory.internal_tool_call_tracking import (
     internal_tool_is_mutating,
 )
 
-
 _MAX_LEDGER_VALIDATION_ISSUES = 8
 
 

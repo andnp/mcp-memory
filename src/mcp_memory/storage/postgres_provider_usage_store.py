@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import time
+from collections.abc import Mapping
 from typing import cast
 
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 from mcp_memory.operational_store_rows import (
     AIConversationRecord,
     ProviderAdmissionStateRecord,
@@ -12,7 +13,6 @@ from mcp_memory.operational_store_rows import (
     build_provider_usage_summaries,
     encode_optional_json_object,
 )
-from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 from mcp_memory.provider_usage_store import (
     _ALL_WORKSPACES,
     _UNCHANGED,

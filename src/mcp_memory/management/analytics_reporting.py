@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import time
 from collections import Counter
 from dataclasses import dataclass, field
-import time
 from statistics import median
 
 from mcp_memory.core.ports import SearchHealthPort
@@ -10,20 +10,22 @@ from mcp_memory.management.analytics_common import _bucket_starts, _datetime_to_
 from mcp_memory.management.analytics_curation import build_curation_metrics
 from mcp_memory.management.analytics_maintenance import build_maintenance_summary
 from mcp_memory.management.analytics_provider_policy import build_provider_policy_rollups
-from mcp_memory.management.analytics_quality import _build_backlog_series
-from mcp_memory.management.analytics_quality import _MemoryQualitySignals
-from mcp_memory.management.analytics_quality import build_memory_quality_signals
-from mcp_memory.management.analytics_quality import build_quality_drilldown
-from mcp_memory.management.analytics_quality import build_quality_remediation
-from mcp_memory.management.analytics_quality import build_quality_signal_series
+from mcp_memory.management.analytics_quality import (
+    _build_backlog_series,
+    _MemoryQualitySignals,
+    build_memory_quality_signals,
+    build_quality_drilldown,
+    build_quality_remediation,
+    build_quality_signal_series,
+)
 from mcp_memory.management.analytics_retrieval import build_retrieval_analytics
 from mcp_memory.management.analytics_throughput import build_nerd_metrics_throughput_rollups
 from mcp_memory.management.health_reporting import build_execution_attempt_health, build_search_health
 from mcp_memory.management.models import (
     GraphTopologyPayload,
     MaintenanceEventPayload,
-    MemoryTimelineBucketPayload,
     MemoryLifecyclePayload,
+    MemoryTimelineBucketPayload,
     NerdAlertPayload,
     NerdCompositionPayload,
     NerdCountBucketPayload,
@@ -33,11 +35,11 @@ from mcp_memory.management.models import (
     NerdLifecycleTrendsPayload,
     NerdMaintenancePayload,
     NerdMetricsPayload,
-    NerdStatPayload,
     NerdShareSeriesPayload,
+    NerdStatPayload,
     NerdTimeCountBucketPayload,
-    NerdTimeShareBucketPayload,
     NerdTimelinesPayload,
+    NerdTimeShareBucketPayload,
     QueueDiagnosticPayload,
     QueueSnapshotPayload,
     SearchQualityPayload,

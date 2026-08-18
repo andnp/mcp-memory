@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
-
 from textual.widgets import DataTable, Static
 
 from mcp_memory.cli_tui import MemoryMonitorApp
 from mcp_memory.mcp.runtime import create_runtime
-
 
 pytestmark = pytest.mark.medium
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from enum import StrEnum
-from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 

@@ -11,10 +11,9 @@ from searchkernel.ports.federation import (
     SearchRequest,
 )
 
-from mcp_memory.daemon_dispatch import dispatch_federation_request
 from mcp_memory.daemon_app import create_daemon_app
+from mcp_memory.daemon_dispatch import dispatch_federation_request
 from mcp_memory.integrations.federation_source import MemoryFederationSource
-
 
 pytestmark = pytest.mark.small
 

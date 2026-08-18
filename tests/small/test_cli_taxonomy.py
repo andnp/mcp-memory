@@ -6,9 +6,8 @@ from click.testing import CliRunner
 
 import mcp_memory.cli as cli
 from mcp_memory.cli import main
-from mcp_memory.management.models import TaskSamplingSummaryPayload
 from mcp_memory.management.frontend_build import DashboardFrontendBuildResult
-
+from mcp_memory.management.models import TaskSamplingSummaryPayload
 
 pytestmark = pytest.mark.small
 

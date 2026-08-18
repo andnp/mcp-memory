@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from collections.abc import Iterable
-from collections.abc import Mapping
 from typing import Literal
 
 from mcp_memory.operational_store_rows import ProviderUsageSample

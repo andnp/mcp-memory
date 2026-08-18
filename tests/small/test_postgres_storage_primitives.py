@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 
 import pytest
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 from mcp_memory.core.journal import _ALL_WORKSPACES
 from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC
@@ -16,14 +17,12 @@ from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbedding
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
-from searchkernel.utils.similarity import cosine_similarity_lists
 from tests.small.work_item_repository_contract import (
     assert_claim_batch_orders_ready_items,
     assert_enqueue_unique_deduplicates_idempotency_keys,
     assert_heartbeat_extends_leases_and_allows_expired_reclaim,
     assert_release_defer_and_complete_items,
 )
-
 
 pytestmark = pytest.mark.small
 

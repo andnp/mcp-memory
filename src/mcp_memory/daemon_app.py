@@ -6,8 +6,8 @@ import logging
 import os
 import signal
 import time
-from contextlib import asynccontextmanager, suppress
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -16,27 +16,32 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from mcp_memory.config import resolve_workspace_id, resolve_workspace_root
+from mcp_memory.core.journal_operations import flush_record_thought_writeback_outbox
+from mcp_memory.daemon_background import (
+    RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS,
+)
+from mcp_memory.daemon_background import (
+    consume_embedding_warmup_result as _background_consume_embedding_warmup_result,
+)
+from mcp_memory.daemon_background import (
+    ensure_dashboard_frontend_ready as _background_ensure_dashboard_frontend_ready,
+)
+from mcp_memory.daemon_background import (
+    flush_record_thought_writeback_once as _background_flush_record_thought_writeback_once,
+)
+from mcp_memory.daemon_background import (
+    warm_embedding_model as _background_warm_embedding_model,
+)
 from mcp_memory.daemon_dispatch import (
     dispatch_federation_request,
     dispatch_management_request,
     error_payload,
 )
-from mcp_memory.daemon_background import (
-    RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS,
-    flush_record_thought_writeback_once as _background_flush_record_thought_writeback_once,
-)
 from mcp_memory.daemon_process import find_free_port
 from mcp_memory.daemon_runtime import DaemonRuntimeSession
-from mcp_memory.core.journal_operations import flush_record_thought_writeback_outbox
-from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup
-from mcp_memory.daemon_background import (
-    consume_embedding_warmup_result as _background_consume_embedding_warmup_result,
-    ensure_dashboard_frontend_ready as _background_ensure_dashboard_frontend_ready,
-    warm_embedding_model as _background_warm_embedding_model,
-)
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_global_daemon_bootstrap_spec
-
+from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup
 
 logger = logging.getLogger(__name__)
 # This is the sleep at the top of every _shutdown_daemon_when_idle poll

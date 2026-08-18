@@ -10,8 +10,8 @@ from mcp_memory.config import (
     DaemonConfig,
     MaintenanceConfig,
     MemoryConfig,
-    SearchRankingConfig,
     SearchKernelConfig,
+    SearchRankingConfig,
     ensure_default_config_exists,
     load_config,
     resolve_default_config_path,
@@ -19,7 +19,6 @@ from mcp_memory.config import (
     resolve_memory_path,
     resolve_state_dir,
 )
-
 
 pytestmark = pytest.mark.small
 

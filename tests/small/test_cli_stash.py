@@ -7,7 +7,6 @@ from mcp_memory.cli import main
 from mcp_memory.config import resolve_workspace_id
 from mcp_memory.mcp.runtime import create_runtime
 
-
 pytestmark = pytest.mark.small
 
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -19,14 +19,13 @@ from mcp_memory.curation_action_store import (
 )
 from mcp_memory.curation_store import CurationRun, CurationRunState
 from mcp_memory.mutation_history import Protection, ProtectionMode
-from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
-from mcp_memory.storage.postgres_connection import PostgresConnectionManager
-from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
 from mcp_memory.storage.postgres import ensure_postgres_schema
+from mcp_memory.storage.postgres_connection import PostgresConnectionManager
+from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
+from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.session import CursorLike
-
 
 pytestmark = pytest.mark.medium
 

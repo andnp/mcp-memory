@@ -3,9 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.ingress_evidence import IngressActionReceipt, IngressReceiptStatus
-from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
-from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
 from mcp_memory.core.ingest_claim_lifecycle import (
     _normalize_ingest_entry_ids,
     _record_ingest_tool_invocation,
@@ -13,16 +10,19 @@ from mcp_memory.core.ingest_claim_lifecycle import (
     _record_successful_ingest_entry_ids,
     _record_touched_memory_ids,
 )
+from mcp_memory.core.ingest_provenance import (
+    build_ingest_appended_metadata,
+    build_ingest_created_metadata,
+)
+from mcp_memory.core.ingress_evidence import IngressActionReceipt, IngressReceiptStatus
+from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
+from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
+from mcp_memory.core.task_handlers.ingest import build_next_ingest_batch_payload
 from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
     INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
 )
-from mcp_memory.core.ingest_provenance import (
-    build_ingest_appended_metadata,
-    build_ingest_created_metadata,
-)
-from mcp_memory.core.task_handlers.ingest import build_next_ingest_batch_payload
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _memory_write_quality_error,
@@ -39,7 +39,6 @@ from mcp_memory.mcp.validation import (
 )
 from mcp_memory.serialization import internal_mutation_record_payload
 from mcp_memory.storage.ingress_mutation_transaction import IngressMutationResult
-
 
 __all__ = [
     "INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY",

@@ -16,7 +16,6 @@ from mcp_memory.core.task_handlers.constants import (
     TAXONOMIST_TASK_NAME,
 )
 
-
 TASK_CLASS_PREMIUM_AGENTIC = "premium_agentic"
 TASK_CLASS_CHEAP_AGENTIC = "cheap_agentic"
 TASK_CLASS_CHEAP_JSON = "cheap_json"

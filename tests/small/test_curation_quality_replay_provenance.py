@@ -11,7 +11,6 @@ from mcp_memory.core.curation_quality_inputs import CurationQualityMutation
 from mcp_memory.core.curation_quality_provenance import QualityQuery, QueryProvenance
 from mcp_memory.curation_store import CurationRun, CurationRunOutcome, CurationRunState
 
-
 pytestmark = pytest.mark.small
 
 

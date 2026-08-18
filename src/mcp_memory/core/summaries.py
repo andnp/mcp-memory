@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 
-
 MAX_SUMMARY_CHARS = 220
 _TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 _TIMESTAMP_PREFIX_RE = re.compile(r"^\s*[-*]?\s*\[[^\]]+\]\s*")

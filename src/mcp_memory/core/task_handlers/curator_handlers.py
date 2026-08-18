@@ -3,31 +3,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
-from mcp_memory.context import ApplicationContext, TaskRuntimeContext
-from mcp_memory.core.curation_shadow import (
-    run_curator_direct_mcp,
-)
-from mcp_memory.core.task_handlers.campaigns import campaign_metadata
 import mcp_memory.core.task_handlers.curator_support as _curator_support
-from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
-from mcp_memory.core.task_handlers.maintenance_work_items import (
-    complete_work_item,
-    defer_work_item,
-    work_item_result_metadata,
-)
-from mcp_memory.core.task_handlers.curator_seed_resolution import (
-    CuratorSeedResolution,
-    CuratorSeedResolutionState,
-    resolve_curator_seed_packet,
-)
-from mcp_memory.core.curation_validation import CurationMutationBudget
+from mcp_memory.context import ApplicationContext, TaskRuntimeContext
 from mcp_memory.core.curation_models import (
     campaign_hypothesis_from_payload,
 )
-from mcp_memory.core.task_handlers.curator_support import (
-    CuratorCandidateRequest,
-    acquire_curator_candidates,
+from mcp_memory.core.curation_shadow import (
+    run_curator_direct_mcp,
 )
+from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.work_items import (
     COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
@@ -35,6 +19,23 @@ from mcp_memory.core.ports.work_items import (
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
     compatibility_group_families,
 )
+from mcp_memory.core.task_handlers.campaigns import campaign_metadata
+from mcp_memory.core.task_handlers.curator_seed_resolution import (
+    CuratorSeedResolution,
+    CuratorSeedResolutionState,
+    resolve_curator_seed_packet,
+)
+from mcp_memory.core.task_handlers.curator_support import (
+    CuratorCandidateRequest,
+    acquire_curator_candidates,
+)
+from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
+from mcp_memory.core.task_handlers.maintenance_work_items import (
+    complete_work_item,
+    defer_work_item,
+    work_item_result_metadata,
+)
+
 
 async def handle_memory_curator_task(
     ctx: ApplicationContext | TaskRuntimeContext,

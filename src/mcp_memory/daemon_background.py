@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,6 @@ from mcp_memory.core.journal_operations import flush_record_thought_writeback_ou
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
-
 
 logger = logging.getLogger(__name__)
 RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS = 5.0

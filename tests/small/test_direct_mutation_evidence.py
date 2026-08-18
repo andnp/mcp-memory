@@ -3,18 +3,19 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 
+import pytest
+
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.direct_mutation_evidence import (
     DirectMutationEntityDelta,
     DirectMutationEvidence,
     DirectMutationOutcome,
     reconcile_direct_mutation_evidence,
 )
-from mcp_memory.storage.direct_mutation_evidence_store import SQLiteDirectMutationEvidenceStore
-from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.context import ApplicationContext
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.mcp import transport
-import pytest
+from mcp_memory.storage.direct_mutation_evidence_store import SQLiteDirectMutationEvidenceStore
+from mcp_memory.utils.db import DatabaseManager
 
 
 def _evidence() -> DirectMutationEvidence:

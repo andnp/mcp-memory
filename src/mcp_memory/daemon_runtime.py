@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 import os
-from pathlib import Path
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from pathlib import Path
 from typing import Any, Callable, cast
 
 from fastapi import FastAPI
 
 from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path, resolve_daemon_socket_path
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.daemon_background import (
     consume_embedding_warmup_result,
@@ -27,7 +28,6 @@ from mcp_memory.daemon_process import remove_metadata, write_metadata
 from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
-from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.runtime import (
     RuntimeBootstrapSpec,
     RuntimeCapabilityBundles,

@@ -14,8 +14,7 @@ any explicit integrity or attribution failure fail closed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from decimal import Decimal
 
 

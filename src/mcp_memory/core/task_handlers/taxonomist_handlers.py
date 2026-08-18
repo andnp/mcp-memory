@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, cast
 
+import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     finalize_agentic_tool_tracking,
@@ -21,8 +23,6 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     defer_work_item,
     release_work_item,
 )
-import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
-from mcp_memory.core.ports.tasks import TaskRecord
 
 
 async def handle_taxonomist_task(

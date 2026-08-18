@@ -4,15 +4,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from mcp_memory.management.analytics_quality import build_quality_producer_attributions
 from mcp_memory.management.analytics_reporting import (
     build_memory_quality_signals,
     build_quality_drilldown,
     build_quality_remediation,
     build_quality_signal_series,
 )
-from mcp_memory.management.analytics_quality import build_quality_producer_attributions
 from mcp_memory.management.reporting_rows import ScopedMemoryRow
-
 
 pytestmark = pytest.mark.small
 

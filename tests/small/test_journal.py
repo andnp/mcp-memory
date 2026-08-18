@@ -2,7 +2,6 @@ import pytest
 
 from mcp_memory.core.journal import System1Journal
 
-
 pytestmark = pytest.mark.small
 
 

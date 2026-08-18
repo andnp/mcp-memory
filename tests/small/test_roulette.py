@@ -12,10 +12,9 @@ from mcp_memory.core.sampling import (
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
     QUALITY_SIGNAL_STRATEGY,
-    RouletteProvider,
     SEMANTIC_STRATEGY,
+    RouletteProvider,
 )
-
 
 pytestmark = pytest.mark.small
 

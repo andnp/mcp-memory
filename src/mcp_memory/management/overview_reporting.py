@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.agent_run_reporting import build_agent_runs, build_recent_agent_runs
-from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
+from mcp_memory.management.health_reporting import (
+    build_embedding_status,
+    build_execution_attempt_health,
+    build_search_health,
+)
 from mcp_memory.management.models import (
     CacheHealthPayload,
     EmbeddingIntegrityEventSummaryPayload,
@@ -17,6 +21,8 @@ from mcp_memory.management.models import (
     TokenUsageSummaryPayload,
 )
 from mcp_memory.management.reporting_rows import (
+    MemoryMetricsRow,
+    PendingJournalMetricsRow,
     build_queue_diagnostics,
     fetch_memory_count_rows,
     fetch_memory_metrics_row,
@@ -24,7 +30,6 @@ from mcp_memory.management.reporting_rows import (
     fetch_task_count_rows,
     summarize_token_usage,
 )
-from mcp_memory.management.reporting_rows import MemoryMetricsRow, PendingJournalMetricsRow
 from mcp_memory.serialization import compact_memory_record_payload, task_payload
 
 

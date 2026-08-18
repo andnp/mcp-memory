@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-import logging
 from pathlib import Path
-import time
 from typing import Any
 
+from mcp_memory.application.ports import MemorySearchPort
+from mcp_memory.core.ports import EmbeddingMaintenancePort, SearchHealthPort
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.health_reporting import (
     build_embedding_status,
     build_execution_attempt_health,
     build_search_health,
 )
+from mcp_memory.management.memory_service import _SLOW_MEMORY_TOOL_WARNING_MS
 from mcp_memory.management.models import (
     CacheHealthPayload,
     CacheMetricsPayload,
@@ -24,7 +27,6 @@ from mcp_memory.management.models import (
     OperatorHealthSnapshotPayload,
     TransportDiagnosticsPayload,
 )
-from mcp_memory.management.memory_service import _SLOW_MEMORY_TOOL_WARNING_MS
 from mcp_memory.management.operator_health_reporting import (
     build_operator_health_snapshot_payload,
     summarize_memory_tool_latency,
@@ -33,10 +35,7 @@ from mcp_memory.management.operator_health_reporting import (
 from mcp_memory.management.reporting_rows import count_recent_conversation_statuses, count_recent_memory_updates
 from mcp_memory.management.runtime_log_service import RuntimeLogService
 from mcp_memory.mcp.telemetry import search_diagnostics_snapshot
-from mcp_memory.application.ports import MemorySearchPort
-from mcp_memory.core.ports import EmbeddingMaintenancePort, SearchHealthPort
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
-
 
 logger = logging.getLogger(__name__)
 

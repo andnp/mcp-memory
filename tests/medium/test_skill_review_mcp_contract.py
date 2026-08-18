@@ -17,7 +17,6 @@ from mcp_memory.mcp.handlers import call_memory_tool
 from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
 
-
 pytestmark = pytest.mark.medium
 
 

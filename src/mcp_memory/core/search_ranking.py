@@ -12,14 +12,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
+from searchkernel.search.calibration import calibrate_score
+from searchkernel.search.fusion import fuse_reciprocal_rank
+
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import (
     FTS_QUERY_TOKEN_PATTERN,
-    RankedMemoryCandidate,
     MemoryRecord,
+    RankedMemoryCandidate,
 )
-from searchkernel.search.calibration import calibrate_score
-from searchkernel.search.fusion import fuse_reciprocal_rank
 
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3

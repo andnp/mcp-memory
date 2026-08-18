@@ -10,7 +10,6 @@ from mcp_memory.mcp.telemetry import (
     search_diagnostics_snapshot,
 )
 
-
 pytestmark = pytest.mark.small
 
 

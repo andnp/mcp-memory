@@ -4,7 +4,6 @@ from collections.abc import Callable
 
 import click
 
-
 type HookRunnerCommandAction = Callable[[str | None], None]
 
 

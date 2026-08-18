@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.core.task_handlers.ingest import build_ingest_preflight_state
+from mcp_memory.core.tasks import TaskRecord
 
 
 class _JournalStub:

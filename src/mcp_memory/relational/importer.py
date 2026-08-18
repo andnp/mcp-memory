@@ -11,7 +11,6 @@ import yaml
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.ports.memory import MemoryCreateRequest, MemoryMutationPort
 
-
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 

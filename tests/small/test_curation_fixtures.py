@@ -9,7 +9,6 @@ import pytest
 import tests.curation_fixtures as curation_fixtures
 from tests.curation_fixtures import FIXTURE_ROOT, load_all_curation_fixtures, load_curation_fixture
 
-
 pytestmark = pytest.mark.small
 
 

@@ -42,7 +42,6 @@ from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
 
-
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _EMBEDDING_AXES = {
     "authentication": 0,

@@ -13,7 +13,6 @@ from mcp_memory.storage.ingress_mutation_transaction import (
 )
 from mcp_memory.utils.db import DatabaseManager
 
-
 pytestmark = pytest.mark.small
 
 

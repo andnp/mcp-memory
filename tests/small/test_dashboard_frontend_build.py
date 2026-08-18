@@ -7,7 +7,6 @@ import pytest
 
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 
-
 pytestmark = pytest.mark.small
 
 

@@ -23,7 +23,6 @@ from mcp_memory.storage.postgres_ingress_mutation_transaction import (
 )
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
-
 pytestmark = pytest.mark.small
 
 

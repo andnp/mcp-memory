@@ -4,7 +4,16 @@ import json
 import re
 from typing import Any
 
+from searchkernel.ingestion import embed_in_batches
+from searchkernel.utils.similarity import cosine_similarity_lists
+
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.ports.work_items import (
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+)
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
@@ -20,7 +29,7 @@ from mcp_memory.core.task_handlers.agentic_result_support import (
     extract_agentic_tool_names,
     extract_embedded_json_object,
 )
-from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT, DEDUPLICATOR_TASK_NAME
+from mcp_memory.core.task_handlers.constants import DEDUPLICATOR_TASK_NAME, DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
     sample_maintenance_candidates,
@@ -32,14 +41,6 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     enqueue_review_work_item,
     work_item_result_metadata,
 )
-from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.core.ports.work_items import (
-    EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
-)
-from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
-from searchkernel.ingestion import embed_in_batches
-from searchkernel.utils.similarity import cosine_similarity_lists
 
 # ---------------------------------------------------------------------------
 # deduplicator_merge: deterministic merging logic

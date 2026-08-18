@@ -16,7 +16,6 @@ from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from tests.small.maintenance_read_repository_contract import assert_maintenance_read_preserves_telemetry
 
-
 pytestmark = pytest.mark.small
 
 

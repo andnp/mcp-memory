@@ -17,7 +17,6 @@ from tests.small.work_item_repository_contract import (
     assert_release_defer_and_complete_items,
 )
 
-
 pytestmark = pytest.mark.small
 
 

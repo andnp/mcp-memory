@@ -11,7 +11,6 @@ from benchmarks.search_quality.corpus import (
 )
 from benchmarks.search_quality.runner import run_live_daemon
 
-
 pytestmark = pytest.mark.small
 
 

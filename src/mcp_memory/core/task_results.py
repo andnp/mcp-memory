@@ -5,7 +5,6 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 
-
 TaskRunResultSource: TypeAlias = "TaskRunResult | Mapping[str, object] | str | None"
 
 _PREFERRED_SUMMARY_KEYS: tuple[str, ...] = (

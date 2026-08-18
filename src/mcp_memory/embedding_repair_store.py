@@ -7,7 +7,6 @@ from uuid import uuid4
 
 from mcp_memory.utils.db import DatabaseManager
 
-
 EMBEDDING_REPAIR_STATUS_PENDING = "pending"
 EMBEDDING_REPAIR_STATUS_RUNNING = "running"
 EMBEDDING_REPAIR_STATUS_COMPLETED = "completed"

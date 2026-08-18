@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 from typing import cast
 
 import pytest
@@ -15,7 +15,6 @@ from mcp_memory.storage.postgres_embedding_integrity_event_store import (
     PostgresEmbeddingIntegrityEventRepository,
 )
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
-
 
 pytestmark = pytest.mark.small
 

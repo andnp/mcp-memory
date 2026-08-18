@@ -19,7 +19,6 @@ from mcp_memory.mutation_history import (
 )
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 
-
 pytestmark = pytest.mark.medium
 
 

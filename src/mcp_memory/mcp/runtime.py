@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
-from pathlib import Path
 import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TypeAlias, cast
+
+from searchkernel.ports import EmbeddingBatchProvider
 
 from mcp_memory.config import (
     GLOBAL_DAEMON_IDENTITY,
@@ -25,14 +27,12 @@ from mcp_memory.context import (
     ProviderCapabilities,
     TaskRuntimeCapabilities,
 )
-from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
-from mcp_memory.embeddings import build_embedder
-from searchkernel.ports import EmbeddingBatchProvider
+from mcp_memory.core.providers import build_agentic_ai_provider, build_json_ai_provider
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
-from mcp_memory.core.providers import build_agentic_ai_provider
-from mcp_memory.core.providers import build_json_ai_provider
-from mcp_memory.curation_quality_store import PostgresCurationQualityStore, SQLiteCurationQualityStore
 from mcp_memory.core.storage import ensure_memory_dirs
+from mcp_memory.curation_quality_store import PostgresCurationQualityStore, SQLiteCurationQualityStore
+from mcp_memory.embeddings import build_embedder
+from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.storage.factory import StorageBackendResources, build_storage_runtime_components
 from mcp_memory.storage.types import StorageBootstrapSpec
 

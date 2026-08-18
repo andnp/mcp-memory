@@ -1,42 +1,41 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from inspect import isawaitable, iscoroutinefunction
 import logging
 import threading
 import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from inspect import isawaitable, iscoroutinefunction
 from typing import Any, cast
 
 import mcp_memory.core.tasks as task_queue_module
 from mcp_memory.context import TaskRuntimeContext
+from mcp_memory.core._recovery_actions import RecoveryAction
+from mcp_memory.core.curation_reconciliation import (
+    CurationReconciler,
+    CurationReconciliationDisposition,
+)
 from mcp_memory.core.maintenance_idle import (
     build_idle_pause_result,
     should_pause_autonomous_recurring_maintenance,
 )
-from mcp_memory.core._recovery_actions import RecoveryAction
-from mcp_memory.core.curation_reconciliation import (
-    CurationReconciliationDisposition,
-    CurationReconciler,
-)
-from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
-from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
-from mcp_memory.core.task_results import TaskRunResultSource
-from mcp_memory.core.task_handlers import (
-    AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
-    CURATOR_TASK_NAME,
-    SYSTEM1_INGEST_TASK_NAME,
-    task_priority,
-)
-from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.providers import (
     NullProviderUsagePort,
     ProviderUsagePort,
     TaskExecutionAttemptPort,
     TaskExecutionAttemptRecordLike,
 )
-
+from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
+from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
+from mcp_memory.core.task_handlers import (
+    AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+    CURATOR_TASK_NAME,
+    SYSTEM1_INGEST_TASK_NAME,
+    task_priority,
+)
+from mcp_memory.core.task_results import TaskRunResultSource
 
 logger = logging.getLogger(__name__)
 

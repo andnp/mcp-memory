@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-
 INGEST_CREATED_VIA_METADATA_KEY = "created_via_ingest"
 INGEST_APPENDED_VIA_METADATA_KEY = "appended_via_ingest"
 INGEST_TASK_ID_METADATA_KEY = "ingest_task_id"

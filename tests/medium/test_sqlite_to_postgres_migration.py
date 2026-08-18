@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
-from click.testing import CliRunner
 import pytest
+from click.testing import CliRunner
 
 from mcp_memory.cli import main
 from mcp_memory.relational.repository import RelationalMemoryRepository
@@ -14,7 +14,6 @@ from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.sqlite_to_postgres_migration import migrate_sqlite_to_postgres
 from mcp_memory.utils.db import DatabaseManager
-
 
 pytestmark = pytest.mark.medium
 

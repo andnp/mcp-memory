@@ -1,6 +1,6 @@
 import sqlite3
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -14,9 +14,8 @@ from mcp_memory.core.ports.memory import (
 )
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
+from mcp_memory.utils.db import SCHEMA_VERSION, DatabaseManager
 from mcp_memory.utils.db_schema import create_current_schema, finalize_schema_setup
-
 
 pytestmark = pytest.mark.small
 

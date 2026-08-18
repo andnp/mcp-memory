@@ -8,10 +8,7 @@ from mcp_memory.core.curation_identity import canonical_token
 from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.core.curation_routing import MaintenanceFamily
 from mcp_memory.core.curation_validation import CurationSpecialistRoute
-from mcp_memory.core.sampling import SamplingBatch
-from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.management.models import NerdQualityRemediationSignalPayload
 from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_CONFLICT_REVIEW,
@@ -21,7 +18,9 @@ from mcp_memory.core.ports.work_items import (
     WORK_FAMILY_OPERATOR_REVIEW,
     WorkItemRecordLike,
 )
-
+from mcp_memory.core.sampling import SamplingBatch
+from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
+from mcp_memory.management.models import NerdQualityRemediationSignalPayload
 
 SPECIALIST_ROUTE_WORK_FAMILIES: dict[MaintenanceFamily, str] = {
     MaintenanceFamily.CONFLICT_REVIEW: WORK_FAMILY_CONFLICT_REVIEW,

@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
-from dataclasses import dataclass
 import logging
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, cast
 
+from mcp_memory.config import Config
+from mcp_memory.core.ports.providers import ProviderPolicyEventPort
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_policy import is_deterministic_task
-from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.config import Config
-from mcp_memory.core.ports.providers import ProviderPolicyEventPort
-
 
 logger = logging.getLogger(__name__)
 _PROVIDER_WARNING_MIN_INTERVAL_SECONDS = 600.0

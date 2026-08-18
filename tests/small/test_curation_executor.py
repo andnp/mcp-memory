@@ -13,8 +13,8 @@ from mcp_memory.core.curation_identity import (
     record_token,
 )
 from mcp_memory.core.curation_models import (
-    ActionPreconditions,
     AbsentLinkAssertion,
+    ActionPreconditions,
     ArchiveMemoryAction,
     ClaimManifest,
     ClaimMapping,

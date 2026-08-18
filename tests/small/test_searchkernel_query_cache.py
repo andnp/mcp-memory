@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from searchkernel.runtime import QueryEmbeddingCache
 
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     MemoryQueryEmbeddingProvider,
 )
-from searchkernel.runtime import QueryEmbeddingCache
-
 
 pytestmark = pytest.mark.small
 

@@ -12,7 +12,6 @@ from mcp_memory.storage.postgres_connection import (
     load_postgres_driver_modules,
 )
 
-
 pytestmark = pytest.mark.small
 
 

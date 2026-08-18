@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 import inspect
 import logging
 import os
 import time as _time_module
+from contextlib import suppress
 from typing import Any, Callable, cast
 from uuid import uuid4
 

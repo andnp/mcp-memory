@@ -17,7 +17,6 @@ from mcp_memory.mcp.services import (
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 
-
 pytestmark = pytest.mark.small
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 
-
 _PROXY_COMMANDS = frozenset({"run", "internal-run"})
 
 

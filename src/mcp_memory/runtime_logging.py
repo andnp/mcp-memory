@@ -11,7 +11,6 @@ from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.postgres_runtime_log_store import PostgresStructuredLogHandler
 from mcp_memory.utils.db import DatabaseManager
 
-
 _LOG_CONSOLE = Console(stderr=True)
 _BASE_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 

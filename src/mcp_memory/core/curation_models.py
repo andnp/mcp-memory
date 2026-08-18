@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from mcp_memory.context import TaskQueueContext
-from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
 
 
 def enqueue_summary_refresh_task(

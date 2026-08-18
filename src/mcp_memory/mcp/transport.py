@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import Callable
 from typing import Any, cast
-import inspect
 
 from mcp.types import TextContent
 
@@ -19,10 +19,8 @@ from mcp_memory.core.direct_mutation_evidence import (
     entity_deltas_for_payload,
     reconcile_direct_mutation_evidence,
 )
-from mcp_memory.internal_tool_call_tracking import internal_tool_is_mutating
-from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
+from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker, internal_tool_is_mutating
 from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
-
 
 ToolService = Callable[..., Any]
 ToolServiceResolver = Callable[[], dict[str, ToolService]]
@@ -188,13 +186,13 @@ async def _dispatch_tool(
 def tool_services() -> dict[str, ToolService]:
     from mcp_memory.mcp.services import (
         commit_skill_review_service,
-        skill_review_ledger_service,
         read_memory_record_service,
         read_memory_records_service,
         record_skill_observation_service,
         record_thought_service,
         resolve_skill_observation_service,
         search_memory_records_async_service,
+        skill_review_ledger_service,
     )
 
     return {
@@ -215,14 +213,10 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_get_next_dedup_batch_service,
         internal_list_memory_records_service,
     )
-    from mcp_memory.mcp.internal_read_services import (
-        internal_bounded_adjacency_service,
-        internal_list_relationships_service,
-        internal_maintenance_search_service,
-        internal_peek_record_service,
-        internal_read_memory_record_service,
-        internal_read_memory_records_service,
-        internal_search_memory_records_async_service,
+    from mcp_memory.mcp.internal_ingest_services import (
+        internal_append_to_existing_memory_for_ingest_service,
+        internal_create_memory_record_for_ingest_service,
+        internal_get_next_ingest_batch_service,
     )
     from mcp_memory.mcp.internal_mutation_services import (
         internal_append_memory_content_service,
@@ -235,10 +229,14 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_split_memory_record_service,
         internal_update_memory_record_service,
     )
-    from mcp_memory.mcp.internal_ingest_services import (
-        internal_append_to_existing_memory_for_ingest_service,
-        internal_create_memory_record_for_ingest_service,
-        internal_get_next_ingest_batch_service,
+    from mcp_memory.mcp.internal_read_services import (
+        internal_bounded_adjacency_service,
+        internal_list_relationships_service,
+        internal_maintenance_search_service,
+        internal_peek_record_service,
+        internal_read_memory_record_service,
+        internal_read_memory_records_service,
+        internal_search_memory_records_async_service,
     )
     from mcp_memory.mcp.internal_task_services import (
         internal_task_complete_service,

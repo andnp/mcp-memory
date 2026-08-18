@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import json
+import logging
+import re
+import sqlite3
+from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
-import json
-import logging
 from pathlib import Path
-import re
-import sqlite3
 from threading import Event, Lock
 from time import time
-from collections.abc import Sequence
 from typing import Any, Iterator
 
 from mcp_memory.application.ports import (
@@ -26,7 +26,6 @@ from mcp_memory.utils.db import (
     SQLITE_BUSY_TIMEOUT_MILLISECONDS,
     SQLITE_BUSY_TIMEOUT_SECONDS,
 )
-
 
 logger = logging.getLogger(__name__)
 _CACHE_SCHEMA_VERSION = CACHE_SCHEMA_VERSION

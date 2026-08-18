@@ -4,9 +4,12 @@ from typing import cast
 import pytest
 
 import mcp_memory.cli as cli
+from mcp_memory.management.scope_policy import (
+    ScopePolicyKind,
+    resolve_workspace_id_for_policy,
+    scope_policy_for_endpoint,
+)
 from mcp_memory.management.service import ManagementService
-from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy, scope_policy_for_endpoint
-
 
 pytestmark = pytest.mark.small
 

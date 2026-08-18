@@ -4,7 +4,6 @@ from collections.abc import Callable
 
 import click
 
-
 type StashCommandAction = Callable[[str | None, tuple[str, ...]], None]
 type ImportMarkdownCommandAction = Callable[[tuple[str, ...], str | None, tuple[str, ...], bool], None]
 

@@ -6,8 +6,8 @@ Application code should import records and protocols from
 
 from __future__ import annotations
 
-from importlib import import_module
 import json
+from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary

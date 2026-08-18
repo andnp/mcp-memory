@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Generic, Protocol, Self, TypeVar
 
-
 ConnectionT_co = TypeVar("ConnectionT_co", covariant=True)
 ConnectionT = TypeVar("ConnectionT")
 

@@ -1,6 +1,6 @@
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -8,7 +8,6 @@ from click.testing import CliRunner
 from mcp_memory.cli import main
 from mcp_memory.config import resolve_daemon_metadata_path
 from mcp_memory.daemon import inspect_daemon, read_daemon_metadata, stop_daemon
-
 
 pytestmark = pytest.mark.large
 

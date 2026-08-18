@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-from inspect import isawaitable
 import time
+from inspect import isawaitable
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.core.ports.work_items import (
+    COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_MEMORY_TAGGING,
+)
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
-from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
-from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
-from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
-from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
+from mcp_memory.core.providers.interfaces import (
+    ProviderAdmissionDeferred,
+    ProviderAuthenticationRequired,
+    ProviderBudgetExceeded,
+    ProviderRateLimitExceeded,
+)
 from mcp_memory.core.sampling import (
     BOUNDED_NOISE_STRATEGY,
     COLD_STORAGE_STRATEGY,
@@ -28,13 +37,6 @@ from mcp_memory.core.task_handlers.campaigns import (
     count_named_tool_calls_from_stats,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import sample_maintenance_candidates, sampling_payload
-from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.core.ports.work_items import (
-    COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
-    EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_MEMORY_TAGGING,
-)
-from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 
 TAXONOMIST_ALLOWED_STRATEGIES = (
     COLD_STORAGE_STRATEGY,

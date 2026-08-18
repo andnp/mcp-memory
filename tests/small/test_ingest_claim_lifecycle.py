@@ -3,6 +3,7 @@ from typing import cast
 
 import pytest
 
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.ingest_claim_lifecycle import _finalize_claimed_ingest_entries
 from mcp_memory.core.ingress_evidence import (
     IngressActionReceipt,
@@ -12,8 +13,6 @@ from mcp_memory.core.ingress_evidence import (
     SourceCoverage,
     SourceCoverageOutcome,
 )
-from mcp_memory.context import ApplicationContext
-
 
 pytestmark = pytest.mark.small
 

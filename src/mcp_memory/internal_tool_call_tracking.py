@@ -11,7 +11,6 @@ from mcp_memory.core.curator_evidence import (
 )
 from mcp_memory.mcp.internal_search_contract import INTERNAL_SEARCH_TOOL_NAME
 
-
 _READ_ONLY_INTERNAL_TOOL_NAMES = frozenset(
     {
         "task_complete",

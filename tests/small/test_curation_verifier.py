@@ -7,11 +7,11 @@ import pytest
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import record_token
 from mcp_memory.core.curation_models import (
-    ActionPreconditions,
     AbsentLinkAssertion,
+    ActionPreconditions,
     ArchiveMemoryAction,
-    ClaimMapping,
     ClaimManifest,
+    ClaimMapping,
     CreateLinkAction,
     CurationVerificationDescriptor,
     EvidenceRef,
@@ -27,7 +27,6 @@ from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
 from mcp_memory.relational.repository import RelationalMemoryReadContext, RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
-
 
 pytestmark = pytest.mark.small
 

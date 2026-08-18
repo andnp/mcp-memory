@@ -11,7 +11,6 @@ from mcp_memory.config import (
     resolve_workspace_root,
 )
 
-
 pytestmark = pytest.mark.medium
 
 

@@ -11,20 +11,21 @@ created in separate temporary schemas inside a pgvector container.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import json
 import socket
 import time
+import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 from urllib.parse import quote
-import uuid
 
 import psycopg
-from psycopg import sql
 import pytest
+from psycopg import sql
+from searchkernel.domain import Record
 
 from benchmarks.search_quality import (
     TopicEmbedder,
@@ -33,12 +34,10 @@ from benchmarks.search_quality import (
 )
 from mcp_memory.config import PostgresStorageConfig
 from mcp_memory.integrations.searchkernel_adapters import MemoryRecordAdapter
-from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
+from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
-from searchkernel.domain import Record
-
 
 pytestmark = pytest.mark.medium
 

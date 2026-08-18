@@ -14,7 +14,6 @@ from mcp_memory.context import (
     TaskRuntimeCapabilities,
 )
 
-
 pytestmark = pytest.mark.small
 
 

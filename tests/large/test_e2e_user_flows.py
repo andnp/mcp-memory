@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 
 from mcp_memory.core.agent_runtime import build_runtime_task_worker
 from mcp_memory.mcp.handlers import call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
-
 
 pytestmark = pytest.mark.large
 

@@ -26,7 +26,6 @@ from mcp_memory.mutation_history_store import (
     MutationHistoryTerminalizationError,
 )
 
-
 MEMORY_ID = UUID("00000000-0000-0000-0000-000000000001")
 OTHER_MEMORY_ID = UUID("00000000-0000-0000-0000-000000000002")
 

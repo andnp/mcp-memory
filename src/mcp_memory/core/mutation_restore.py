@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from collections.abc import Mapping
-from enum import StrEnum
 import json
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Callable, Protocol, Sequence
 from uuid import UUID, uuid4, uuid5
 

@@ -6,7 +6,6 @@ from mcp_memory.config import Config
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 
-
 pytestmark = pytest.mark.medium
 
 

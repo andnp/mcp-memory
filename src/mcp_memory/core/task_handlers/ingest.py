@@ -1,28 +1,47 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
 from random import Random
-import re
 from typing import Any, Awaitable, Callable, cast
+
+from searchkernel.ingestion import embed_in_batches
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.ingest_claim_lifecycle import (
     _finalize_claimed_ingest_entries as _finalize_claimed_ingest_entries,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _journal_entry_payload,
     _record_ingest_tool_invocation,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_entry_dispositions as _recorded_ingest_entry_dispositions,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_handled_entry_ids as _recorded_ingest_handled_entry_ids,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_run_metadata as _recorded_ingest_run_metadata,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_tool_usage as _recorded_ingest_tool_usage,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_touched_memory_ids as _recorded_ingest_touched_memory_ids,
+)
+from mcp_memory.core.ingest_claim_lifecycle import (
     _reset_recorded_ingest_handled_entry_ids as _reset_recorded_ingest_handled_entry_ids,
 )
+from mcp_memory.core.ingest_provenance import build_ingest_appended_metadata, build_ingest_created_metadata
 from mcp_memory.core.ingress_evidence import IngressBatchEvidence, IngressSourceSnapshot
 from mcp_memory.core.ingress_identity import SourceEntryIdentity, batch_id, source_fingerprint
 from mcp_memory.core.ingress_source import normalize_source_snapshot
-from mcp_memory.core.ingest_provenance import build_ingest_appended_metadata, build_ingest_created_metadata
+from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
 from mcp_memory.core.task_handlers.agentic_result_support import (
@@ -41,11 +60,6 @@ from mcp_memory.core.task_handlers.agentic_tool_tracking import (
 from mcp_memory.core.task_handlers.constants import DEFAULT_INGEST_BATCH_SIZE
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_or_context_workspace_id
-from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
-from searchkernel.ingestion import embed_in_batches
-from searchkernel.utils.similarity import cosine_similarity_lists
-
 
 # ---------------------------------------------------------------------------
 # ingest_support: result building and normalization helpers

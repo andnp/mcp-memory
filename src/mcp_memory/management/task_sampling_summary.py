@@ -6,11 +6,10 @@ from dataclasses import dataclass, field
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
     SamplingSummaryRowPayload,
-    SelectorBehaviorSummaryPayload,
     SelectionStrategyUtilityPayload,
+    SelectorBehaviorSummaryPayload,
     TaskSamplingSummaryPayload,
 )
-
 
 UTILITY_PRIOR_MIN_RUNS = 3
 UTILITY_PRIOR_MUTATION_RATE_WEIGHT = 0.45

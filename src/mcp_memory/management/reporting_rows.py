@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import json
-import time
 from typing import TypeAlias, cast
 
 from pydantic import BaseModel, Field, JsonValue
 
-from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
 from mcp_memory.core.curator_telemetry import CuratorTelemetry, project_curator_telemetry
+from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
 from mcp_memory.core.task_results import TaskRunResult, build_task_run_result_summary, decode_task_run_result_payload
 from mcp_memory.management.models import (
     IngestAuditPayload,
@@ -23,7 +23,6 @@ from mcp_memory.management.models import (
     SelectorPopulationSnapshotPayload,
 )
 from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
-
 
 JsonObject: TypeAlias = dict[str, JsonValue]
 

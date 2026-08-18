@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from typing import cast
 
 from mcp_memory.core.sampling import SamplingBatch
+from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_housekeeping import (
     BackendConnection,
     _execute_write,
     _fetchall_rows,
 )
-from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from tests.small.test_postgres_curation_store import FakeConnection
 
 

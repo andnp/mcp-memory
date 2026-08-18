@@ -1,40 +1,38 @@
+import logging
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-import logging
-import time
 
 import pytest
 
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config, CurationConfig, StorageCacheMode
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.ports import (
     MemoryIDResolutionPort,
     ReadCacheValidationPort,
     SearchHealthPort,
     StartupHealthPort,
 )
-from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.daemon_models import DaemonControllerView
+from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
+from mcp_memory.embeddings import EmbedderStatus, SQLiteVectorStore
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.health_reporting import build_embedding_status
-from mcp_memory.management.models import ExecutionAttemptHealthPayload
-from mcp_memory.management.models import NerdMetricsPayload
+from mcp_memory.management.models import ExecutionAttemptHealthPayload, NerdMetricsPayload
 from mcp_memory.management.query_runner import SQLiteManagementQueryAdapter
-from mcp_memory.core.tasks import SQLiteTaskQueue
-from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
-from mcp_memory.embeddings import EmbedderStatus, SQLiteVectorStore
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
-
 
 pytestmark = pytest.mark.small
 

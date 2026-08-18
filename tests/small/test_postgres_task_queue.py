@@ -6,9 +6,8 @@ import pytest
 
 from mcp_memory.core.maintenance_schedule import BACKGROUND_CLEANUP_TASK_NAMES
 from mcp_memory.core.ports.tasks import TaskRecord
-from mcp_memory.storage.session import DbConnectionLike, SessionManager
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
-
+from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 pytestmark = pytest.mark.small
 

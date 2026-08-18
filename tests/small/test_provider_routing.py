@@ -4,8 +4,8 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-import mcp_memory.core.provider_policy as provider_policy_module
 
+import mcp_memory.core.provider_policy as provider_policy_module
 from mcp_memory.config import AIConfig, Config, ProviderRoutingConfig
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import _provider_for_task

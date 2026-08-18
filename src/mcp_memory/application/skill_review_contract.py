@@ -5,11 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal, Mapping
 from uuid import UUID
-
 
 PROTOCOL_VERSION = 2
 LEDGER_PROTOCOL_VERSION = 1

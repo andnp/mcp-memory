@@ -12,7 +12,6 @@ from mcp_memory.application.memory_use_cases import (
 from mcp_memory.application.ports import MemoryMutationDependencies
 from mcp_memory.core.ports.memory import MemoryRecord
 
-
 pytestmark = pytest.mark.small
 
 

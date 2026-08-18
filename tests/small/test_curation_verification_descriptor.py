@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from mcp_memory.core.curation_models import CurationVerificationDescriptor
 
-
 pytestmark = pytest.mark.small
 
 

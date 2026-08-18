@@ -13,7 +13,7 @@ from mcp_memory.mcp.internal_service_support import (
     _merge_memory_metadata,
     _normalize_tags,
 )
-from mcp_memory.mcp.validation import optional_object, optional_string, optional_bool, require_string, string_list
+from mcp_memory.mcp.validation import optional_bool, optional_object, optional_string, require_string, string_list
 from mcp_memory.serialization import internal_mutation_record_payload
 
 

@@ -7,8 +7,8 @@ from mcp_memory.management.analytics_common import _bucket_starts
 from mcp_memory.management.models import (
     NerdRetrievalCallerKindRowPayload,
     NerdRetrievalConversionMemoryRowPayload,
-    NerdRetrievalFunnelPayload,
     NerdRetrievalEngagementEvidencePayload,
+    NerdRetrievalFunnelPayload,
     NerdRetrievalMemoryRowPayload,
     NerdRetrievalPayload,
     NerdRetrievalQueryFamilyRowPayload,
@@ -18,7 +18,6 @@ from mcp_memory.management.models import (
     NerdTimeCountBucketPayload,
 )
 from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
-
 
 _RETRIEVAL_MEMORY_LIMIT = 100
 _RETRIEVAL_QUERY_FAMILY_LIMIT = 25

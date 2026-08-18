@@ -5,8 +5,8 @@ from typing import cast
 
 import pytest
 
-from mcp_memory.embeddings import HashingEmbedder
 from mcp_memory.core.ports import SearchHealthPort
+from mcp_memory.embeddings import HashingEmbedder
 from mcp_memory.management.health_reporting import (
     build_embedding_status,
     build_execution_attempt_health,
@@ -14,7 +14,6 @@ from mcp_memory.management.health_reporting import (
 )
 from mcp_memory.management.models import EmbeddingIntegrityEventSummaryPayload, SearchHealthPayload
 from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
-
 
 pytestmark = pytest.mark.small
 

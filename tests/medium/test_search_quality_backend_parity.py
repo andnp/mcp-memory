@@ -12,8 +12,8 @@ from typing import cast
 import pytest
 
 from benchmarks.search_quality import (
-    SearchQualityCase,
     SearchObservation,
+    SearchQualityCase,
     SearchQualityMetrics,
     TopicEmbedder,
     load_corpus,
@@ -31,7 +31,6 @@ from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
-
 
 pytestmark = pytest.mark.medium
 

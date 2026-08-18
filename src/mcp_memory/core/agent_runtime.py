@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 from mcp_memory.context import (
@@ -14,12 +14,14 @@ from mcp_memory.context import (
     TaskRuntimeCapabilities,
     TaskRuntimeContext,
 )
+from mcp_memory.core.curation_reconciliation import CurationReconciler
 from mcp_memory.core.maintenance_idle import drain_legacy_cleanup_tasks, should_preserve_idle_pause
+from mcp_memory.core.ports.curation import CurationRepository
+from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
-from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
+from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds, read_recurring_jitter_seconds
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
-from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
-from mcp_memory.core.recurring_jitter import read_recurring_jitter_seconds
 from mcp_memory.core.task_handlers import (
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     CONFLICT_DETECTOR_TASK_NAME,
@@ -34,26 +36,22 @@ from mcp_memory.core.task_handlers import (
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
     TAXONOMIST_TASK_NAME,
+    handle_conflict_detector_task,
+    handle_deduplicator_task,
     handle_defragmenter_task,
     handle_embedding_repair_task,
-    handle_conflict_detector_task,
-    handle_memory_curator_task,
-    handle_deduplicator_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
     handle_ingest_system1_task,
+    handle_memory_curator_task,
     handle_project_manager_task,
     handle_summarize_memory_task,
     handle_sweeper_task,
     handle_taxonomist_task,
     task_priority,
 )
+from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
 from mcp_memory.core.task_worker import RuntimeTaskWorker
-from mcp_memory.core.curation_reconciliation import CurationReconciler
-from mcp_memory.core.ports.curation import CurationRepository
-from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
-from mcp_memory.core.ports.tasks import TaskRecord
-
 
 logger = logging.getLogger(__name__)
 
