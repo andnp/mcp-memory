@@ -929,7 +929,7 @@ class PostgresTaskQueue:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
-        duration_totals: dict[str, float] = {name: 0.0 for name in task_names}
+        duration_totals: dict[str, float] = dict.fromkeys(task_names, 0.0)
         for row in rows:
             task_name = str(row[2])
             summary = summaries[task_name]

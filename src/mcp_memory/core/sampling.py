@@ -284,7 +284,7 @@ class RouletteProvider(Generic[T]):
             strategy_used,
             "bounded_exploration",
             f"selected={strategy_used}; fallback=no_priority_feedback; exploration=bounded",
-            {strategy: SELECTION_EXPLORATION_BONUS for strategy in allowed_strategies},
+            dict.fromkeys(allowed_strategies, SELECTION_EXPLORATION_BONUS),
             None,
         )
 

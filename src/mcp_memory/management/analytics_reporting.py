@@ -463,7 +463,7 @@ def build_graph_topology(
         return GraphTopologyPayload()
 
     link_rows = list_scoped_link_rows(db_manager, workspace_id, memory_ids, query_adapter=query_adapter)
-    degree_by_memory = {memory_id: 0 for memory_id in memory_ids}
+    degree_by_memory = dict.fromkeys(memory_ids, 0)
     support_by_memory: set[str] = set()
     link_type_counts: dict[str, int] = {}
 
