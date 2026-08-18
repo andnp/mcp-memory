@@ -83,6 +83,10 @@ def test_noop_cooldown_is_per_record_not_frontier_composition(db_manager) -> Non
 
 
 def test_noop_cooldown_is_bounded_and_exact_expiry_is_eligible(db_manager) -> None:
+    """Allow a no-op candidate to re-enter selection at exact expiry.
+
+    Repeated no-ops back off without making a candidate permanently ineligible.
+    """
     repository = _Repository()
     record = _record(uuid4())
     ctx = _context(db_manager, repository)
