@@ -7,6 +7,7 @@ from uuid import uuid4
 from mcp_memory.core.curation_direct_mcp import (
     _direct_curator_prompt,
     _direct_quality_run,
+    _direct_receipt_summaries,
     run_curator_direct_mcp,
 )
 from mcp_memory.core.curation_feedback import (
@@ -61,6 +62,68 @@ def _packet_record(memory_id: str, content: str = "Durable full content") -> Sim
 
 def _packet_task(data: dict[str, object] | None = None) -> SimpleNamespace:
     return SimpleNamespace(id="packet-task", data=data or {}, execution_epoch=0)
+
+
+def test_direct_receipt_summaries_are_bounded_and_compact() -> None:
+    """Project canonical receipts into a compact direct-result summary.
+
+    Full receipt content must not cross the direct result boundary.
+    """
+    run_id = uuid4()
+    action_id = uuid4()
+    memory_id = uuid4()
+    mutation_event_id = uuid4()
+    receipt = SimpleNamespace(
+        action_id=action_id,
+        operation="update_memory_record",
+        affected_ids=[memory_id],
+        status=SimpleNamespace(value="verified"),
+        mutation_event_id=mutation_event_id,
+        before_token="before",
+        after_token="after",
+        error_code=None,
+        content="full mutation content must stay in the ledger",
+    )
+    calls: list[tuple[object, int]] = []
+
+    def list_receipts(receipt_run_id: object, *, limit: int) -> list[object]:
+        calls.append((receipt_run_id, limit))
+        return [receipt]
+
+    summaries, reason = _direct_receipt_summaries(
+        cast(Any, SimpleNamespace(curation=SimpleNamespace(list_receipts=list_receipts))),
+        run_id,
+    )
+
+    assert calls == [(run_id, 100)]
+    assert reason is None
+    assert summaries == [
+        {
+            "action_id": str(action_id),
+            "operation": "update_memory_record",
+            "affected_ids": [str(memory_id)],
+            "status": "verified",
+            "mutation_event_id": str(mutation_event_id),
+            "before_token": "before",
+            "after_token": "after",
+            "error_code": None,
+        }
+    ]
+    assert "content" not in summaries[0]
+
+
+def test_direct_receipt_summaries_explain_reader_unavailability() -> None:
+    """Return an explicit reconciliation reason when receipts cannot be read.
+
+    Provider output is not a substitute for canonical action-store receipts.
+    """
+    summaries, reason = _direct_receipt_summaries(
+        cast(Any, SimpleNamespace(curation=SimpleNamespace())),
+        uuid4(),
+    )
+
+    assert summaries == []
+    assert reason == "canonical_receipt_reader_unavailable"
 
 
 def test_mixed_neutral_feedback_continues_after_measured_regression() -> None:

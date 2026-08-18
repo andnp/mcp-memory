@@ -124,7 +124,10 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
     tmp_path: Path,
     invalid_ledger: bool,
 ) -> None:
-    """Record direct curator mutations under the worker execution epoch."""
+    """Record direct curator mutations under the worker execution epoch.
+
+    Expose the same canonical receipt through both direct result surfaces.
+    """
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     workspace = tmp_path / "workspace"
@@ -248,6 +251,24 @@ async def test_direct_campaign_invokes_mcp_mutation_and_completes_work_item(
         assert len(receipts) == 1
         receipt = receipts[0]
         assert receipt.status is CurationReceiptState.APPLIED_UNVERIFIED
+        expected_receipt_summary = {
+            "action_id": str(receipt.action_id),
+            "operation": receipt.operation,
+            "affected_ids": [str(memory_id) for memory_id in receipt.affected_ids],
+            "status": receipt.status.value,
+            "mutation_event_id": str(receipt.mutation_event_id),
+            "before_token": receipt.before_token,
+            "after_token": receipt.after_token,
+            "error_code": receipt.error_code,
+        }
+        assert result["curation_receipts"] == [expected_receipt_summary]
+        assert result["curation_campaign_result"]["curation_receipts"] == [
+            expected_receipt_summary
+        ]
+        assert result["curation_receipt_reconciliation_reason"] is None
+        assert result["curation_campaign_result"][
+            "curation_receipt_reconciliation_reason"
+        ] is None
         connection = runtime.db_manager.get_connection()
         history = connection.execute(
             "SELECT curation_run_id, action_id FROM memory_mutation_events WHERE id = ?",

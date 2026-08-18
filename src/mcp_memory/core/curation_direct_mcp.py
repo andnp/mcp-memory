@@ -28,6 +28,9 @@ from mcp_memory.core.ports.curation import (
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
 from mcp_memory.core.ports.tasks import TaskRecord
 
+_DIRECT_RECEIPT_READ_LIMIT = 100
+_DIRECT_RECEIPT_RECONCILIATION_UNAVAILABLE = "canonical_receipt_reader_unavailable"
+
 
 async def run_curator_direct_mcp(
     ctx: ApplicationContext,
@@ -164,6 +167,10 @@ async def run_curator_direct_mcp(
         outcome = _project_direct_evidence_outcome(direct_evidence, actual_mutations)
     else:
         outcome = "no_op"
+    curation_receipts, curation_receipt_reconciliation_reason = _direct_receipt_summaries(
+        ctx,
+        run.run_id,
+    )
     if claimed_work_item is not None:
         complete_work_item(ctx, claimed_work_item.id)
     return sampling_payload(
@@ -200,14 +207,57 @@ async def run_curator_direct_mcp(
             "quality_outcomes": _quality_outcome_counts(quality_evidence),
             "quality_evidence_status": quality_evidence_status,
             "quality_evidence_reason": quality_evidence_reason,
+            "curation_receipts": curation_receipts,
+            "curation_receipt_reconciliation_reason": curation_receipt_reconciliation_reason,
             **provider_metadata,
         },
         quality_evidence=[item.model_dump(mode="json") for item in quality_evidence],
         quality_evidence_status=quality_evidence_status,
         quality_evidence_reason=quality_evidence_reason,
+        curation_receipts=curation_receipts,
+        curation_receipt_reconciliation_reason=curation_receipt_reconciliation_reason,
         curation_run_id=str(run.run_id),
         packet_id=packet_id,
     )
+
+
+def _direct_receipt_summaries(
+    ctx: ApplicationContext,
+    run_id: UUID,
+) -> tuple[list[dict[str, Any]], str | None]:
+    repository = getattr(ctx, "curation", None)
+    reader = getattr(repository, "list_receipts", None)
+    if not callable(reader):
+        return [], _DIRECT_RECEIPT_RECONCILIATION_UNAVAILABLE
+    try:
+        receipts = cast(Iterable[Any], reader(run_id, limit=_DIRECT_RECEIPT_READ_LIMIT))
+    except Exception:
+        return [], _DIRECT_RECEIPT_RECONCILIATION_UNAVAILABLE
+    return [_direct_receipt_summary(receipt) for receipt in receipts], None
+
+
+def _direct_receipt_summary(receipt: Any) -> dict[str, Any]:
+    return {
+        "action_id": _direct_receipt_value(getattr(receipt, "action_id", None)),
+        "operation": _direct_receipt_value(getattr(receipt, "operation", None)),
+        "affected_ids": [
+            _direct_receipt_value(affected_id)
+            for affected_id in getattr(receipt, "affected_ids", [])
+        ],
+        "status": _direct_receipt_value(getattr(receipt, "status", None)),
+        "mutation_event_id": _direct_receipt_value(
+            getattr(receipt, "mutation_event_id", None)
+        ),
+        "before_token": getattr(receipt, "before_token", None),
+        "after_token": getattr(receipt, "after_token", None),
+        "error_code": getattr(receipt, "error_code", None),
+    }
+
+
+def _direct_receipt_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(getattr(value, "value", value))
 
 
 def _direct_evidence_for_task(ctx: ApplicationContext, task: TaskRecord) -> list[Any]:
