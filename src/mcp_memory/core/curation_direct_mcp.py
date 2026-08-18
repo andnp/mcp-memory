@@ -57,7 +57,12 @@ async def run_curator_direct_mcp(
 
     packet_id = _context_packet_id(context_packet)
 
-    agentic_provider = _curator_agentic_provider(ctx, task, provider)
+    agentic_provider = _curator_agentic_provider(
+        ctx,
+        task,
+        provider,
+        curation_packet_id=packet_id,
+    )
     if agentic_provider is None:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -518,7 +523,13 @@ def _work_item_is_running(ctx: ApplicationContext, work_item: Any) -> bool:
     return current is not None and str(current.status) == "running"
 
 
-def _curator_agentic_provider(ctx: ApplicationContext, task: TaskRecord, provider: Any) -> Any:
+def _curator_agentic_provider(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any,
+    *,
+    curation_packet_id: str | None = None,
+) -> Any:
     candidate = provider if _supports_agentic_provider(provider) else getattr(ctx, "ai_agent_provider", None)
     if not _supports_agentic_provider(candidate):
         return None
@@ -529,6 +540,11 @@ def _curator_agentic_provider(ctx: ApplicationContext, task: TaskRecord, provide
             task_id=task.id,
             execution_epoch=task.execution_epoch,
             workspace_id=task.workspace_id,
+            **(
+                {"curation_packet_id": curation_packet_id}
+                if curation_packet_id is not None
+                else {}
+            ),
         )
     return candidate
 

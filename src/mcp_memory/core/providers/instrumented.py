@@ -46,6 +46,7 @@ class InstrumentedAIProvider:
         task_name: str | None = None,
         task_id: str | None = None,
         execution_epoch: int | None = None,
+        curation_packet_id: str | None = None,
         workspace_id: str | None = None,
         task_queue = None,
         task_execution_attempts: TaskExecutionAttemptPort | None = None,
@@ -69,6 +70,7 @@ class InstrumentedAIProvider:
         self._task_name = task_name
         self._task_id = task_id
         self._execution_epoch = execution_epoch
+        self._curation_packet_id = curation_packet_id
         self._workspace_id = workspace_id
         self._task_queue = task_queue
         self._task_execution_attempts = task_execution_attempts
@@ -97,6 +99,7 @@ class InstrumentedAIProvider:
         task_name: str | None,
         task_id: str | None = None,
         execution_epoch: int | None = None,
+        curation_packet_id: str | None = None,
         workspace_id: str | None = None,
     ):
         return InstrumentedAIProvider(
@@ -108,6 +111,9 @@ class InstrumentedAIProvider:
             task_name=task_name,
             task_id=task_id,
             execution_epoch=execution_epoch,
+            curation_packet_id=(
+                self._curation_packet_id if curation_packet_id is None else curation_packet_id
+            ),
             workspace_id=workspace_id,
             task_queue=self._task_queue,
             task_execution_attempts=self._task_execution_attempts,
@@ -137,6 +143,7 @@ class InstrumentedAIProvider:
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
+            curation_packet_id=self._curation_packet_id,
             workspace_id=self._workspace_id,
             task_queue=self._task_queue,
             task_execution_attempts=self._task_execution_attempts,
@@ -164,6 +171,7 @@ class InstrumentedAIProvider:
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
+            curation_packet_id=self._curation_packet_id,
             workspace_id=self._workspace_id,
             task_queue=self._task_queue,
             task_execution_attempts=self._task_execution_attempts,
@@ -275,6 +283,7 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 execution_epoch=self._execution_epoch,
+                curation_packet_id=self._curation_packet_id,
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
@@ -329,6 +338,7 @@ class InstrumentedAIProvider:
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
+            curation_packet_id=self._curation_packet_id,
             provider_key=self._provider_key,
             provider_name=self._provider_name,
             model_name=self._model_name,
@@ -377,6 +387,7 @@ class InstrumentedAIProvider:
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
+            curation_packet_id=self._curation_packet_id,
             request_id=None,
             attempt=None,
             attempt_identity=None,
@@ -482,6 +493,7 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 execution_epoch=self._execution_epoch,
+                curation_packet_id=self._curation_packet_id,
                 request_id=request_id,
                 attempt=_extract_attempt(observer_state.last_event),
                 attempt_identity=self._attempt_identity(
@@ -551,6 +563,7 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 execution_epoch=self._execution_epoch,
+                curation_packet_id=self._curation_packet_id,
                 request_id=request_id,
                 attempt=_extract_attempt(observer_state.last_event),
                 attempt_identity=self._attempt_identity(
@@ -635,6 +648,7 @@ class InstrumentedAIProvider:
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
+            curation_packet_id=self._curation_packet_id,
             request_id=request_id,
             attempt=_extract_attempt(observer_state.last_event),
             attempt_identity=self._attempt_identity(
@@ -742,6 +756,7 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 execution_epoch=self._execution_epoch,
+                curation_packet_id=self._curation_packet_id,
                 request_id=request_id,
                 attempt=_extract_attempt(observer_state.last_event),
                 attempt_identity=self._attempt_identity(
@@ -789,6 +804,7 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 execution_epoch=self._execution_epoch,
+                curation_packet_id=self._curation_packet_id,
                 request_id=request_id,
                 attempt=_extract_attempt(observer_state.last_event),
                 attempt_identity=self._attempt_identity(
@@ -850,6 +866,7 @@ class InstrumentedAIProvider:
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
+            curation_packet_id=self._curation_packet_id,
             request_id=request_id,
             attempt=_extract_attempt(observer_state.last_event),
             attempt_identity=self._attempt_identity(
@@ -904,6 +921,7 @@ class _InstrumentedAgenticSession:
                 task_name=self._provider._task_name,
                 task_id=self._provider._task_id,
                 execution_epoch=self._provider._execution_epoch,
+                curation_packet_id=self._provider._curation_packet_id,
                 request_id=request_id,
                 attempt=1,
                 attempt_identity=self._provider._attempt_identity(request_id=request_id, attempt=1),
@@ -927,6 +945,7 @@ class _InstrumentedAgenticSession:
                 task_name=self._provider._task_name,
                 task_id=self._provider._task_id,
                 execution_epoch=self._provider._execution_epoch,
+                curation_packet_id=self._provider._curation_packet_id,
                 request_id=request_id,
                 attempt=1,
                 attempt_identity=self._provider._attempt_identity(request_id=request_id, attempt=1),
@@ -948,6 +967,7 @@ class _InstrumentedAgenticSession:
             task_name=self._provider._task_name,
             task_id=self._provider._task_id,
             execution_epoch=self._provider._execution_epoch,
+            curation_packet_id=self._provider._curation_packet_id,
             request_id=request_id,
             attempt=1,
             attempt_identity=self._provider._attempt_identity(request_id=request_id, attempt=1),

@@ -420,3 +420,152 @@ async def test_instrumented_agentic_session_correlates_observer_and_usage_reques
     conversation = repository.get_conversation(usage["request_id"])[0]
     assert usage["attempt_identity"].startswith("agentic-session-task:8:")
     assert conversation.task_id == "agentic-session-task"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_propagates_packet_id_through_agentic_wrappers(db_manager) -> None:
+    """Keep curator packet attribution through provider wrapper factories and storage rows."""
+    class _Session:
+        def __init__(self, observer) -> None:
+            self._observer = observer
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self._observer(
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=901,
+                    started_at=1.0,
+                )
+            )
+            self._observer(
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=901,
+                    started_at=1.0,
+                    completed_at=2.0,
+                    duration_seconds=1.0,
+                    status="success",
+                    raw_text="done",
+                    parsed={"summary": "done"},
+                )
+            )
+            return AgenticRunResult(status="success", summary="done", raw_text="done")
+
+        async def close(self) -> None:
+            return None
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+            self.allowed_tool_names: tuple[str, ...] | None = None
+
+        def with_allowed_tool_names(self, allowed_tool_names: tuple[str, ...]):
+            provider = _Provider(self._observer)
+            provider.allowed_tool_names = allowed_tool_names
+            return provider
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def open_agent_session(self, *, allowed_tool_names=None, tools=None):
+            del allowed_tool_names, tools
+            return _Session(self._observer)
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="copilot-sdk",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id="packet-attributed-task",
+        execution_epoch=9,
+        workspace_id="workspace-a",
+        curation_packet_id="packet-123",
+    ).with_route_context(
+        provider_profile="copilot-strong",
+        route_available=True,
+    ).with_allowed_tool_names(("internal_update_memory_record",))
+
+    session = await provider.open_agent_session()
+    await session.run_agent("inspect packet")
+    await session.close()
+
+    usage = db_manager.get_connection().execute(
+        "SELECT request_id, curation_packet_id FROM provider_usage WHERE task_id = ?",
+        ("packet-attributed-task",),
+    ).fetchone()
+    conversation = db_manager.get_connection().execute(
+        "SELECT curation_packet_id FROM ai_conversations WHERE task_id = ?",
+        ("packet-attributed-task",),
+    ).fetchone()
+
+    assert usage["curation_packet_id"] == "packet-123"
+    assert conversation["curation_packet_id"] == "packet-123"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_leaves_packet_id_null_for_ordinary_calls(db_manager) -> None:
+    """Keep ordinary provider usage and conversation rows unattributed to curator packets."""
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=902,
+                    started_at=3.0,
+                )
+            )
+            self._observer(
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=902,
+                    started_at=3.0,
+                    completed_at=4.0,
+                    duration_seconds=1.0,
+                    status="success",
+                    raw_text='{"ok": true}',
+                    parsed={"ok": True},
+                )
+            )
+            return {"ok": True}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(
+        task_name="memory-ingest",
+        task_id="ordinary-provider-task",
+        workspace_id="workspace-a",
+    )
+
+    await provider.ask("ordinary request")
+
+    usage = db_manager.get_connection().execute(
+        "SELECT curation_packet_id FROM provider_usage WHERE task_id = ?",
+        ("ordinary-provider-task",),
+    ).fetchone()
+    conversation = db_manager.get_connection().execute(
+        "SELECT curation_packet_id FROM ai_conversations WHERE task_id = ?",
+        ("ordinary-provider-task",),
+    ).fetchone()
+
+    assert usage["curation_packet_id"] is None
+    assert conversation["curation_packet_id"] is None

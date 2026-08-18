@@ -5,6 +5,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from mcp_memory.core.curation_direct_mcp import (
+    _curator_agentic_provider,
     _direct_curator_prompt,
     _direct_quality_run,
     _direct_receipt_summaries,
@@ -403,6 +404,37 @@ def test_direct_result_exposes_packet_identity_when_provider_route_is_unavailabl
     )
 
     assert result["packet_id"] == packet.packet_id
+
+
+def test_curator_provider_binding_receives_packet_identity() -> None:
+    """Bind the supplied packet identity to the direct curator provider context."""
+    captured: dict[str, object] = {}
+
+    class _Provider:
+        def run_agent(self, prompt: str) -> None:
+            del prompt
+
+        def with_usage_context(self, **context: object):
+            captured.update(context)
+            return self
+
+    task = SimpleNamespace(
+        id="packet-binding-task",
+        task_name="memory-curator",
+        execution_epoch=4,
+        workspace_id="workspace",
+    )
+    provider = _Provider()
+
+    bound = _curator_agentic_provider(
+        cast(Any, SimpleNamespace(ai_agent_provider=None)),
+        cast(TaskRecord, task),
+        provider,
+        curation_packet_id="packet-456",
+    )
+
+    assert bound is provider
+    assert captured["curation_packet_id"] == "packet-456"
 
 
 def test_direct_curator_prompt_does_not_direct_blanket_date_deletion() -> None:
