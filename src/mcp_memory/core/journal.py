@@ -15,7 +15,7 @@ RECOVERABLE_RETENTION_SECONDS = 48 * 60 * 60
 class JournalEntry:
     """A single System 1 journal entry."""
 
-    __slots__ = ("id", "content", "workspace_id", "timestamp", "status")
+    __slots__ = ("content", "id", "status", "timestamp", "workspace_id")
 
     def __init__(self, id: int, content: str, workspace_id: str | None, timestamp: float, status: str) -> None:
         self.id = id
