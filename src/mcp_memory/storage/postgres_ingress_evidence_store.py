@@ -242,10 +242,6 @@ class PostgresSourceCoverageRepository(_PostgresIngressEvidenceRepository):
                 return None if row is None else _coverage_from_row(row)
 
 
-PostgresIngressBatchEvidenceStore = PostgresIngressBatchEvidenceRepository
-PostgresIngressActionReceiptStore = PostgresIngressActionReceiptRepository
-PostgresSourceCoverageStore = PostgresSourceCoverageRepository
-
 _BATCH_SELECT = """SELECT batch_id, task_id, execution_epoch, batch_sequence,
     claimed_entry_ids_json, source_fingerprint, source_entries_json, provider_route,
     execution_mode, policy_version, schema_version, claimed_at, finalized_at,
