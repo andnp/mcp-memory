@@ -170,3 +170,64 @@ def test_exact_identifier_boost_orders_match_and_explains_signal() -> None:
     assert explanation["exact_identifier_match"] is True
     assert explanation["exact_identifier_multiplier"] == EXACT_IDENTIFIER_MATCH_MULTIPLIER
     assert explanation["ranking_signal_multiplier"] == EXACT_IDENTIFIER_MATCH_MULTIPLIER
+
+
+def test_ranked_score_matches_the_reported_explanation() -> None:
+    """Ordering and explanation must never disagree about a candidate's score."""
+    engine = RankingEngine(Config())
+    candidate = RankedMemoryCandidate(
+        record=_record("supported", ["workspace-1"], title="daemon transport"),
+        incoming_links_count=3,
+        incoming_link_type_counts={"DEPENDS_ON": 2, "AMENDS": 1},
+    )
+    signals = RankingSignals(
+        matched_by_keyword=True,
+        matched_by_semantic=True,
+        semantic_score=0.82,
+        keyword_token_coverage=0.9,
+    )
+
+    ranked = engine.rank_records(
+        [candidate],
+        {"supported": 0.03},
+        "workspace-1",
+        ranking_signals={"supported": signals},
+        keyword_candidates_present=True,
+    )
+    explanation = engine.explain_candidate(
+        candidate,
+        0.03,
+        "workspace-1",
+        signals=signals,
+        keyword_candidates_present=True,
+    )
+
+    assert ranked[0][1] == pytest.approx(explanation["final_score"], abs=1e-6)
+
+
+def test_score_components_compose_to_the_ranked_score() -> None:
+    """The published components must account for the score, not merely echo it."""
+    engine = RankingEngine(Config())
+    candidate = RankedMemoryCandidate(
+        record=_record("plain", ["workspace-1"]),
+        incoming_links_count=0,
+        incoming_link_type_counts={},
+    )
+    signals = RankingSignals(matched_by_keyword=True, keyword_token_coverage=1.0)
+
+    components = engine.score_components(
+        candidate,
+        0.03,
+        "workspace-1",
+        signals=signals,
+        keyword_candidates_present=True,
+    )
+    ranked = engine.rank_records(
+        [candidate],
+        {"plain": 0.03},
+        "workspace-1",
+        ranking_signals={"plain": signals},
+        keyword_candidates_present=True,
+    )
+
+    assert components.compose() == pytest.approx(ranked[0][1], abs=1e-12)
