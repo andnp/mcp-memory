@@ -79,6 +79,7 @@ async def test_zmq_server_handles_concurrent_clients_and_request_workspace_conte
             "search_memory_records",
             "read_memory_records",
             "read_memory_record",
+            "get_skill_review_ledger",
         }
 
         first_result = _decode_tool_response(first_payload)
