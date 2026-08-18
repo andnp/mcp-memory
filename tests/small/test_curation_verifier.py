@@ -24,7 +24,7 @@ from mcp_memory.core.curation_models import (
 from mcp_memory.core.curation_verifier import CurationVerifier, _state_token
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
-from mcp_memory.relational.repository import RelationalMemoryReadContext, RelationalMemoryRepository
+from mcp_memory.relational.repository import MemoryReadContext, RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
 from tests.support.curation_executor import CurationExecutor
 
@@ -36,7 +36,7 @@ class _CountingMaintenanceReader:
         self.repository = repository
         self.peek_calls: list[str] = []
 
-    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None:
+    def peek_memory(self, memory_id: str) -> MemoryReadContext | None:
         self.peek_calls.append(memory_id)
         return self.repository.peek_memory(memory_id)
 
@@ -49,7 +49,7 @@ class _CountingMaintenanceReader:
         status: str | None = None,
         include_superseded: bool = False,
         limit: int = 50,
-    ) -> list[RelationalMemoryReadContext]:
+    ) -> list[MemoryReadContext]:
         return self.repository.search_memories_for_maintenance(
             query,
             workspace_id=workspace_id,

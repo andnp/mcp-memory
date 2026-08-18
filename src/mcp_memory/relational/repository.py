@@ -38,7 +38,6 @@ _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
 logger = logging.getLogger(__name__)
 
 
-RelationalMemoryReadContext = MemoryReadContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -1015,7 +1014,7 @@ class RelationalMemoryRepository:
             return None
         return self._hydrate_record(conn, row)
 
-    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None:
+    def peek_memory(self, memory_id: str) -> MemoryReadContext | None:
         """Read authoritative memory context without changing retrieval telemetry."""
         record = self.get_memory(memory_id)
         if record is None:
@@ -1030,7 +1029,7 @@ class RelationalMemoryRepository:
             for target in [self.get_memory(link.target_id)]
             if target is not None
         ]
-        return RelationalMemoryReadContext(
+        return MemoryReadContext(
             record=record,
             relationships={"outgoing": outgoing, "incoming": incoming},
             superseded=superseded,
@@ -1045,7 +1044,7 @@ class RelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
         limit: int = 50,
-    ) -> list[RelationalMemoryReadContext]:
+    ) -> list[MemoryReadContext]:
         """Search authoritative SQLite records without surfacing or accessing them."""
         memory_ids = self._search_keyword_memory_ids(
             query,
@@ -1060,7 +1059,7 @@ class RelationalMemoryRepository:
     def _hydrate_maintenance_contexts(
         self,
         memory_ids: list[str],
-    ) -> list[RelationalMemoryReadContext]:
+    ) -> list[MemoryReadContext]:
         if not memory_ids:
             return []
 
@@ -1094,7 +1093,7 @@ class RelationalMemoryRepository:
         )
         superseded_tags_by_memory_id = self._tags_by_memory_ids(conn, superseded_existing_ids)
 
-        contexts: list[RelationalMemoryReadContext] = []
+        contexts: list[MemoryReadContext] = []
         for memory_id in existing_memory_ids:
             record = self._candidate_record_from_row(
                 memory_rows_by_id[memory_id],
@@ -1113,7 +1112,7 @@ class RelationalMemoryRepository:
                 )
                 superseded.append(superseded_record)
             contexts.append(
-                RelationalMemoryReadContext(
+                MemoryReadContext(
                     record=record,
                     relationships={
                         "outgoing": outgoing,

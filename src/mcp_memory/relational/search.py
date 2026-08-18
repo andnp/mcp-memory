@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 SearchRepositoryLike = MemoryReadPort
 MaintenanceReadRepositoryLike = MemoryMaintenanceReadPort
-RelationalMemoryReadContext = MemoryReadContext
 
 
 @dataclass(slots=True)
@@ -75,7 +74,7 @@ class RelationalReadResult:
 
 
 def _to_relational_read_result(
-    context: RelationalMemoryReadContext | None,
+    context: MemoryReadContext | None,
 ) -> RelationalReadResult | None:
     if context is None:
         return None

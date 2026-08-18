@@ -32,7 +32,6 @@ from mcp_memory.storage.buffered_writer import BufferedWriter
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
 
 _SUMMARY_UNSET = object()
-RelationalMemoryReadContext = MemoryReadContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,7 +380,7 @@ class PostgresRelationalMemoryRepository:
                 row = cursor.fetchone()
                 return None if row is None else str(row[0])
 
-    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None:
+    def peek_memory(self, memory_id: str) -> MemoryReadContext | None:
         """Read authoritative memory context without changing retrieval telemetry."""
         record = self.get_memory(memory_id)
         if record is None:
@@ -396,7 +395,7 @@ class PostgresRelationalMemoryRepository:
             for target in [self.get_memory(link.target_id)]
             if target is not None
         ]
-        return RelationalMemoryReadContext(
+        return MemoryReadContext(
             record=record,
             relationships={"outgoing": outgoing, "incoming": incoming},
             superseded=superseded,
@@ -412,7 +411,7 @@ class PostgresRelationalMemoryRepository:
         tags: Sequence[str] | None = None,
         include_superseded: bool = False,
         limit: int = 50,
-    ) -> list[RelationalMemoryReadContext]:
+    ) -> list[MemoryReadContext]:
         """Search authoritative Postgres records without surfacing or accessing them."""
         memory_ids = self.search_keyword_memory_ids(
             query,
@@ -428,7 +427,7 @@ class PostgresRelationalMemoryRepository:
     def _hydrate_maintenance_contexts(
         self,
         memory_ids: list[str],
-    ) -> list[RelationalMemoryReadContext]:
+    ) -> list[MemoryReadContext]:
         if not memory_ids:
             return []
 
@@ -475,7 +474,7 @@ class PostgresRelationalMemoryRepository:
                     else {}
                 )
 
-        contexts: list[RelationalMemoryReadContext] = []
+        contexts: list[MemoryReadContext] = []
         for memory_id in existing_memory_ids:
             record = self._record_from_memory_row(
                 memory_rows_by_id[memory_id],
@@ -493,7 +492,7 @@ class PostgresRelationalMemoryRepository:
                 if link.link_type == "SUPERSEDES" and link.target_id in superseded_rows_by_id
             ]
             contexts.append(
-                RelationalMemoryReadContext(
+                MemoryReadContext(
                     record=record,
                     relationships={
                         "outgoing": outgoing,

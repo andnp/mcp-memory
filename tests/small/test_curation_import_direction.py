@@ -28,7 +28,7 @@ COMPATIBILITY_ROOTS = {
 # provider-neutral read port is extracted.
 DEFERRED_IMPORTS = {
     ("curation_verifier.py", "mcp_memory.relational.repository", "MemoryLink"),
-    ("curation_verifier.py", "mcp_memory.relational.repository", "RelationalMemoryReadContext"),
+    ("curation_verifier.py", "mcp_memory.relational.repository", "MemoryReadContext"),
 }
 ALLOWED_COMPATIBILITY_IMPORTS = {
     ("curation.py", "mcp_memory.curation_store", "CandidateDisposition"),

@@ -27,8 +27,6 @@ from mcp_memory.core.ports.curation import (
 from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
 from mcp_memory.core.ports.memory import MemoryLink, MemoryReadContext
 
-RelationalMemoryReadContext = MemoryReadContext
-
 
 class CurationVerificationError(RuntimeError):
     """The receipt could not be verified against the authoritative store."""
@@ -427,8 +425,8 @@ class CurationVerifier:
         """Descriptive alias for :meth:`verify`."""
         return self.verify(receipt, action)
 
-    def _fresh_contexts(self, memory_ids: Sequence[str]) -> dict[str, RelationalMemoryReadContext]:
-        contexts: dict[str, RelationalMemoryReadContext] = {}
+    def _fresh_contexts(self, memory_ids: Sequence[str]) -> dict[str, MemoryReadContext]:
+        contexts: dict[str, MemoryReadContext] = {}
         for memory_id in memory_ids:
             context = self._maintenance_reads.peek_memory(memory_id)
             if context is None or context.record.id != memory_id:
@@ -487,7 +485,7 @@ def _state_token(records: Mapping[str, Any], ids: Sequence[str]) -> str | None:
 
 
 def _has_exact_edge(
-    read_context: RelationalMemoryReadContext,
+    read_context: MemoryReadContext,
     *,
     source_id: str,
     target_id: str,
@@ -509,7 +507,7 @@ def _has_exact_edge(
 
 
 def _has_any_edge(
-    read_context: RelationalMemoryReadContext,
+    read_context: MemoryReadContext,
     *,
     source_id: str,
     target_id: str,
@@ -545,7 +543,7 @@ def _normalize_link_type(link_type: str) -> str:
     return normalized
 
 
-def _split_child_ids(read_context: RelationalMemoryReadContext) -> list[str]:
+def _split_child_ids(read_context: MemoryReadContext) -> list[str]:
     raw_ids = read_context.record.metadata.get("split_child_memory_ids")
     if not isinstance(raw_ids, list) or not raw_ids:
         raise _PostconditionMismatch("split_children_missing")
