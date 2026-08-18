@@ -240,21 +240,6 @@ class RankingEngine:
             return 0.0
         return min((supporting_links * 0.08) + 0.04, 0.2)
 
-    def score_from_rrf(
-        self,
-        record: RelationalMemoryRecord,
-        rrf_score: float,
-        workspace_id: str | None = None,
-    ) -> float:
-        authority_counts = {}
-        score = self.calibrate_score(rrf_score)
-        score = min(score + self.type_aware_recency_bonus(record) + self.graph_support_bonus(record, authority_counts), 1.0)
-        score *= self.workspace_multiplier(record, workspace_id)
-        score += self.adjusted_access_bonus(record, authority_counts)
-        score *= self.authority_multiplier(record)
-        score *= self.degradation_multiplier(record)
-        return min(max(score, 0.0), 1.0)
-
     def _signal_adjustment_multiplier(
         self,
         signals: RankingSignals,
