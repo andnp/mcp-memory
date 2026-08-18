@@ -133,7 +133,7 @@ class ScoringWeights:
     semantic_only_abstain_threshold: float = 0.8
     semantic_only_keyword_penalty: float = 0.65
     keyword_coverage_floor: float = 0.6
-    keyword_low_coverage_penalty: float = 0.7
+    keyword_low_coverage_penalty: float = 0.4
     graph_expansion_only_penalty: float = 0.35
     degradation_multiplier: float = DEGRADATION_PENALTY
     access_half_life_days: float = ACCESS_HALF_LIFE_DAYS
