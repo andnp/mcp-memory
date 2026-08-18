@@ -74,7 +74,7 @@ class CuratorRolloutDecision:
 
 def assess_curator_rollout(
     evidence: CuratorRolloutEvidence,
-    policy: CuratorRolloutPolicy = CuratorRolloutPolicy(),
+    policy: CuratorRolloutPolicy | None = None,
 ) -> CuratorRolloutDecision:
     """Assess evidence without changing runtime admission or stored state.
 
@@ -84,6 +84,7 @@ def assess_curator_rollout(
     pass.  Stop reasons are returned in stable evaluation order.
     """
 
+    policy = policy if policy is not None else CuratorRolloutPolicy()
     reasons: list[str] = []
     observed_total = evidence.evaluated_outcomes + evidence.unobserved_outcomes
     productive = evidence.productive_outcomes + (
