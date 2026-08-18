@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import cast
 
 import pytest
+from searchkernel.domain.models import Record, SearchResultProvenance
+from searchkernel.ports.search_results import RecordSearchResult
 from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchConfig
 
@@ -979,3 +983,80 @@ async def test_degraded_semantic_search_does_not_report_abstention() -> None:
         f"{MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX}"
         "semantic_candidates=0;semantic_only_candidates=0;rejected=0"
     ) in outcome.diagnostics
+
+
+def _semantic_only_result(memory_id: str, *, cosine: float) -> RecordSearchResult:
+    """A result matched by the vector lane alone, carrying its raw cosine."""
+    provenance = SearchResultProvenance()
+    provenance.add_strategy("vector", 1, cosine)
+    return RecordSearchResult(
+        record=Record(
+            source_kind="memory",
+            source_id=memory_id,
+            title=memory_id,
+            body=f"body {memory_id}",
+            created_at=datetime(2026, 7, 30, 12, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 7, 30, 13, 0, tzinfo=UTC),
+        ),
+        score=0.1,
+        provenance=provenance,
+    )
+
+
+def _admission_context(threshold: float) -> record_pipeline._MemorySearchSignalContext:
+    return record_pipeline._MemorySearchSignalContext(
+        query="daemon transport",
+        query_tokens=("daemon", "transport"),
+        semantic_only_abstain_threshold=threshold,
+    )
+
+
+@contextmanager
+def _installed_signal_context(context: object):
+    token = record_pipeline._ACTIVE_FILTERS.set(
+        {"_mcp_memory_signal_context": context}
+    )
+    try:
+        yield
+    finally:
+        record_pipeline._ACTIVE_FILTERS.reset(token)
+
+
+def test_strong_semantic_only_result_is_admitted_without_keyword_candidates() -> None:
+    repository = FakeRepository({"memory-1": _memory("memory-1")})
+    config = Config()
+    context = _admission_context(0.8)
+
+    with _installed_signal_context(context):
+        allowed = record_pipeline._result_allowed(
+            cast(MemoryRepositoryPort, repository),
+            _semantic_only_result("memory-1", cosine=0.94),
+            config,
+        )
+
+    assert allowed is True
+    assert context.semantic_abstention_count == 0
+
+
+def test_semantic_admission_ignores_a_weaker_candidate_seen_first() -> None:
+    """A low-cosine candidate seen first must not gate a later strong one."""
+    repository = FakeRepository(
+        {"memory-1": _memory("memory-1"), "memory-2": _memory("memory-2")}
+    )
+    config = Config()
+    context = _admission_context(0.8)
+
+    with _installed_signal_context(context):
+        weak = record_pipeline._result_allowed(
+            cast(MemoryRepositoryPort, repository),
+            _semantic_only_result("memory-1", cosine=0.45),
+            config,
+        )
+        strong = record_pipeline._result_allowed(
+            cast(MemoryRepositoryPort, repository),
+            _semantic_only_result("memory-2", cosine=0.94),
+            config,
+        )
+
+    assert weak is False
+    assert strong is True
