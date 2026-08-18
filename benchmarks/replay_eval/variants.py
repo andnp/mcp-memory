@@ -104,11 +104,12 @@ def noise_control(
 ) -> Variant:
     """A variant that reshuffles results without using any relevance signal.
 
-    This is the harness's own test. Because the labeled set is conditioned on
-    production having surfaced each memory, most labels sit mid-list with more
-    room to rise than to fall, so a comparison that mistakes churn for progress
-    will score this variant as an improvement. It must come back insignificant;
-    if it does not, no other result from the harness can be believed.
+    Because the labeled set is conditioned on production having surfaced each
+    memory, most labels sit mid-list with more room to rise than to fall, so a
+    comparison that mistakes churn for progress would score this variant as an
+    improvement. A significant gain here therefore invalidates the harness; a
+    significant loss is the expected result, since degrading the ranker should
+    measure as a degradation.
     """
     if magnitude < 0.0:
         raise ValueError("magnitude must not be negative")
