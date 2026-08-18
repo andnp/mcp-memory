@@ -389,6 +389,7 @@ def build_memory_record_pipeline(
     hydrator = MemoryHydrator(cast(MemoryReadPort, policy_repository))
     record_search_config = RecordSearchConfig(
         minimum_candidate_limit=50,
+        rrf_k=resolved_config.search_ranking.rrf_k,
         graph_fusion="max",
         max_graph_seeds=3,
         max_neighbors_per_seed=10,
