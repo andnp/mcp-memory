@@ -43,6 +43,9 @@ dev = [
 [tool.uv]
 package = true
 
+[tool.pyright]
+typeCheckingMode = "standard"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
