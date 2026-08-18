@@ -253,6 +253,8 @@ def test_curator_adapter_preserves_external_link_targets(db_manager) -> None:
         finalize_curator_execution()
 
     assert result["link"]["target_id"] == "ext:docs/plan.md"
+    assert "curation_receipt" in result
+    assert result["curation_receipt"]["operation"] == "create_link"
     assert repository.get_links(source.id, direction="outgoing")[0].target_id == "ext:docs/plan.md"
 
 

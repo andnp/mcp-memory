@@ -49,9 +49,6 @@ def execute_curator_mutation(
         return service(ctx, arguments)
 
     target_ids = _target_ids(name, arguments)
-    if any(memory_id.startswith("ext:") for memory_id in target_ids):
-        return service(ctx, arguments)
-
     action_id = direct_action_id(evidence.evidence_id)
     operation = _operation(name, arguments)
     receipt_store = getattr(ctx, "curation", None)
@@ -140,7 +137,7 @@ def _affected_ids(payload: dict[str, Any], target_ids: list[str]) -> list[str]:
                 visit(child)
 
     visit(payload)
-    return list(dict.fromkeys(values))
+    return list(dict.fromkeys(value for value in values if not value.startswith("ext:")))
 
 
 class _TransactionRepository:

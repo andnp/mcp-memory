@@ -320,7 +320,9 @@ class SQLiteCurationActionStore:
             )
             self._fail_stage("history")
 
-            affected_ids = _canonical_target_ids(result.affected_ids or transaction.touched_ids or normalized_targets)
+            affected_ids = _local_memory_ids(
+                result.affected_ids or transaction.touched_ids or normalized_targets
+            )
             receipt = CurationActionReceipt(
                 run_id=run_id,
                 action_id=action_id,
@@ -377,6 +379,8 @@ class SQLiteCurationActionStore:
 
     def _lock_targets(self, connection: sqlite3.Connection, target_ids: Sequence[str]) -> None:
         for memory_id in target_ids:
+            if memory_id.startswith("ext:"):
+                continue
             row = connection.execute("SELECT id FROM memories WHERE id = ?", (memory_id,)).fetchone()
             if row is None:
                 raise CurationActionStaleError(f"target memory {memory_id!r} is missing")
@@ -857,6 +861,8 @@ class _SQLiteCurationTransaction:
 
     def _require_endpoint(self, memory_id: str | UUID) -> str:
         normalized_id = _canonical_id(memory_id)
+        if normalized_id.startswith("ext:"):
+            return normalized_id
         if normalized_id in self._target_ids or normalized_id in self._new_ids:
             return normalized_id
         if self._connection.execute("SELECT 1 FROM memories WHERE id = ?", (normalized_id,)).fetchone() is not None:
@@ -904,6 +910,10 @@ def _canonical_target_ids(values: Sequence[str | UUID]) -> list[str]:
     if "" in normalized:
         raise CurationActionFatalError("target IDs must be non-empty")
     return sorted(normalized, key=lambda value: value.encode("utf-8"))
+
+
+def _local_memory_ids(values: Sequence[str | UUID]) -> list[str]:
+    return [value for value in _canonical_target_ids(values) if not value.startswith("ext:")]
 
 
 def _canonical_id(value: object) -> str:

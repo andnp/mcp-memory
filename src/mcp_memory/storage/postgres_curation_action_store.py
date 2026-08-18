@@ -34,6 +34,7 @@ from mcp_memory.curation_action_store import (
     _check_replay_identity,
     _field,
     _link_mapping,
+    _local_memory_ids,
     _normalize_link_type,
     _normalize_result,
     _semantic_token,
@@ -246,7 +247,7 @@ class PostgresCurationActionStore:
                     )
                     self._fail_stage("history")
 
-                    affected_ids = _canonical_target_ids(
+                    affected_ids = _local_memory_ids(
                         result.affected_ids or transaction.touched_ids or normalized_targets
                     )
                     receipt = CurationActionReceipt(
@@ -311,6 +312,8 @@ class PostgresCurationActionStore:
 
     def _lock_targets(self, cursor: CursorLike, target_ids: Sequence[str]) -> None:
         for memory_id in target_ids:
+            if memory_id.startswith("ext:"):
+                continue
             cursor.execute("SELECT id FROM memories WHERE id = %s FOR UPDATE", (memory_id,))
             if cursor.fetchone() is None:
                 raise CurationActionStaleError(f"target memory {memory_id!r} is missing")
@@ -799,6 +802,8 @@ class _PostgresCurationTransaction:
 
     def _require_endpoint(self, memory_id: str | UUID) -> str:
         normalized_id = _canonical_id(memory_id)
+        if normalized_id.startswith("ext:"):
+            return normalized_id
         if normalized_id in self._target_ids or normalized_id in self._new_ids:
             return normalized_id
         self._cursor.execute("SELECT 1 FROM memories WHERE id = %s", (normalized_id,))
