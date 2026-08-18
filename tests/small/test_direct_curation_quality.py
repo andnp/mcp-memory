@@ -168,17 +168,14 @@ def test_direct_quality_reports_missing_repository(db_manager) -> None:
     assert evaluation.evidence == ()
     assert evaluation.status == "unavailable"
     assert evaluation.reason == "quality_repository_unavailable"
-    assert evaluation.run_outcome is CurationRunOutcome.QUALITY_REJECTED
+    assert evaluation.run_outcome is CurationRunOutcome.APPLIED
 
 
-def test_direct_quality_persists_rejected_wave(
+def test_direct_quality_persists_regression_without_rejecting_run(
     monkeypatch: pytest.MonkeyPatch,
     db_manager,
 ) -> None:
-    """Fail closed when measured quality evidence rejects a mutation wave.
-
-    The durable quality run must carry the rejected outcome.
-    """
+    """Keep quality regression evidence separate from curator execution outcome."""
     task = _task()
     run = _direct_quality_run(task)
     evidence = CurationQualityEvidence(
@@ -210,9 +207,9 @@ def test_direct_quality_persists_rejected_wave(
     )
     stored = SQLiteCurationStore(db_manager).get_run(run.run_id)
 
-    assert evaluation.run_outcome is CurationRunOutcome.QUALITY_REJECTED
+    assert evaluation.run_outcome is CurationRunOutcome.APPLIED
     assert stored is not None
-    assert stored.outcome is CurationRunOutcome.QUALITY_REJECTED
+    assert stored.outcome is CurationRunOutcome.APPLIED
 
 
 def test_direct_quality_run_recovers_from_concurrent_insert() -> None:

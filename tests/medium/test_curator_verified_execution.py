@@ -287,7 +287,7 @@ async def test_direct_campaign_does_not_report_unmatched_mutations_as_verified(
 
 
 @pytest.mark.asyncio
-async def test_direct_campaign_reports_quality_rejection_after_measured_regression(
+async def test_direct_campaign_preserves_execution_outcome_after_quality_regression(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -334,7 +334,7 @@ async def test_direct_campaign_reports_quality_rejection_after_measured_regressi
                 evidence=(evidence,),
                 status="recorded",
                 reason=None,
-                run_outcome=CurationRunOutcome.QUALITY_REJECTED,
+                run_outcome=CurationRunOutcome.APPLIED,
             ),
         )
 
@@ -342,8 +342,8 @@ async def test_direct_campaign_reports_quality_rejection_after_measured_regressi
 
         assert result["actual_mutation_count"] == 1
         assert result["verified_mutation_count"] == 1
-        assert result["curation_outcome"] == CurationRunOutcome.QUALITY_REJECTED.value
-        assert result["curation_campaign_result"]["outcome"] == CurationRunOutcome.QUALITY_REJECTED.value
+        assert result["curation_outcome"] == "applied_verified"
+        assert result["curation_campaign_result"]["outcome"] == "applied_verified"
     finally:
         runtime.close()
 

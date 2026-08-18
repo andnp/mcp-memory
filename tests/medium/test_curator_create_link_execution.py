@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.curation_models import CurationRunOutcome
 from mcp_memory.core.ports.work_items import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
@@ -93,7 +92,7 @@ async def test_direct_campaign_applies_create_link_mcp_tool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Keep the link mutation while rejecting its measured quality wave."""
+    """Keep the link mutation when quality evidence reports a regression."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     workspace = tmp_path / "workspace"
@@ -128,7 +127,7 @@ async def test_direct_campaign_applies_create_link_mcp_tool(
 
         result = await handle_memory_curator_task(runtime, _task(runtime), object())
 
-        assert result["curation_outcome"] == CurationRunOutcome.QUALITY_REJECTED.value
+        assert result["curation_outcome"] == "applied_verified"
         assert result["mutations"] == 1
         assert runtime.repository.get_links(source.id, direction="outgoing")
         assert runtime.work_items.get_item(item.id).status == "completed"

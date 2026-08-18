@@ -17,7 +17,6 @@ from mcp_memory.core.curation_quality import (
     quality_productive_mutation_count,
 )
 from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
-from mcp_memory.core.curation_quality_policy import QualityOutcome
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
 from mcp_memory.core.ports.curation import (
@@ -139,8 +138,6 @@ async def run_curator_direct_mcp(
         quality_evidence_reason = "direct_mutation_evidence_missing"
     elif direct_evidence:
         outcome = _project_direct_evidence_outcome(direct_evidence, actual_mutations)
-        if quality_evaluation.run_outcome is CurationRunOutcome.QUALITY_REJECTED:
-            outcome = CurationRunOutcome.QUALITY_REJECTED.value
     else:
         outcome = "no_op"
     if claimed_work_item is not None:
@@ -201,6 +198,7 @@ def _evaluate_direct_quality(
     *,
     campaign_hypothesis: CampaignHypothesis | None,
 ) -> _DirectQualityEvaluation:
+    """Record quality observations without rejecting curator execution."""
     if not evidence:
         return _DirectQualityEvaluation((), "not_applicable")
     quality_repository = getattr(ctx, "curation_quality", None)
@@ -228,9 +226,9 @@ def _evaluate_direct_quality(
         campaign_hypothesis=campaign_hypothesis,
     )
     if not quality_evidence:
-        _terminalize_direct_quality_run(ctx, persisted_run, CurationRunOutcome.QUALITY_REJECTED)
+        _terminalize_direct_quality_run(ctx, persisted_run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "not_observed", "no_sampled_mutations")
-    run_outcome = _direct_quality_run_outcome(quality_evidence)
+    run_outcome = CurationRunOutcome.APPLIED
     _terminalize_direct_quality_run(ctx, persisted_run, run_outcome)
     return _DirectQualityEvaluation(quality_evidence, "recorded", run_outcome=run_outcome)
 
@@ -289,21 +287,12 @@ def _optional_task_uuid(task_id: str) -> UUID | None:
 
 @dataclass(frozen=True, slots=True)
 class _DirectQualityEvaluation:
+    """Quality telemetry that never changes the curator execution outcome."""
+
     evidence: tuple[CurationQualityEvidence, ...]
     status: str
     reason: str | None = None
-    run_outcome: CurationRunOutcome = CurationRunOutcome.QUALITY_REJECTED
-
-
-def _direct_quality_run_outcome(
-    quality_evidence: Iterable[CurationQualityEvidence],
-) -> CurationRunOutcome:
-    if any(
-        item.wave_status == "rejected" or item.status == QualityOutcome.REGRESSED.value
-        for item in quality_evidence
-    ):
-        return CurationRunOutcome.QUALITY_REJECTED
-    return CurationRunOutcome.APPLIED
+    run_outcome: CurationRunOutcome = CurationRunOutcome.APPLIED
 
 
 def _quality_outcome_counts(evidence: Iterable[CurationQualityEvidence]) -> dict[str, int]:
