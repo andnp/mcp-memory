@@ -1,9 +1,14 @@
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
-from mcp_memory.core.curation_direct_mcp import _direct_curator_prompt
+from mcp_memory.core.curation_direct_mcp import (
+    _direct_curator_prompt,
+    _direct_quality_run,
+    run_curator_direct_mcp,
+)
 from mcp_memory.core.curation_feedback import (
     _feedback_termination_reason,
     _quality_feedback_payload,
@@ -55,7 +60,7 @@ def _packet_record(memory_id: str, content: str = "Durable full content") -> Sim
 
 
 def _packet_task(data: dict[str, object] | None = None) -> SimpleNamespace:
-    return SimpleNamespace(id="packet-task", data=data or {})
+    return SimpleNamespace(id="packet-task", data=data or {}, execution_epoch=0)
 
 
 def test_mixed_neutral_feedback_continues_after_measured_regression() -> None:
@@ -288,6 +293,53 @@ def test_direct_curator_prompt_includes_packet_identity_and_summary_only_context
     assert '"content": "omitted"' in prompt
     assert "secret full record body" not in prompt
     assert '"seed_records"' not in prompt
+
+
+def test_direct_run_persists_packet_identity_and_disclosure_audit() -> None:
+    """Use the exact packet identity when constructing the durable curator run."""
+    record = _packet_record("seed")
+    batch = SamplingBatch(None, "semantic", None, 1, cast(Any, [record]))
+    packet = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)),
+        cast(Any, _packet_task({"policy_version": "policy-v2"})),
+        batch,
+        [record],
+        [record],
+    )
+    task = cast(TaskRecord, _packet_task({"policy_version": "policy-v2"}))
+
+    run = _direct_quality_run(task, packet)
+
+    assert run.context_fingerprint == packet.packet_id
+    assert run.policy_version == "policy-v2"
+    assert run.disclosure_audit["packet_id"] == packet.packet_id
+    assert run.disclosure_audit["disclosure"] == packet.to_mapping()["disclosure"]
+    assert run.disclosure_audit["limits"] == packet.to_mapping()["limits"]
+
+
+def test_direct_result_exposes_packet_identity_when_provider_route_is_unavailable() -> None:
+    """Expose packet identity in curator results even when no provider session opens."""
+    record = _packet_record("seed")
+    batch = SamplingBatch(None, "semantic", None, 1, cast(Any, [record]))
+    packet = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)), cast(Any, _packet_task()), batch, [record], [record]
+    )
+
+    result = asyncio.run(
+        run_curator_direct_mcp(
+            cast(Any, SimpleNamespace(ai_agent_provider=None)),
+            cast(TaskRecord, _packet_task()),
+            provider=object(),
+            seed_batch=batch,
+            sampled_records=[record],
+            seed_records=[record],
+            claimed_work_item=None,
+            work_item_metadata={},
+            context_packet=packet,
+        )
+    )
+
+    assert result["packet_id"] == packet.packet_id
 
 
 def test_direct_curator_prompt_does_not_direct_blanket_date_deletion() -> None:

@@ -52,6 +52,8 @@ async def run_curator_direct_mcp(
     from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
     from mcp_memory.core.task_handlers.maintenance_work_items import complete_work_item, release_work_item
 
+    packet_id = _context_packet_id(context_packet)
+
     agentic_provider = _curator_agentic_provider(ctx, task, provider)
     if agentic_provider is None:
         if claimed_work_item is not None:
@@ -66,6 +68,7 @@ async def run_curator_direct_mcp(
             tool_calls_executed=0,
             mutations=0,
             reason="campaign_agentic_provider_not_configured",
+            packet_id=packet_id,
         )
 
     opener = getattr(agentic_provider, "open_agent_session", None)
@@ -82,9 +85,10 @@ async def run_curator_direct_mcp(
             tool_calls_executed=0,
             mutations=0,
             reason="campaign_agentic_session_not_configured",
+            packet_id=packet_id,
         )
 
-    run = _prepare_direct_run(ctx, _direct_quality_run(task))
+    run = _prepare_direct_run(ctx, _direct_quality_run(task, context_packet))
     if run is None:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -98,6 +102,7 @@ async def run_curator_direct_mcp(
             tool_calls_executed=0,
             mutations=0,
             reason="curation_run_unavailable",
+            packet_id=packet_id,
         )
 
     budget = mutation_budget or CurationMutationBudget()
@@ -179,6 +184,7 @@ async def run_curator_direct_mcp(
         curation_outcome=outcome,
         curation_no_op_reason=None if mutations else "agent_no_mutations",
         curation_campaign_result={
+            "packet_id": packet_id,
             "outcome": outcome,
             "mutation_count": mutations,
             "productive_mutation_count": quality_productive_mutations,
@@ -200,6 +206,7 @@ async def run_curator_direct_mcp(
         quality_evidence_status=quality_evidence_status,
         quality_evidence_reason=quality_evidence_reason,
         curation_run_id=str(run.run_id),
+        packet_id=packet_id,
     )
 
 
@@ -313,18 +320,50 @@ def _terminalize_direct_quality_run(
         terminalizer(run.run_id, run.state, outcome)
 
 
-def _direct_quality_run(task: TaskRecord) -> CurationRun:
+def _direct_quality_run(task: TaskRecord, context_packet: Any | None = None) -> CurationRun:
     run_id = uuid5(NAMESPACE_URL, f"mcp-memory:direct-quality-run:{task.id}:{task.execution_epoch}")
+    packet_mapping = _context_packet_mapping(context_packet)
+    packet_id = _context_packet_id(context_packet)
+    policy_version = str(
+        packet_mapping.get("policy_version", task.data.get("policy_version", "direct-quality-v1"))
+    )
     return CurationRun(
         run_id=run_id,
         task_id=_optional_task_uuid(task.id),
         execution_epoch=task.execution_epoch,
         frontier_key=f"direct:{task.id}",
-        context_fingerprint=f"direct:{task.id}:{task.execution_epoch}",
-        policy_version=str(task.data.get("policy_version", "direct-quality-v1")),
+        context_fingerprint=packet_id or f"direct:{task.id}:{task.execution_epoch}",
+        policy_version=policy_version,
+        disclosure_audit=_packet_disclosure_audit(packet_mapping, packet_id, policy_version),
         selector_strategy=str(task.data.get("strategy", "direct")),
         state=CurationRunState.CREATED,
     )
+
+
+def _context_packet_mapping(context_packet: Any | None) -> dict[str, Any]:
+    mapper = getattr(context_packet, "to_mapping", None)
+    if not callable(mapper):
+        return {}
+    mapping = mapper()
+    return dict(mapping) if isinstance(mapping, dict) else {}
+
+
+def _context_packet_id(context_packet: Any | None) -> str | None:
+    packet_id = getattr(context_packet, "packet_id", None)
+    return packet_id if isinstance(packet_id, str) and packet_id else None
+
+
+def _packet_disclosure_audit(
+    packet_mapping: dict[str, Any], packet_id: str | None, policy_version: str
+) -> dict[str, Any]:
+    return {
+        "packet_id": packet_id,
+        "schema_version": packet_mapping.get("schema_version"),
+        "policy_version": policy_version,
+        "disclosure": packet_mapping.get("disclosure", {}),
+        "omissions": packet_mapping.get("omissions", []),
+        "limits": packet_mapping.get("limits", {}),
+    }
 
 
 def _optional_task_uuid(task_id: str) -> UUID | None:
