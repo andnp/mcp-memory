@@ -23,6 +23,7 @@ from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.direct_mutation_evidence_store import SQLiteDirectMutationEvidenceStore
+from mcp_memory.storage.guarded_health_check import GuardedHealthCheck
 from mcp_memory.storage.ingress_evidence_store import (
     SQLiteIngressActionReceiptStore,
     SQLiteIngressBatchEvidenceStore,
@@ -41,23 +42,22 @@ from mcp_memory.utils.db import DatabaseManager
 class _SQLiteEmbeddingDatabaseHealth:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db_manager = db_manager
+        self._guard = GuardedHealthCheck(
+            exception_type=sqlite3.Error,
+            reopen=db_manager.close,
+            probe=self._quick_check,
+        )
+
+    def _quick_check(self) -> None:
+        quick_check = self._db_manager.get_connection().execute("PRAGMA quick_check").fetchone()
+        if quick_check is not None and str(quick_check[0]).lower() != "ok":
+            raise EmbeddingDatabaseHealthError(f"quick_check_failed:{quick_check[0]}")
 
     def run_integrity_check(self, operation: Callable[[], None]) -> None:
-        try:
-            quick_check = self._db_manager.get_connection().execute("PRAGMA quick_check").fetchone()
-            if quick_check is not None and str(quick_check[0]).lower() != "ok":
-                raise EmbeddingDatabaseHealthError(f"quick_check_failed:{quick_check[0]}")
-            operation()
-        except sqlite3.Error as exc:
-            raise EmbeddingDatabaseHealthError(str(exc)) from exc
+        self._guard.run_integrity_check(operation)
 
     def retry_after_reopen(self, operation: Callable[[], None]) -> bool:
-        try:
-            self._db_manager.close()
-            self.run_integrity_check(operation)
-        except (EmbeddingDatabaseHealthError, OSError, ValueError):
-            return False
-        return True
+        return self._guard.retry_after_reopen(operation)
 
 
 def build_sqlite_runtime_components(
