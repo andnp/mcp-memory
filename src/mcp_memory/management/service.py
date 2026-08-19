@@ -63,7 +63,6 @@ from mcp_memory.management.mutation_history_service import (
     MutationHistoryServiceDependencies,
 )
 from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
-from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.runtime_health_service import (
     RuntimeHealthService,
     RuntimeHealthServiceDependencies,
@@ -92,6 +91,7 @@ from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.serialization import (
     task_payload,
 )
+from mcp_memory.utils.sql_portable_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 
 _build_default_provider_usage = _context_build_default_provider_usage
 _build_default_embedding_integrity_events = _context_build_default_embedding_integrity_events

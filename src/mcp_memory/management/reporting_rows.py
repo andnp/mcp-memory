@@ -23,7 +23,7 @@ from mcp_memory.management.models import (
     SelectorMetricSnapshotPayload,
     SelectorPopulationSnapshotPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
+from mcp_memory.utils.sql_portable_runner import ManagementQueryAdapter, ManagementQueryRunner
 
 JsonObject: TypeAlias = dict[str, JsonValue]
 

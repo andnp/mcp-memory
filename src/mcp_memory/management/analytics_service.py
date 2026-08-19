@@ -15,7 +15,7 @@ from mcp_memory.management.models import (
     QualityCleanupRecommendationPayload,
     SelectorStatsPayload,
 )
-from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
+from mcp_memory.utils.sql_portable_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 

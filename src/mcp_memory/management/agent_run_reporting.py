@@ -12,7 +12,6 @@ from mcp_memory.management.models import (
     IngestAuditPayload,
     RunResultMetadataPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
 from mcp_memory.management.reporting_rows import (
     AgentRunHistoryRow,
     JsonObject,
@@ -21,6 +20,7 @@ from mcp_memory.management.reporting_rows import (
     coerce_task_result_view,
     decode_task_result_payload,
 )
+from mcp_memory.utils.sql_portable_runner import ManagementQueryAdapter, ManagementQueryRunner
 
 CURATOR_PROVIDER_FAILURE = "provider_failure"
 CURATOR_NARRATIVE_ONLY = "narrative_only"

@@ -45,7 +45,7 @@ from mcp_memory.management.models import (
     QueueSnapshotPayload,
     SearchQualityPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryAdapter
+from mcp_memory.utils.sql_portable_runner import ManagementQueryAdapter
 from mcp_memory.management.reporting_rows import (
     MaintenanceTaskRunRow,
     MemoryToolEventRow,

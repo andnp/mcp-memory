@@ -17,7 +17,7 @@ from mcp_memory.management.models import (
     CurationQualityMetricsPayload,
     CurationSpecialistRouteMetricsPayload,
 )
-from mcp_memory.management.query_runner import (
+from mcp_memory.utils.sql_portable_runner import (
     ManagementQueryAdapter,
     ManagementQueryRunner,
 )

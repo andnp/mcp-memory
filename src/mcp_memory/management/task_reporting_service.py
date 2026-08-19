@@ -8,8 +8,8 @@ from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     TaskSamplingSummaryPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryAdapter
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
+from mcp_memory.utils.sql_portable_runner import ManagementQueryAdapter
 
 
 @dataclass(frozen=True)
