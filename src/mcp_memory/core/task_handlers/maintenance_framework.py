@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.sampling import RouletteProvider, SamplingBatch
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_priority_feedback
+from mcp_memory.toolkit.maintenance_batch_selector import MaintenanceBatchSelector
 
 SELECTION_PRIORITY_RECENT_RUN_LIMIT = 100
 
@@ -33,40 +33,36 @@ def sample_maintenance_candidates(
     support_counts: dict[str, int] | None = None,
 ) -> SamplingBatch:
     requested_strategy = requested_sampling_strategy(task)
-    if not candidates:
+    task_name = task.task_name
+    task_id = task.task_id if hasattr(task, "task_id") else task.id
+
+    def empty_batch(strategy: str | None) -> SamplingBatch:
         return SamplingBatch(
-            requested_strategy=requested_strategy,
-            strategy_used=requested_strategy or "none",
+            requested_strategy=strategy,
+            strategy_used=strategy or "none",
             strategy_fallback_reason=None,
             candidate_count=0,
             records=[],
         )
 
-    priority_feedback = _selection_strategy_priority_feedback(
-        ctx,
-        task_name=task.task_name,
-        allowed_strategies=allowed_strategies,
-    )
-    batch = RouletteProvider(
-        task_name=task.task_name,
-        task_id=task.task_id if hasattr(task, "task_id") else task.id,
+    selector = MaintenanceBatchSelector(
+        requested_strategy=requested_strategy,
         candidates=candidates,
-        support_counts=support_counts or support_counts_for_candidates(ctx, candidates),
-        strategy_prior_scores={strategy: score for strategy, (score, _) in priority_feedback.items()},
-    ).get_batch(
-        strategy=requested_strategy,
-        allowed_strategies=allowed_strategies,
-        limit=limit,
+        batch_provider_factory=lambda strategy_prior_scores: RouletteProvider(
+            task_name=task_name,
+            task_id=task_id,
+            candidates=candidates,
+            support_counts=support_counts or support_counts_for_candidates(ctx, candidates),
+            strategy_prior_scores=strategy_prior_scores,
+        ),
+        priority_feedback_source=lambda: _selection_strategy_priority_feedback(
+            ctx,
+            task_name=task_name,
+            allowed_strategies=allowed_strategies,
+        ),
+        empty_batch_factory=empty_batch,
     )
-    priority_score, priority_explanation = priority_feedback.get(batch.strategy_used, (None, None))
-    if priority_score is None and batch.strategy_selection_scores is not None:
-        priority_score = batch.strategy_selection_scores.get(batch.strategy_used)
-        priority_explanation = batch.strategy_selection_reason
-    return replace(
-        batch,
-        sampler_priority_score=priority_score,
-        sampler_priority_explanation=priority_explanation,
-    )
+    return selector.select(allowed_strategies=allowed_strategies, limit=limit)
 
 
 def _selection_strategy_priority_feedback(
