@@ -121,8 +121,6 @@ ALLOWED_TRANSITIONAL_CORE_IMPORTS = {
     ("task_handlers/maintenance_framework.py", "mcp_memory.management.agent_run_reporting"),
     ("task_handlers/maintenance_framework.py", "mcp_memory.management.task_sampling_summary"),
     ("task_handlers/maintenance_work_items.py", "mcp_memory.management.models"),
-    ("task_handlers/tool_loop.py", "mcp_memory.mcp.internal_tools"),
-    ("task_handlers/tool_loop.py", "mcp_memory.mcp.transport"),
     ("tasks.py", "mcp_memory.storage.sqlite_task_queue"),
     ("task_handlers/curator_support.py", "mcp_memory.integrations.memory_retrieval"),
 }

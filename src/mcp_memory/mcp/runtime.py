@@ -29,6 +29,11 @@ from mcp_memory.context import (
 )
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.ports.tasks import TaskQueue
+from mcp_memory.core.ports.tool_dispatch import (
+    ToolDefinition,
+    ToolDispatchPort,
+    ToolResponsePart,
+)
 from mcp_memory.core.providers import build_agentic_ai_provider, build_json_ai_provider
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.storage import ensure_memory_dirs
@@ -36,6 +41,8 @@ from mcp_memory.curation_quality_store import PostgresCurationQualityStore, SQLi
 from mcp_memory.daemon_ports import WritebackDependencies
 from mcp_memory.embeddings import build_embedder
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
+from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
+from mcp_memory.mcp.transport import dispatch_internal_memory_tool, internal_tool_services
 from mcp_memory.storage.factory import StorageBackendResources, build_storage_runtime_components
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 from mcp_memory.storage.shared_read_cache import SharedReadCache
@@ -59,6 +66,25 @@ class GlobalDaemonBootstrapSpec:
 
 
 RuntimeBootstrapSpec: TypeAlias = WorkspaceRuntimeSpec | GlobalDaemonBootstrapSpec
+
+
+class McpInternalToolDispatch:
+    def available_tools(self) -> dict[str, ToolDefinition]:
+        services = internal_tool_services()
+        return {
+            tool.name: ToolDefinition(name=tool.name, input_schema=tool.input_schema)
+            for tool in get_internal_maintenance_tools()
+            if tool.name in services
+        }
+
+    async def dispatch(
+        self,
+        ctx: ApplicationContext,
+        name: str,
+        arguments: dict[str, object],
+    ) -> tuple[ToolResponsePart, ...]:
+        response = await dispatch_internal_memory_tool(ctx, name, arguments)
+        return tuple(ToolResponsePart(text=part.text) for part in response)
 
 
 @dataclass(frozen=True)
@@ -221,6 +247,7 @@ def create_runtime_composition(
     workspace_root = spec.workspace_root if isinstance(spec, WorkspaceRuntimeSpec) else None
     embedder = build_embedder(spec.config.embeddings)
     internal_tool_call_tracker = InternalToolCallTracker()
+    tool_dispatch: ToolDispatchPort = McpInternalToolDispatch()
     storage = build_storage_runtime_components(
         StorageBootstrapSpec(
             memory_path=spec.memory_path,
@@ -282,9 +309,10 @@ def create_runtime_composition(
         search_health=storage.search_health,
         startup_health=storage.startup_health,
         read_cache_validation=storage.read_cache_validation,
-            memory_id_resolution=storage.memory_id_resolution,
-            housekeeping=storage.housekeeping,
-            internal_tool_call_tracker=internal_tool_call_tracker,
+        memory_id_resolution=storage.memory_id_resolution,
+        housekeeping=storage.housekeeping,
+        internal_tool_call_tracker=internal_tool_call_tracker,
+        tool_dispatch=tool_dispatch,
     )
     return RuntimeComposition(
         context=context,

@@ -20,6 +20,7 @@ from mcp_memory.core.ports.providers import (
     TaskExecutionAttemptPort,
 )
 from mcp_memory.core.ports.tasks import TaskQueue
+from mcp_memory.core.ports.tool_dispatch import ToolDispatchPort
 from mcp_memory.core.ports.work_items import WorkItemRepository
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider, JSONTaskProvider
 
@@ -213,6 +214,7 @@ class TaskRuntimeCapabilities:
     work_items: WorkItemRepository | None = None
     embedding_repair_queue: object | None = None
     internal_tool_call_tracker: object | None = None
+    tool_dispatch: ToolDispatchPort | None = None
     housekeeping: MaintenanceHousekeepingPort | None = None
 
     @classmethod
@@ -225,6 +227,7 @@ class TaskRuntimeCapabilities:
             work_items=ctx.work_items,
             embedding_repair_queue=getattr(ctx, "embedding_repair_queue", None),
             internal_tool_call_tracker=getattr(ctx, "internal_tool_call_tracker", None),
+            tool_dispatch=getattr(ctx, "tool_dispatch", None),
             housekeeping=getattr(ctx, "housekeeping", None),
         )
 
@@ -259,6 +262,7 @@ class TaskRuntimeCapabilities:
             work_items=self.work_items,
             embedding_repair_queue=self.embedding_repair_queue,
             internal_tool_call_tracker=self.internal_tool_call_tracker,
+            tool_dispatch=self.tool_dispatch,
             housekeeping=self.housekeeping,
         ))
 
@@ -317,6 +321,7 @@ class _TaskRuntimeContextAdapter:
     work_items: WorkItemRepository | None
     embedding_repair_queue: object | None
     internal_tool_call_tracker: object | None
+    tool_dispatch: ToolDispatchPort | None
     housekeeping: MaintenanceHousekeepingPort | None
 
 
@@ -399,6 +404,7 @@ _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
         "work_items",
         "embedding_repair_queue",
         "internal_tool_call_tracker",
+        "tool_dispatch",
         "curation_quality",
         "direct_mutation_evidence",
         "housekeeping",
@@ -465,6 +471,7 @@ class ApplicationContext:
     ingress_quality_evidence: Any = None
     ingress_mutation_transaction: Any = None
     internal_tool_call_tracker: Any = None
+    tool_dispatch: ToolDispatchPort | None = None
     housekeeping: MaintenanceHousekeepingPort | None = None
     _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)
 

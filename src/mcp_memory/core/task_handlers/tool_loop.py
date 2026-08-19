@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from inspect import isawaitable
 from typing import Any, Callable, cast
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
-from mcp_memory.mcp.transport import dispatch_internal_memory_tool, internal_tool_services
+from mcp_memory.core.ports.tool_dispatch import ToolDefinition, ToolDispatchPort
 
 
 @dataclass(slots=True)
@@ -30,10 +30,12 @@ async def run_internal_tool_loop(
     max_tool_calls_per_round: int = 5,
     unsupported_no_tool_response_error: Callable[[dict[str, Any], int], str | None] | None = None,
 ) -> InternalToolLoopResult:
-    services = internal_tool_services()
+    tool_dispatch = ctx.tool_dispatch
+    if tool_dispatch is None:
+        raise RuntimeError("internal_tool_dispatch_unavailable")
     allowed_tools = {
         tool.name: tool
-        for tool in get_internal_maintenance_tools()
+        for tool in tool_dispatch.available_tools().values()
         if tool.name in allowed_tool_names
     }
     transcript: list[dict[str, Any]] = []
@@ -79,7 +81,7 @@ async def run_internal_tool_loop(
         for tool_call in round_calls:
             name = tool_call["name"]
             arguments = tool_call["arguments"]
-            if name not in allowed_tools or name not in services:
+            if name not in allowed_tools:
                 round_results.append(
                     {
                         "name": name,
@@ -89,7 +91,7 @@ async def run_internal_tool_loop(
                 )
                 continue
 
-            result = await _dispatch_internal_tool(ctx, name, arguments)
+            result = await _dispatch_internal_tool(tool_dispatch, ctx, name, arguments)
             executed_calls += 1
             tool_names_used.append(name)
             if result.get("status") == "ok":
@@ -126,16 +128,17 @@ async def run_internal_tool_loop(
 
 
 async def _dispatch_internal_tool(
+    tool_dispatch: ToolDispatchPort,
     ctx: ApplicationContext,
     name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    response = await dispatch_internal_memory_tool(ctx, name, arguments)
+    response = await tool_dispatch.dispatch(ctx, name, arguments)
     if not response:
         return {"status": "error", "error": "empty_tool_response", "tool": name}
 
     first_part = response[0]
-    text = getattr(first_part, "text", None)
+    text = first_part.text
     if not isinstance(text, str):
         return {"status": "error", "error": "invalid_tool_response", "tool": name}
 
@@ -177,7 +180,7 @@ def _normalize_tool_calls(raw_tool_calls: object) -> list[dict[str, Any]]:
 
 def _build_prompt(
     base_prompt: str,
-    allowed_tools: dict[str, Any],
+    allowed_tools: dict[str, ToolDefinition],
     transcript: list[dict[str, Any]],
 ) -> str:
     tool_specs = [
@@ -201,10 +204,12 @@ def _build_prompt(
     return "\n\n".join(parts)
 
 
-def _compact_tool_spec(tool: Any) -> dict[str, Any]:
-    schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
-    properties = schema.get("properties", {}) if isinstance(schema.get("properties", {}), dict) else {}
-    required = schema.get("required", []) if isinstance(schema.get("required", []), list) else []
+def _compact_tool_spec(tool: ToolDefinition) -> dict[str, Any]:
+    schema = tool.input_schema
+    raw_properties = schema.get("properties", {})
+    properties: Mapping[object, object] = raw_properties if isinstance(raw_properties, Mapping) else {}
+    raw_required = schema.get("required", [])
+    required: list[object] = raw_required if isinstance(raw_required, list) else []
     property_names = [str(name) for name in properties]
     required_names = [name for name in property_names if name in {str(item) for item in required}]
     return {

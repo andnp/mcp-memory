@@ -21,6 +21,7 @@ from mcp_memory.daemon_lifecycle import FilesystemLock
 from mcp_memory.daemon_runtime import DaemonRuntimeSession
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.mcp.runtime import (
+    McpInternalToolDispatch,
     RuntimeBootstrapSpec,
     RuntimeCapabilityBundles,
     RuntimeComposition,
@@ -150,6 +151,12 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     assert resources.embedder is embedder
     assert resources.provider_registry is provider_registry
     assert resources.internal_tool_call_tracker is composition.context.internal_tool_call_tracker
+    assert isinstance(composition.context.tool_dispatch, McpInternalToolDispatch)
+    assert composition.capabilities.task.tool_dispatch is composition.context.tool_dispatch
+    assert (
+        getattr(composition.capabilities.task.as_context(), "tool_dispatch", None)
+        is composition.context.tool_dispatch
+    )
     assert composition.daemon.memory is composition.capabilities.memory
     assert composition.daemon.background is composition.capabilities.background
     assert composition.daemon.task is composition.capabilities.task
