@@ -8,14 +8,14 @@ resolution-markers = [
 
 [[package]]
 name = "andnp-searchkernel"
-version = "1.5.2"
+version = "1.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b2/7c/28240f31acf3be31ee7c3b2e248548d5aec01a3333ddcff2144a051a4145/andnp_searchkernel-1.5.2.tar.gz", hash = "sha256:9c003f2aab961664c1a333656797d7cdf7dc81fc6764d76da8f01d5b899a1ca8", size = 582220, upload-time = "2026-08-18T06:05:27.193Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9e/38/fa982d9d2bba000530d9ac381666b2732a3dee3090b1d4d01488cbb0a8a9/andnp_searchkernel-1.6.3.tar.gz", hash = "sha256:748c86dcb9aca285974a3960b4404f4e3ae85ec2196a681e3930b2e51973a323", size = 609205, upload-time = "2026-08-19T05:33:40.605Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/55/3249ac71b15fcdbc13f8ecb42daba9b494ddb197a82520adfd0eba74a485/andnp_searchkernel-1.5.2-py3-none-any.whl", hash = "sha256:abb4cb393ea78cf521e889f56910537a3a11c53bc86b60d01065e416d07b4961", size = 280003, upload-time = "2026-08-18T06:05:25.712Z" },
+    { url = "https://files.pythonhosted.org/packages/71/e4/3a2768805716c258decbd74963959abe209818762365a03d1521c99e8edd/andnp_searchkernel-1.6.3-py3-none-any.whl", hash = "sha256:3eff151cccb9d7f69768a7f1b1a117763dc12d81a12b87ed421add375caa8a13", size = 287412, upload-time = "2026-08-19T05:33:38.922Z" },
 ]
 
 [package.optional-dependencies]
@@ -723,7 +723,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "andnp-searchkernel", extras = ["ollama"], specifier = ">=1.5.2" },
+    { name = "andnp-searchkernel", extras = ["ollama"], specifier = ">=1.6.3" },
     { name = "click", specifier = ">=8.1.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "github-copilot-sdk", specifier = ">=1.0.1" },
