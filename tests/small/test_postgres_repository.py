@@ -11,7 +11,7 @@ from uuid import UUID
 import pytest
 from searchkernel.utils.similarity import cosine_similarity_lists
 
-from mcp_memory.config import Config
+from mcp_memory.config import Config, SearchKernelConfig
 from mcp_memory.core.ports.memory import (
     MemoryLinkPort,
     MemoryMaintenanceReadPort,
@@ -1636,7 +1636,9 @@ def test_postgres_search_service_updates_last_surfaced_timestamps(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:
     repository, _session_manager = postgres_repository
-    service = RelationalMemorySearchService(repository, Config())
+    service = RelationalMemorySearchService(
+        repository, Config(searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0))
+    )
 
     active = repository.create_memory(
         title="Search pipeline active",

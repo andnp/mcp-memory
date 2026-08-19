@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
@@ -9,6 +9,7 @@ import tomlkit
 
 from mcp_memory.config import ensure_default_config_exists, resolve_default_config_path
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.integrations import searchkernel_record_pipeline
 from mcp_memory.utils.db import DatabaseManager
 from tests.sdk.mcp import FakeToolRuntime
 from tests.sdk.providers import FakeAIProvider, FakeSubprocessInstaller
@@ -53,6 +54,25 @@ def isolate_test_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     daemon_table = document.setdefault("daemon", tomlkit.table())
     daemon_table["port"] = 0
     config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
+
+
+def _fake_cross_encoder_scorer(model_name: str) -> Callable[[str, list[str]], list[float]]:
+    del model_name
+    return lambda query, documents: [1.0] * len(documents)
+
+
+@pytest.fixture(autouse=True)
+def stub_cross_encoder_reranker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the default cross_encoder rerank policy from loading a real model.
+
+    The default policy now builds a real cross-encoder pipeline, and this
+    machine may have BAAI/bge-reranker-v2-m3 cached locally from unrelated
+    use, so tests would otherwise load ~2GB of real weights whenever a test
+    builds a pipeline with an unmodified default config.
+    """
+    monkeypatch.setattr(
+        searchkernel_record_pipeline, "sentence_transformers_cross_encoder", _fake_cross_encoder_scorer
+    )
 
 
 @pytest.fixture

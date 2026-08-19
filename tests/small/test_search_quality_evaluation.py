@@ -12,6 +12,7 @@ from benchmarks.search_quality import (
     run_in_process,
     run_search_quality,
 )
+from mcp_memory.config import Config, SearchKernelConfig
 
 pytestmark = pytest.mark.small
 
@@ -165,8 +166,17 @@ def test_search_quality_runner_evaluates_cases_in_corpus_order() -> None:
 
 
 def test_search_quality_in_process_runner_uses_local_search_path() -> None:
-    """Exercise the real local benchmark path without external services."""
-    metrics = run_in_process(load_corpus())
+    """Exercise the real local benchmark path without external services.
+
+    Reranking is disabled here: this deterministic corpus is scored against
+    a fake in-test scorer stub (see conftest.py), which has no real relevance
+    judgment and would only degrade the labeled Hit@1/Hit@5 baseline. Real
+    cross-encoder quality needs a live, model-backed run, not this suite.
+    """
+    metrics = run_in_process(
+        load_corpus(),
+        config=Config(searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0)),
+    )
 
     assert metrics.corpus_version == "search-quality-v1"
     assert metrics.query_count == 12

@@ -1075,6 +1075,7 @@ def _error_code(exc: Exception) -> str:
 
 def run_in_process(
     corpus: SearchQualityCorpus | None = None,
+    config: Config | None = None,
 ) -> SearchQualityMetrics:
     """Run the default corpus against temporary relational and vector stores."""
     selected_corpus = corpus or load_corpus()
@@ -1085,7 +1086,7 @@ def run_in_process(
             label_to_id = seed_search_quality_records(repository)
             service = RelationalMemorySearchService(
                 repository,
-                Config(),
+                config or Config(),
                 embedder=TopicEmbedder(),
                 vector_store=SQLiteVectorStore(manager),
             )

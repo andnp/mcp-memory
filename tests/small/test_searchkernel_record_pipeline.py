@@ -535,7 +535,8 @@ async def test_score_adjustment_matches_relational_ranking_engine() -> None:
         search_ranking=SearchRankingConfig(
             workspace_multiplier=1.4,
             degradation_multiplier=0.25,
-        )
+        ),
+        searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0),
     )
     pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", repository),
@@ -643,8 +644,8 @@ def test_pipeline_uses_searchkernel_failure_mode() -> None:
     assert strict._pipeline._config.failure_mode == "strict"
 
 
-def test_pipeline_keeps_advanced_searchkernel_policies_disabled() -> None:
-    """Preserve baseline fusion, expansion, reranking, and routing identity."""
+def test_pipeline_keeps_fusion_and_expansion_disabled_by_default() -> None:
+    """Preserve baseline fusion and expansion identity; rerank is on by default."""
     pipeline = build_memory_record_pipeline(cast("MemoryRepositoryPort", FakeRepository()))
 
     kernel_config = pipeline._pipeline._config
@@ -652,8 +653,10 @@ def test_pipeline_keeps_advanced_searchkernel_policies_disabled() -> None:
     assert kernel_config.fusion_mode == "rrf"
     assert kernel_config.expansion_enabled is False
     assert kernel_config.synonym_expansion_enabled is False
-    assert kernel_config.rerank_budget == 0
-    assert pipeline._pipeline._routing_fingerprint == "record-search-v1"
+    assert kernel_config.rerank_budget == 10
+    assert pipeline._pipeline._routing_fingerprint == (
+        "record-search-v1:rerank:cross_encoder:10:BAAI/bge-reranker-v2-m3"
+    )
     assert kernel_config.artifact_confidence_threshold == (
         RecordSearchConfig().artifact_confidence_threshold
     )
@@ -881,7 +884,8 @@ async def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
             search_ranking=SearchRankingConfig(
                 keyword_coverage_floor=0.6,
                 keyword_low_coverage_penalty=0.4,
-            )
+            ),
+            searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0),
         ),
     )
     results = await pipeline.search("alpha beta", limit=2)
@@ -1003,7 +1007,8 @@ async def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
         config=Config(
             search_ranking=SearchRankingConfig(
                 semantic_only_keyword_penalty=0.4,
-            )
+            ),
+            searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0),
         ),
     )
     results = await pipeline.search("ripgrep ban", limit=2)

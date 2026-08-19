@@ -642,7 +642,9 @@ def test_local_builders_apply_requested_config_overrides() -> None:
                 builders.identities["query_expansion"].fingerprint
                 == "query-expansion:synonym"
             )
-            assert config.searchkernel.active_feature_fingerprint() is None
+            assert config.searchkernel.active_feature_fingerprint() == (
+                "rerank:cross_encoder:10:BAAI/bge-reranker-v2-m3"
+            )
 
             comparison = run_policy_comparison(
                 load_corpus(),

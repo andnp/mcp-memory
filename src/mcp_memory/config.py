@@ -417,8 +417,8 @@ class SearchKernelConfig:
     calibrated_fusion_enabled: bool = False
     query_expansion_enabled: bool = False
     query_expansion_policy: SearchKernelExpansionPolicy = "vector"
-    rerank_policy: SearchKernelRerankPolicy = "disabled"
-    rerank_budget: int = 0
+    rerank_policy: SearchKernelRerankPolicy = "cross_encoder"
+    rerank_budget: int = 10
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
 
     def __post_init__(self) -> None:
@@ -807,8 +807,9 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "calibrated_fusion_enabled": False,
         "query_expansion_enabled": False,
         "query_expansion_policy": "vector",
-        "rerank_policy": "disabled",
-        "rerank_budget": 0,
+        "rerank_policy": "cross_encoder",
+        "rerank_budget": 10,
+        "rerank_model": "BAAI/bge-reranker-v2-m3",
     }
     document["provider_routing"] = _default_provider_routing_data()
     document["ingest_suppression"] = {

@@ -80,17 +80,19 @@ def test_maintenance_config_rejects_invalid_values(field: str, value: object, me
 
 
 def test_searchkernel_defaults_to_lenient_failure_mode() -> None:
-    """Keep advanced searchkernel policies disabled by default."""
+    """Keep fusion and query-expansion policies disabled by default; rerank on."""
     config = SearchKernelConfig()
 
     assert config.failure_mode == "lenient"
     assert config.calibrated_fusion_enabled is False
     assert config.query_expansion_enabled is False
     assert config.query_expansion_policy == "vector"
-    assert config.rerank_policy == "disabled"
-    assert config.rerank_budget == 0
+    assert config.rerank_policy == "cross_encoder"
+    assert config.rerank_budget == 10
     assert config.rerank_model == "BAAI/bge-reranker-v2-m3"
-    assert config.active_feature_fingerprint() is None
+    assert config.active_feature_fingerprint() == (
+        "rerank:cross_encoder:10:BAAI/bge-reranker-v2-m3"
+    )
 
 
 def test_searchkernel_loads_advanced_policy_settings(tmp_path: Path) -> None:
@@ -164,7 +166,7 @@ def test_searchkernel_rejects_invalid_advanced_policy_settings(
 def test_searchkernel_rejects_budget_for_disabled_reranking() -> None:
     """Prevent an inactive reranking policy from carrying a budget."""
     with pytest.raises(ValueError, match="rerank_budget"):
-        SearchKernelConfig(rerank_budget=2)
+        SearchKernelConfig(rerank_policy="disabled", rerank_budget=2)
 
 
 def test_config_preserves_legacy_ingress_rollout_defaults() -> None:
@@ -247,6 +249,9 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.storage.cache.enabled is False
     assert loaded.storage.cache.mode == "readonly"
     assert loaded.daemon.port == 4242
+    assert loaded.searchkernel.rerank_policy == "cross_encoder"
+    assert loaded.searchkernel.rerank_budget == 10
+    assert loaded.searchkernel.rerank_model == "BAAI/bge-reranker-v2-m3"
     assert loaded.maintenance.archived_memory_retention_days == 90
     assert loaded.maintenance.memory_gc_batch_size == 100
     assert loaded.maintenance.dangling_link_gc_batch_size == 100

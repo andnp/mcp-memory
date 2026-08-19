@@ -7,7 +7,7 @@ import pytest
 from searchkernel.runtime import clear_query_embedding_cache
 from searchkernel.search.record_pipeline import RecordSearchOutcome, RecordSearchResult
 
-from mcp_memory.config import Config
+from mcp_memory.config import Config, SearchKernelConfig
 from mcp_memory.core.ports import (
     EmbeddingMaintenancePort,
     MemoryIDResolutionPort,
@@ -459,7 +459,9 @@ def test_service_search_is_global_by_default_with_deterministic_workspace_boost(
     db_manager,
 ) -> None:
     repository = RelationalMemoryRepository(db_manager)
-    service = RelationalMemorySearchService(repository, Config())
+    service = RelationalMemorySearchService(
+        repository, Config(searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0))
+    )
     timestamp = "2026-01-01T00:00:00+00:00"
     local = repository.create_memory(
         title="Shared workspace ranking topic",
@@ -541,7 +543,9 @@ def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) 
         memory_type="fact",
         workspace_ids=["workspace-a"],
     )
-    service = RelationalMemorySearchService(repository, Config())
+    service = RelationalMemorySearchService(
+        repository, Config(searchkernel=SearchKernelConfig(rerank_policy="disabled", rerank_budget=0))
+    )
 
     outcome = service._retrieval_facade.search_sync("diagnostic result")
     results, diagnostics = service.search_memories_with_diagnostics(
