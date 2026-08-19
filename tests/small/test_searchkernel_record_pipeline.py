@@ -6,13 +6,19 @@ from datetime import UTC, datetime
 from typing import cast
 
 import pytest
+from searchkernel.adapters.rerank.cross_encoder import CrossEncoderReranker
 from searchkernel.domain.models import Record, SearchResultProvenance
 from searchkernel.ports.search_results import RecordSearchResult
 from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchConfig
 
 import mcp_memory.integrations.searchkernel_record_pipeline as record_pipeline
-from mcp_memory.config import Config, SearchKernelConfig, SearchRankingConfig
+from mcp_memory.config import (
+    Config,
+    SearchKernelConfig,
+    SearchKernelRerankPolicy,
+    SearchRankingConfig,
+)
 from mcp_memory.core.ports.memory import (
     MemoryLink,
     MemoryReadContext,
@@ -726,6 +732,82 @@ def test_pipeline_applies_enabled_advanced_searchkernel_policies() -> None:
     assert kernel_config.artifact_confidence_threshold == (
         RecordSearchConfig().artifact_confidence_threshold
     )
+
+
+@pytest.mark.parametrize("rerank_policy", ["disabled", "default"])
+def test_pipeline_builds_no_reranker_for_disabled_or_default_policy(
+    rerank_policy: str,
+) -> None:
+    """Only the cross_encoder policy constructs a real reranker."""
+    config = Config(
+        searchkernel=SearchKernelConfig(
+            rerank_policy=cast("SearchKernelRerankPolicy", rerank_policy),
+            rerank_budget=4 if rerank_policy != "disabled" else 0,
+        )
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository()),
+        config=config,
+    )
+
+    assert pipeline._pipeline._reranker is None
+
+
+def test_pipeline_builds_cross_encoder_reranker_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Construct searchkernel's cross-encoder adapter with the configured model."""
+    captured: dict[str, object] = {}
+
+    def fake_scorer_factory(model_name: str) -> object:
+        captured["model_name"] = model_name
+        return lambda query, documents: [1.0] * len(documents)
+
+    monkeypatch.setattr(
+        record_pipeline, "sentence_transformers_cross_encoder", fake_scorer_factory
+    )
+    config = Config(
+        searchkernel=SearchKernelConfig(
+            rerank_policy="cross_encoder",
+            rerank_budget=4,
+            rerank_model="test/cross-encoder-model",
+        )
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository()),
+        config=config,
+    )
+
+    reranker = pipeline._pipeline._reranker
+    assert isinstance(reranker, CrossEncoderReranker)
+    assert reranker.model_name == "test/cross-encoder-model"
+    assert captured["model_name"] == "test/cross-encoder-model"
+    assert not any(
+        "reranker unavailable" in reason for reason in pipeline.diagnostics.reasons
+    )
+
+
+def test_pipeline_fails_open_when_reranker_load_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degrade to no reranker instead of breaking pipeline construction."""
+
+    def failing_scorer_factory(model_name: str) -> object:
+        raise RuntimeError("no cached weights and no network")
+
+    monkeypatch.setattr(
+        record_pipeline, "sentence_transformers_cross_encoder", failing_scorer_factory
+    )
+    config = Config(
+        searchkernel=SearchKernelConfig(rerank_policy="cross_encoder", rerank_budget=4)
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository()),
+        config=config,
+    )
+
+    assert pipeline._pipeline._reranker is None
+    assert any("reranker unavailable" in reason for reason in pipeline.diagnostics.reasons)
 
 
 @pytest.mark.asyncio
