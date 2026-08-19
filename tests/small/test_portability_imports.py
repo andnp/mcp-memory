@@ -136,6 +136,20 @@ def test_core_import_direction_allows_only_documented_transitional_edges() -> No
     assert violations == []
 
 
+def test_core_import_transitional_debt_matches_documented_allowlist() -> None:
+    """Keep the observed transitional edges exactly aligned with the allowlist."""
+    core_root = Path(__file__).resolve().parents[2] / "src" / "mcp_memory" / "core"
+    transitional_imports = set()
+    for file_path in sorted(core_root.rglob("*.py")):
+        relative_path = file_path.relative_to(core_root).as_posix()
+        for node in ast.walk(ast.parse(file_path.read_text())):
+            for imported_module in _imported_modules(node):
+                if _is_forbidden_core_import(imported_module):
+                    transitional_imports.add((relative_path, imported_module))
+
+    assert transitional_imports == set(ALLOWED_TRANSITIONAL_CORE_IMPORTS)
+
+
 def test_core_import_direction_detects_unallowlisted_imports() -> None:
     core_root = Path(__file__).resolve().parents[2] / "src" / "mcp_memory" / "core"
     path = core_root / "new_module.py"
