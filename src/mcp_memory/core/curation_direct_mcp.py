@@ -13,6 +13,7 @@ from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
 from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.core.curation_quality import (
     CurationQualityEvidence,
+    CurationQualityQueryPort,
     CurationQualitySampler,
     quality_productive_mutation_count,
 )
@@ -289,17 +290,13 @@ def _evaluate_direct_quality(
         if run is not None:
             _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "unavailable", "quality_repository_unavailable")
-    if ctx.db_manager is None:
-        if run is not None:
-            _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
-        return _DirectQualityEvaluation((), "unavailable", "database_unavailable")
     search_repository = cast(MemoryRepositoryPort | None, ctx.repository)
     if search_repository is None:
         if run is not None:
             _terminalize_direct_quality_run(ctx, run, CurationRunOutcome.APPLIED)
         return _DirectQualityEvaluation((), "unavailable", "search_unavailable")
     sampler = CurationQualitySampler(
-        db_manager=ctx.db_manager,
+        quality_query=cast(CurationQualityQueryPort, quality_repository),
         search=search_repository,
         repository=quality_repository,
         candidate_repository=getattr(ctx, "curation", None),

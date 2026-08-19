@@ -256,7 +256,7 @@ def test_action_identity_mismatch_is_unobserved(db_manager) -> None:
     )
     repository = _EvidenceRepository()
     evidence = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search(),
         repository=cast(Any, repository),
         sample_rate=1.0,
@@ -280,7 +280,7 @@ def test_missing_action_identity_is_unobserved(db_manager) -> None:
     )
     repository = _EvidenceRepository()
     evidence = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search(),
         repository=cast(Any, repository),
         sample_rate=1.0,
@@ -361,7 +361,7 @@ def test_missing_trusted_query_is_neutral_without_productive_credit(db_manager) 
     mutation = _mutation()
     repository = _EvidenceRepository()
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search(),
         repository=cast(Any, repository),
         sample_rate=1.0,
@@ -382,7 +382,7 @@ def test_unverified_direct_evidence_cannot_escalate(db_manager) -> None:
         put_candidate_state=lambda _state: pytest.fail("unverified evidence escalated"),
     )
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search(),
         repository=cast(Any, _EvidenceRepository()),
         candidate_repository=cast(Any, candidate_repository),
@@ -414,7 +414,7 @@ def test_synthetic_incomplete_replay_is_unobserved_without_retrieval_credit(db_m
     )
     repository = _EvidenceRepository()
     evidence = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search(),
         repository=cast(Any, repository),
         sample_rate=1.0,
@@ -514,7 +514,7 @@ def test_trusted_direct_query_can_be_productive(db_manager) -> None:
     )
     repository = _EvidenceRepository()
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([SimpleNamespace(record=SimpleNamespace(id=memory_id))]),
         repository=cast(Any, repository),
         sample_rate=1.0,

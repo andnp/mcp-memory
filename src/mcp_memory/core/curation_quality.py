@@ -130,6 +130,40 @@ class CurationQualityRepository(Protocol):
     ) -> Sequence[CurationQualityEvidence]: ...
 
 
+class CurationQualityQueryPort(Protocol):
+    def search_events_for_memory_ids(
+        self,
+        memory_ids: Sequence[str],
+        *,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]: ...
+
+    def search_events_for_invocations(
+        self,
+        invocation_ids: Sequence[str],
+        *,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]: ...
+
+    def read_events_for_memory_ids(
+        self,
+        memory_ids: Sequence[str],
+        *,
+        after_epoch: float,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]: ...
+
+    def revision_snapshots(self, event_id: str) -> Sequence[tuple[object, ...]]: ...
+
+    def revision_states(self, event_id: str) -> Sequence[tuple[object, ...]]: ...
+
+    def historical_search_events(self, memory_ids: Sequence[str]) -> Sequence[tuple[object, ...]]: ...
+
+    def search_invocations_for_query(self, query_text: str) -> Sequence[tuple[object, ...]]: ...
+
+    def search_events_for_invocation(self, invocation_id: str) -> Sequence[tuple[object, ...]]: ...
+
+
 class CurationQualitySearch(Protocol):
     def search_memories_for_maintenance(
         self,
@@ -148,7 +182,7 @@ class CurationQualitySampler:
     def __init__(
         self,
         *,
-        db_manager: Any,
+        quality_query: CurationQualityQueryPort,
         search: CurationQualitySearch,
         repository: CurationQualityRepository,
         candidate_repository: CurationRepository | None = None,
@@ -161,7 +195,7 @@ class CurationQualitySampler:
             raise ValueError("sample_rate must be between 0 and 1")
         if max_actions < 1:
             raise ValueError("max_actions must be positive")
-        self._db_manager = db_manager
+        self._quality_query = quality_query
         self._search = search
         self._repository = repository
         self._candidate_repository = candidate_repository
@@ -753,21 +787,9 @@ class CurationQualitySampler:
         target_ids = {str(value) for value in memory_ids}
         if not target_ids:
             return {}
-        placeholders = ", ".join("?" for _ in target_ids)
         cutoff_epoch = cutoff.timestamp()
-        search_rows = _fetch_rows(
-            self._db_manager,
-            f"""
-            SELECT invocation_id, memory_id, created_at
-            FROM memory_tool_events
-            WHERE event_kind = 'search'
-              AND caller_kind IN ('external', 'operator', 'user')
-              AND memory_id IN ({placeholders})
-              AND created_at < ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT 500
-            """,
-            (*sorted(target_ids), cutoff_epoch),
+        search_rows = self._quality_query.search_events_for_memory_ids(
+            sorted(target_ids), before_epoch=cutoff_epoch
         )
         if not search_rows:
             return {
@@ -782,19 +804,8 @@ class CurationQualitySampler:
                 },
             }
         invocations = {str(row[0]) for row in search_rows}
-        all_search_rows = _fetch_rows(
-            self._db_manager,
-            f"""
-            SELECT invocation_id, memory_id, created_at
-            FROM memory_tool_events
-            WHERE event_kind = 'search'
-              AND caller_kind IN ('external', 'operator', 'user')
-              AND invocation_id IN ({", ".join("?" for _ in invocations)})
-              AND created_at < ?
-            ORDER BY created_at ASC, id ASC
-            LIMIT 1000
-            """,
-            (*sorted(invocations), cutoff_epoch),
+        all_search_rows = self._quality_query.search_events_for_invocations(
+            sorted(invocations), before_epoch=cutoff_epoch
         )
         episode_ids: dict[str, set[str]] = defaultdict(set)
         episode_search_times: dict[str, list[tuple[str, float]]] = defaultdict(list)
@@ -815,22 +826,12 @@ class CurationQualitySampler:
             for row in all_search_rows
             if (created_at := _epoch(row[2])) is not None
         ]
-        read_rows: list[tuple[object, ...]] = []
+        read_rows: Sequence[tuple[object, ...]] = ()
         if candidate_ids:
-            read_rows = _fetch_rows(
-                self._db_manager,
-                f"""
-                SELECT memory_id, created_at
-                FROM memory_tool_events
-                WHERE event_kind = 'read'
-                  AND caller_kind IN ('external', 'operator', 'user')
-                  AND memory_id IN ({", ".join("?" for _ in candidate_ids)})
-                  AND created_at >= ?
-                  AND created_at <= ?
-                ORDER BY created_at ASC, id ASC
-                LIMIT 1000
-                """,
-                (*candidate_ids, min(search_epochs), cutoff_epoch),
+            read_rows = self._quality_query.read_events_for_memory_ids(
+                candidate_ids,
+                after_epoch=min(search_epochs),
+                before_epoch=cutoff_epoch,
             )
         reads_by_memory: dict[str, list[float]] = defaultdict(list)
         for row in read_rows:
@@ -888,15 +889,7 @@ class CurationQualitySampler:
         mutation = _coerce_mutation(mutation)
         if mutation.operation not in {"normalize_memory", "rewrite_memory"}:
             return _ContentQualityComparison()
-        rows = _fetch_rows(
-            self._db_manager,
-            """
-            SELECT before_snapshot, after_snapshot
-            FROM memory_record_revisions
-            WHERE event_id = ?
-            """,
-            (str(mutation.mutation_event_id),),
-        )
+        rows = self._quality_query.revision_snapshots(str(mutation.mutation_event_id))
         scores = [
             (_content_quality_score(row[0]), _content_quality_score(row[1]))
             for row in rows
@@ -920,15 +913,7 @@ class CurationQualitySampler:
         mutation = _coerce_mutation(mutation)
         if mutation.mutation_event_id is None:
             return list(mutation.affected_memory_ids)
-        rows = _fetch_rows(
-            self._db_manager,
-            """
-            SELECT memory_id, after_exists, after_snapshot
-            FROM memory_record_revisions
-            WHERE event_id = ?
-            """,
-            (str(mutation.mutation_event_id),),
-        )
+        rows = self._quality_query.revision_states(str(mutation.mutation_event_id))
         snapshots = {
             str(row[0]): (row[1], row[2])
             for row in rows
@@ -972,20 +957,7 @@ class CurationQualitySampler:
         target_ids = [str(value) for value in mutation.affected_memory_ids]
         if not target_ids:
             return None
-        placeholders = ", ".join("?" for _ in target_ids)
-        rows = _fetch_rows(
-            self._db_manager,
-            f"""
-            SELECT invocation_id, query_text, memory_id, result_rank, result_count, created_at
-            FROM memory_tool_events
-            WHERE event_kind = 'search'
-              AND caller_kind IN ('external', 'operator', 'user')
-              AND memory_id IN ({placeholders})
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1000
-            """,
-            target_ids,
-        )
+        rows = self._quality_query.historical_search_events(target_ids)
         target_id_set = set(target_ids)
         cutoff = mutation.applied_at or self._clock()
         grouped: dict[str, list[Any]] = defaultdict(list)
@@ -1013,19 +985,7 @@ class CurationQualitySampler:
         if not query_text or not query_text.strip():
             return None
         cutoff = mutation.applied_at or self._clock()
-        rows = _fetch_rows(
-            self._db_manager,
-            """
-            SELECT invocation_id, created_at
-            FROM memory_tool_events
-            WHERE event_kind = 'search'
-              AND caller_kind IN ('external', 'operator', 'user')
-              AND query_text = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1000
-            """,
-            (query_text,),
-        )
+        rows = self._quality_query.search_invocations_for_query(query_text)
         for row in rows:
             event_time = _timestamp(row[1])
             if event_time is not None and event_time < cutoff:
@@ -1040,19 +1000,7 @@ class CurationQualitySampler:
         *,
         provenance: QueryProvenance = QueryProvenance.REAL_USER_SEARCH,
     ) -> QualityQuery | None:
-        rows = _fetch_rows(
-            self._db_manager,
-            """
-            SELECT invocation_id, query_text, memory_id, result_rank, result_count
-            FROM memory_tool_events
-            WHERE event_kind = 'search'
-              AND caller_kind IN ('external', 'operator', 'user')
-              AND invocation_id = ?
-            ORDER BY result_rank ASC
-            LIMIT 50
-            """,
-            (invocation_id,),
-        )
+        rows = self._quality_query.search_events_for_invocation(invocation_id)
         if not rows:
             return None
         return QualityQuery(
@@ -1161,21 +1109,6 @@ def _query_terms_overlap(query: str, expected_query: str) -> bool:
     return bool(
         set(query.casefold().split()) & set(expected_query.casefold().split())
     )
-
-
-def _fetch_rows(
-    db_manager: Any,
-    query: str,
-    params: Sequence[object] = (),
-) -> list[tuple[object, ...]]:
-    if hasattr(db_manager, "get_connection"):
-        connection = db_manager.get_connection()
-        return [tuple(row) for row in connection.execute(query, list(params)).fetchall()]
-    if hasattr(db_manager, "open_connection"):
-        with db_manager.open_connection() as connection, connection.cursor() as cursor:
-            cursor.execute(query.replace("?", "%s"), tuple(params))
-            return [tuple(row) for row in cursor.fetchall()]
-    raise TypeError("quality sampling requires a supported database manager")
 
 
 def _timestamp(value: object) -> datetime | None:

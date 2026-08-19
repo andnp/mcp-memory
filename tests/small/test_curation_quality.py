@@ -307,7 +307,7 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     receipt = _receipt(run.run_id, event_id=uuid4(), applied_at=datetime.now(UTC))
     search = _Search([])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -322,7 +322,7 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
 
 def test_quality_sampler_uses_bounded_read_backed_engagement(db_manager) -> None:
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -430,7 +430,7 @@ def test_quality_sampler_accepts_content_improvement_without_search_query(db_man
         applied_at=now,
     ).model_copy(update={"affected_ids": [memory_id]})
     evidence = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -498,7 +498,7 @@ def test_quality_sampler_rejects_content_regression_without_search_query(db_mana
         applied_at=now,
     ).model_copy(update={"affected_ids": [memory_id]})
     evidence = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -553,7 +553,7 @@ def test_quality_sampler_accepts_coherent_multi_action_wave(db_manager) -> None:
         for memory_id in memory_ids
     ]
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([_context(str(goal_id)), _context(str(memory_ids[0]))]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -579,7 +579,7 @@ def test_quality_sampler_accepts_coherent_multi_action_wave(db_manager) -> None:
 
 def test_quality_sampler_accepts_net_positive_heuristic_wave_with_local_loss(db_manager) -> None:
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -625,7 +625,7 @@ def test_quality_sampler_accepts_net_positive_heuristic_wave_with_local_loss(db_
 
 def test_quality_sampler_rejects_net_negative_wave_despite_local_content_gain(db_manager) -> None:
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -685,7 +685,7 @@ def test_quality_sampler_rejects_net_negative_wave_despite_local_content_gain(db
 
 def test_quality_sampler_keeps_explicit_target_loss_strict(db_manager) -> None:
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -757,7 +757,7 @@ def test_quality_sampler_rejects_wave_when_one_action_regresses(db_manager) -> N
         for memory_id in (target, collateral)
     ]
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([_context(str(collateral))]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -787,7 +787,7 @@ def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manage
     )
     curation_store.put_candidate_state(initial)
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         candidate_repository=curation_store,
@@ -829,7 +829,7 @@ def test_quality_escalation_retries_candidate_cas_without_unconditional_write() 
         put_candidate_state=put_candidate_state,
     )
     sampler = CurationQualitySampler(
-        db_manager=None,
+        quality_query=cast(Any, SimpleNamespace()),
         search=_Search([]),
         repository=cast(Any, SimpleNamespace()),
         candidate_repository=cast(Any, candidate_repository),
@@ -932,7 +932,7 @@ def test_quality_sampler_ignores_maintenance_searches(db_manager) -> None:
     )
     connection.commit()
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -957,7 +957,7 @@ def test_quality_sampler_marks_link_work_structural_only(db_manager) -> None:
     SQLiteCurationStore(db_manager).create_run(run)
     search = _Search([])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -1079,7 +1079,7 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
     connection.commit()
     search = _Search([_context(str(memory_id), content="after")])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -1138,7 +1138,7 @@ def test_quality_sampler_recovers_explicit_zero_result_goal(db_manager) -> None:
     connection.commit()
     search = _Search([_context(str(memory_id))])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -1192,7 +1192,7 @@ def test_quality_sampler_excludes_unrelated_explicit_zero_result_searches(db_man
     connection.commit()
     search = _Search([_context(str(memory_id))])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -1281,7 +1281,7 @@ def test_quality_sampler_resolves_absent_explicit_goal_from_exact_query(
     connection.commit()
     search = _Search([_context(str(memory_id))])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -1370,7 +1370,7 @@ def test_quality_sampler_escalates_retrieval_regression(db_manager) -> None:
     )
     connection.commit()
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         candidate_repository=curation_store,
@@ -1432,7 +1432,7 @@ def test_quality_sampler_escalates_explicit_acceptance_failure(db_manager) -> No
     )
     connection.commit()
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([_context(str(memory_id))]),
         repository=SQLiteCurationQualityStore(db_manager),
         candidate_repository=curation_store,
@@ -1535,7 +1535,7 @@ def test_quality_sampler_excludes_archived_merge_sources(db_manager) -> None:
         applied_at=now,
     )
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search([]),
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,
@@ -1549,7 +1549,7 @@ def test_quality_sampler_skips_non_applied_receipts(db_manager) -> None:
     SQLiteCurationStore(db_manager).create_run(run)
     search = _Search([])
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=search,
         repository=SQLiteCurationQualityStore(db_manager),
         sample_rate=1.0,

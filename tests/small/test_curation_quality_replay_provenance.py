@@ -9,6 +9,7 @@ import pytest
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_quality_inputs import CurationQualityMutation
 from mcp_memory.core.curation_quality_provenance import QualityQuery, QueryProvenance
+from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
 from mcp_memory.curation_store import CurationRun, CurationRunOutcome, CurationRunState
 
 pytestmark = pytest.mark.small
@@ -51,7 +52,7 @@ def _mutation(memory_id, *, after_context: dict[str, object] | None = None) -> C
 
 def _sampler(db_manager, memory_id, query: QualityQuery) -> CurationQualitySampler:
     sampler = CurationQualitySampler(
-        db_manager=db_manager,
+        quality_query=SQLiteCurationQualityStore(db_manager),
         search=_Search(str(memory_id)),
         repository=cast(Any, SimpleNamespace(put_quality_evidence=lambda evidence: evidence)),
         sample_rate=1.0,

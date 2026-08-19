@@ -8,7 +8,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualityRepository
+from mcp_memory.core.curation_quality import (
+    CurationQualityEvidence,
+    CurationQualityQueryPort,
+    CurationQualityRepository,
+)
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 from mcp_memory.utils.db import DatabaseManager
 
@@ -25,7 +29,7 @@ _POSTGRES_QUALITY_EVIDENCE_SELECT = """
 """
 
 
-class SQLiteCurationQualityStore(CurationQualityRepository):
+class SQLiteCurationQualityStore(CurationQualityRepository, CurationQualityQueryPort):
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
 
@@ -92,8 +96,140 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
             ).fetchall()
         return [_from_row(row) for row in rows]
 
+    def search_events_for_memory_ids(
+        self,
+        memory_ids: Sequence[str],
+        *,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("?" for _ in memory_ids)
+        return self._read_rows(
+            f"""
+            SELECT invocation_id, memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+              AND created_at < ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 500
+            """,
+            (*memory_ids, before_epoch),
+        )
 
-class PostgresCurationQualityStore(CurationQualityRepository):
+    def search_events_for_invocations(
+        self,
+        invocation_ids: Sequence[str],
+        *,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("?" for _ in invocation_ids)
+        return self._read_rows(
+            f"""
+            SELECT invocation_id, memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND invocation_id IN ({placeholders})
+              AND created_at < ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1000
+            """,
+            (*invocation_ids, before_epoch),
+        )
+
+    def read_events_for_memory_ids(
+        self,
+        memory_ids: Sequence[str],
+        *,
+        after_epoch: float,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("?" for _ in memory_ids)
+        return self._read_rows(
+            f"""
+            SELECT memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'read'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+              AND created_at >= ?
+              AND created_at <= ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1000
+            """,
+            (*memory_ids, after_epoch, before_epoch),
+        )
+
+    def revision_snapshots(self, event_id: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT before_snapshot, after_snapshot
+            FROM memory_record_revisions
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        )
+
+    def revision_states(self, event_id: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT memory_id, after_exists, after_snapshot
+            FROM memory_record_revisions
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        )
+
+    def historical_search_events(self, memory_ids: Sequence[str]) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("?" for _ in memory_ids)
+        return self._read_rows(
+            f"""
+            SELECT invocation_id, query_text, memory_id, result_rank, result_count, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1000
+            """,
+            memory_ids,
+        )
+
+    def search_invocations_for_query(self, query_text: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT invocation_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND query_text = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1000
+            """,
+            (query_text,),
+        )
+
+    def search_events_for_invocation(self, invocation_id: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT invocation_id, query_text, memory_id, result_rank, result_count
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND invocation_id = ?
+            ORDER BY result_rank ASC
+            LIMIT 50
+            """,
+            (invocation_id,),
+        )
+
+    def _read_rows(self, query: str, params: Sequence[object]) -> list[tuple[object, ...]]:
+        connection = self._db.get_connection()
+        return [tuple(row) for row in connection.execute(query, list(params)).fetchall()]
+
+
+class PostgresCurationQualityStore(CurationQualityRepository, CurationQualityQueryPort):
     def __init__(self, session_manager: SessionManager[DbConnectionLike]) -> None:
         self._sessions = session_manager
 
@@ -159,6 +295,139 @@ class PostgresCurationQualityStore(CurationQualityRepository):
         with self._sessions.open_connection() as connection, connection.cursor() as cursor:
             cursor.execute(query, params)
             return [_from_postgres_row(row) for row in cursor.fetchall()]
+
+    def search_events_for_memory_ids(
+        self,
+        memory_ids: Sequence[str],
+        *,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("%s" for _ in memory_ids)
+        return self._read_rows(
+            f"""
+            SELECT invocation_id, memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+              AND created_at < %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 500
+            """,
+            (*memory_ids, before_epoch),
+        )
+
+    def search_events_for_invocations(
+        self,
+        invocation_ids: Sequence[str],
+        *,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("%s" for _ in invocation_ids)
+        return self._read_rows(
+            f"""
+            SELECT invocation_id, memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND invocation_id IN ({placeholders})
+              AND created_at < %s
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1000
+            """,
+            (*invocation_ids, before_epoch),
+        )
+
+    def read_events_for_memory_ids(
+        self,
+        memory_ids: Sequence[str],
+        *,
+        after_epoch: float,
+        before_epoch: float,
+    ) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("%s" for _ in memory_ids)
+        return self._read_rows(
+            f"""
+            SELECT memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'read'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+              AND created_at >= %s
+              AND created_at <= %s
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1000
+            """,
+            (*memory_ids, after_epoch, before_epoch),
+        )
+
+    def revision_snapshots(self, event_id: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT before_snapshot, after_snapshot
+            FROM memory_record_revisions
+            WHERE event_id = %s
+            """,
+            (event_id,),
+        )
+
+    def revision_states(self, event_id: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT memory_id, after_exists, after_snapshot
+            FROM memory_record_revisions
+            WHERE event_id = %s
+            """,
+            (event_id,),
+        )
+
+    def historical_search_events(self, memory_ids: Sequence[str]) -> Sequence[tuple[object, ...]]:
+        placeholders = ", ".join("%s" for _ in memory_ids)
+        return self._read_rows(
+            f"""
+            SELECT invocation_id, query_text, memory_id, result_rank, result_count, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1000
+            """,
+            memory_ids,
+        )
+
+    def search_invocations_for_query(self, query_text: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT invocation_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND query_text = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1000
+            """,
+            (query_text,),
+        )
+
+    def search_events_for_invocation(self, invocation_id: str) -> Sequence[tuple[object, ...]]:
+        return self._read_rows(
+            """
+            SELECT invocation_id, query_text, memory_id, result_rank, result_count
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND invocation_id = %s
+            ORDER BY result_rank ASC
+            LIMIT 50
+            """,
+            (invocation_id,),
+        )
+
+    def _read_rows(self, query: str, params: Sequence[object]) -> list[tuple[object, ...]]:
+        with self._sessions.open_connection() as connection, connection.cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            return [tuple(row) for row in cursor.fetchall()]
 
 
 def _values(evidence: CurationQualityEvidence) -> tuple[object, ...]:
