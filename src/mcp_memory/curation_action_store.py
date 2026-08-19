@@ -9,26 +9,43 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sqlite3
 import time
-import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from mcp_memory.core.curation_identity import (
-    action_intent_token,
-    canonical_token,
-    graph_token,
-    link_token,
-    record_snapshot,
-    record_token,
-)
+from mcp_memory.core.curation_identity import graph_token, link_token, record_token
 from mcp_memory.core.curation_models import CurationVerificationDescriptor
 from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
+from mcp_memory.curation_action_uow import (
+    CurationActionContractError,
+    CurationActionError,
+    CurationActionFatalError,
+    CurationActionInjectedFailure,
+    CurationActionStaleError,
+    CurationActionStore,
+    CurationActionTransientError,
+    CurationTransaction,
+    MutationResult,
+    action_intent_hash,
+    canonical_id,
+    canonical_target_ids,
+    check_replay_identity,
+    fail_stage,
+    field_of,
+    link_mapping,
+    link_token_key,
+    local_memory_ids,
+    normalize_link_type,
+    normalize_result,
+    prepare_memory_create,
+    prepare_memory_update,
+    semantic_token,
+    snapshot,
+    state_token,
+)
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -44,113 +61,21 @@ from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-
-class CurationActionError(RuntimeError):
-    """Base class for action-transaction failures."""
-
-
-class CurationActionStaleError(CurationActionError):
-    """The action preconditions no longer describe the authoritative state."""
-
-
-class CurationActionTransientError(CurationActionError):
-    """The backend failed in a way that is safe to retry with the same action."""
-
-
-class CurationActionFatalError(CurationActionError):
-    """The action or transaction callback violated a non-retryable contract."""
+__all__ = [
+    "CurationActionContractError",
+    "CurationActionError",
+    "CurationActionFatalError",
+    "CurationActionInjectedFailure",
+    "CurationActionStaleError",
+    "CurationActionStore",
+    "CurationActionTransientError",
+    "CurationTransaction",
+    "MutationReceipt",
+    "MutationResult",
+    "SQLiteCurationActionStore",
+]
 
 
-class CurationActionContractError(CurationActionFatalError):
-    """The curation agent supplied an action that can be repaired before execution."""
-
-    def __init__(self, message: str, *, code: str = "action_contract") -> None:
-        super().__init__(message)
-        self.code = code
-
-
-class CurationActionInjectedFailure(CurationActionFatalError):
-    """Failure raised by the test-only transaction stage hook."""
-
-
-@dataclass(frozen=True)
-class MutationResult:
-    """The compact normalized result returned by a transaction callback."""
-
-    operation: str
-    affected_ids: tuple[str, ...] = ()
-    verification_descriptor: CurationVerificationDescriptor | None = None
-
-    def __init__(
-        self,
-        operation: str,
-        affected_ids: Sequence[str | UUID] = (),
-        verification_descriptor: CurationVerificationDescriptor | None = None,
-    ) -> None:
-        object.__setattr__(self, "operation", operation)
-        object.__setattr__(self, "affected_ids", tuple(str(value) for value in affected_ids))
-        object.__setattr__(self, "verification_descriptor", verification_descriptor)
-
-
-class CurationTransaction(Protocol):
-    """The callback-only, transaction-scoped domain mutation surface."""
-
-    def get_memory(self, memory_id: str | UUID) -> MemoryRecord | None: ...
-
-    def get_links(
-        self,
-        memory_id: str | UUID,
-        *,
-        direction: str = "outgoing",
-        link_type: str | None = None,
-    ) -> list[MemoryLink]: ...
-
-    def get_protections(self, memory_id: str | UUID) -> list[object]: ...
-
-    def update_memory(self, memory_id: str | UUID, **changes: object) -> MemoryRecord: ...
-
-    def create_memory(self, **values: object) -> MemoryRecord: ...
-
-    def delete_memory(self, memory_id: str | UUID) -> MemoryRecord: ...
-
-    def add_link(
-        self,
-        source_id: str | UUID,
-        target_id: str | UUID,
-        link_type: str,
-        context: str = "",
-    ) -> MemoryLink: ...
-
-    def remove_link(self, source_id: str | UUID, target_id: str | UUID, link_type: str) -> bool: ...
-
-    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> MemoryRecord: ...
-
-
-class CurationActionStore(Protocol):
-    def execute_action(
-        self,
-        *,
-        run_id: UUID,
-        action_id: UUID,
-        target_ids: Sequence[str],
-        expected_tokens: Mapping[str, str],
-        apply: Callable[[CurationTransaction], MutationResult],
-        preconditions: Any | None = None,
-        operation: str | None = None,
-        payload: Any | None = None,
-    ) -> CurationActionReceipt: ...
-
-
-@dataclass
-class _MutationResultData:
-    operation: str
-    affected_ids: list[str] = field(default_factory=list)
-    verification_descriptor: CurationVerificationDescriptor | None = None
-
-
-_SUMMARY_UNSET = object()
-_VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
-_VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
 class SQLiteCurationActionStore:
     """Apply one action atomically using a dedicated SQLite connection.
 
@@ -195,10 +120,10 @@ class SQLiteCurationActionStore:
         restores_event_id: UUID | None = None,
         idempotency_key: str | None = None,
     ) -> CurationActionReceipt:
-        normalized_targets = _canonical_target_ids(target_ids)
+        normalized_targets = canonical_target_ids(target_ids)
         if not normalized_targets:
             raise CurationActionFatalError("at least one target ID is required")
-        normalized_tokens = {_canonical_id(key): str(value) for key, value in expected_tokens.items()}
+        normalized_tokens = {canonical_id(key): str(value) for key, value in expected_tokens.items()}
         if any(not value for value in normalized_tokens.values()):
             raise CurationActionFatalError("revision tokens must be non-empty")
         if operation is None:
@@ -211,7 +136,7 @@ class SQLiteCurationActionStore:
         # repeated inside BEGIN IMMEDIATE to close the duplicate-execution race.
         existing = SQLiteCurationStore(self._db).get_receipt(run_id, action_id)
         if existing is not None:
-            _check_replay_identity(
+            check_replay_identity(
                 existing,
                 run_id=run_id,
                 action_id=action_id,
@@ -229,7 +154,7 @@ class SQLiteCurationActionStore:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._receipt_on(connection, run_id, action_id)
             if existing is not None:
-                _check_replay_identity(
+                check_replay_identity(
                     existing,
                     run_id=run_id,
                     action_id=action_id,
@@ -284,7 +209,7 @@ class SQLiteCurationActionStore:
                 stage_hook=self._fail_stage,
             )
             raw_result = apply(transaction)
-            result = _normalize_result(raw_result)
+            result = normalize_result(raw_result)
             if not result.operation.strip():
                 raise CurationActionFatalError("mutation result operation must be non-empty")
             result_operation = result.operation.strip()
@@ -292,12 +217,12 @@ class SQLiteCurationActionStore:
                 raise CurationActionFatalError("action operation does not match mutation result")
             self._fail_stage("after_domain_mutation")
 
-            after_ids = _canonical_target_ids([*normalized_targets, *transaction.touched_ids])
+            after_ids = canonical_target_ids([*normalized_targets, *transaction.touched_ids])
             after_records = self._read_records(connection, after_ids)
             after_links = self._read_related_links(connection, set(after_ids))
             event_id = uuid4()
-            before_token = _state_token(before_records, normalized_targets)
-            after_token = _state_token(after_records, after_ids)
+            before_token = state_token(before_records, normalized_targets)
+            after_token = state_token(after_records, after_ids)
 
             self._write_repair_intents(connection, before_records, after_records)
             self._fail_stage("repair_intent")
@@ -320,7 +245,7 @@ class SQLiteCurationActionStore:
             )
             self._fail_stage("history")
 
-            affected_ids = _local_memory_ids(
+            affected_ids = local_memory_ids(
                 result.affected_ids or transaction.touched_ids or normalized_targets
             )
             receipt = CurationActionReceipt(
@@ -332,7 +257,7 @@ class SQLiteCurationActionStore:
                 before_token=before_token,
                 after_token=after_token,
                 mutation_event_id=event_id,
-                intent_hash=_action_intent_hash(
+                intent_hash=action_intent_hash(
                     operation=result_operation,
                     target_ids=normalized_targets,
                     expected_tokens=normalized_tokens,
@@ -408,17 +333,17 @@ class SQLiteCurationActionStore:
                     raise CurationActionStaleError(f"record revision token is stale for {memory_id!r}")
             graph_expected = expected_tokens.get(f"graph:{memory_id}")
             if graph_expected is not None:
-                actual = graph_token(memory_id, [_link_mapping(link) for link in _links_for_memory(connection, memory_id)])
+                actual = graph_token(memory_id, [link_mapping(link) for link in _links_for_memory(connection, memory_id)])
                 if actual != graph_expected:
                     raise CurationActionStaleError(f"graph revision token is stale for {memory_id!r}")
         for key, expected in expected_tokens.items():
-            parts = _link_token_key(key)
+            parts = link_token_key(key)
             if parts is None:
                 continue
             source_id, target_id, link_type = parts
             row = connection.execute(
                 "SELECT context FROM links WHERE source_id = ? AND target_id = ? AND type = ?",
-                (source_id, target_id, _normalize_link_type(link_type)),
+                (source_id, target_id, normalize_link_type(link_type)),
             ).fetchone()
             actual = link_token(
                 source_id,
@@ -433,23 +358,23 @@ class SQLiteCurationActionStore:
     def _check_preconditions(self, connection: sqlite3.Connection, target_ids: Sequence[str], preconditions: Any) -> None:
         if preconditions is None:
             return
-        required_statuses = cast(Mapping[object, object], _field(preconditions, "required_statuses", {}))
+        required_statuses = cast(Mapping[object, object], field_of(preconditions, "required_statuses", {}))
         for memory_id, expected_status in required_statuses.items():
-            normalized_id = _canonical_id(memory_id)
+            normalized_id = canonical_id(memory_id)
             if normalized_id not in target_ids:
                 raise CurationActionFatalError("status precondition references an unlocked target")
             row = connection.execute("SELECT status FROM memories WHERE id = ?", (normalized_id,)).fetchone()
             if row is None or str(row[0]) != str(getattr(expected_status, "value", expected_status)):
                 raise CurationActionStaleError(f"status precondition is stale for {normalized_id!r}")
         for name, should_exist in (("required_links", True), ("absent_links", False)):
-            assertions = cast(Sequence[object], _field(preconditions, name, []))
+            assertions = cast(Sequence[object], field_of(preconditions, name, []))
             for assertion in assertions:
-                source_id = _canonical_id(_field(assertion, "source_id"))
-                target_id = _canonical_id(_field(assertion, "target_id"))
+                source_id = canonical_id(field_of(assertion, "source_id"))
+                target_id = canonical_id(field_of(assertion, "target_id"))
                 if source_id not in target_ids or target_id not in target_ids:
                     raise CurationActionFatalError("link precondition references an unlocked target")
-                link_type = _normalize_link_type(str(_field(assertion, "link_type")))
-                context = _field(assertion, "context", None)
+                link_type = normalize_link_type(str(field_of(assertion, "link_type")))
+                context = field_of(assertion, "context", None)
                 if not should_exist and context is not None:
                     raise CurationActionFatalError(
                         "absent-link precondition must omit relationship context"
@@ -473,7 +398,7 @@ class SQLiteCurationActionStore:
         now = time.time()
         for memory_id, after in after_records.items():
             before = before_records.get(memory_id)
-            if before is not None and _semantic_token(before) == _semantic_token(after):
+            if before is not None and semantic_token(before) == semantic_token(after):
                 continue
             connection.execute(
                 """
@@ -542,7 +467,7 @@ class SQLiteCurationActionStore:
         for memory_id in sorted(set(before_records) | set(after_records), key=lambda value: value.encode("utf-8")):
             before = before_records.get(memory_id)
             after = after_records.get(memory_id)
-            if before is not None and after is not None and _semantic_token(before) == _semantic_token(after):
+            if before is not None and after is not None and semantic_token(before) == semantic_token(after):
                 continue
             connection.execute(
                 """
@@ -556,11 +481,11 @@ class SQLiteCurationActionStore:
                     memory_id,
                     str(RevisionRole.TARGET),
                     int(before is not None),
-                    None if before is None else json.dumps(_snapshot(before), sort_keys=True, ensure_ascii=False),
+                    None if before is None else json.dumps(snapshot(before), sort_keys=True, ensure_ascii=False),
                     int(after is not None),
-                    None if after is None else json.dumps(_snapshot(after), sort_keys=True, ensure_ascii=False),
-                    None if before is None else _semantic_token(before),
-                    None if after is None else _semantic_token(after),
+                    None if after is None else json.dumps(snapshot(after), sort_keys=True, ensure_ascii=False),
+                    None if before is None else semantic_token(before),
+                    None if after is None else semantic_token(after),
                 ),
             )
         for key in sorted(
@@ -638,23 +563,7 @@ class SQLiteCurationActionStore:
         return SQLiteCurationStore(self._db).get_receipt(run_id, action_id)
 
     def _fail_stage(self, stage: str) -> None:
-        if self._fault_injector is not None:
-            self._fault_injector(stage)
-        aliases = {
-            "domain_mutation": {"domain", "after_domain", "domain_mutation", "after_domain_mutation"},
-            "projection_update": {"projection", "after_projection", "projection_update", "after_projection_update"},
-            "repair_intent": {"repair", "after_repair", "repair_intent", "after_repair_intent"},
-            "history": {"history", "after_history"},
-            "receipt_preparation": {
-                "receipt",
-                "before_receipt",
-                "receipt_preparation",
-                "after_receipt_preparation",
-            },
-        }
-        normalized_stage = None if self._fault_stage is None else self._fault_stage.replace("-", "_")
-        if normalized_stage in aliases.get(stage, {stage}):
-            raise CurationActionInjectedFailure(f"injected curation transaction failure at {stage}")
+        fail_stage(stage, fault_stage=self._fault_stage, fault_injector=self._fault_injector)
 
     def _read_related_links(
         self,
@@ -709,7 +618,7 @@ class _SQLiteCurationTransaction:
         query = f"SELECT source_id, target_id, type, context FROM links WHERE {column} = ?"
         if link_type is not None:
             query += " AND type = ?"
-            params.append(_normalize_link_type(link_type))
+            params.append(normalize_link_type(link_type))
         query += " ORDER BY source_id ASC, target_id ASC, type ASC"
         return [
             MemoryLink(str(row[0]), str(row[1]), str(row[2]), str(row[3] or ""))
@@ -730,82 +639,61 @@ class _SQLiteCurationTransaction:
         existing = self.get_memory(normalized_id)
         if existing is None:
             raise CurationActionStaleError(f"target memory {normalized_id!r} is missing")
-        title = _text(changes.get("title"), existing.title)
-        content = _text(changes.get("content"), existing.content)
-        if not title or not content:
-            raise ValueError("title and content must be non-empty")
-        memory_type = str(changes.get("memory_type", changes.get("type", existing.type)))
-        status = str(changes.get("status", existing.status))
-        if memory_type not in _VALID_MEMORY_TYPES:
-            raise ValueError(f"invalid memory_type: {memory_type!r}")
-        if status not in _VALID_MEMORY_STATUSES:
-            raise ValueError(f"invalid status: {status!r}")
-        summary_value = changes.get("summary", _SUMMARY_UNSET)
-        summary = (
-            _build_summary(title, content, memory_type)
-            if summary_value is _SUMMARY_UNSET and ("title" in changes or "content" in changes or "type" in changes or "memory_type" in changes)
-            else None if summary_value is None else str(summary_value) if summary_value is not _SUMMARY_UNSET else existing.summary
-        )
-        workspace_ids = _values(changes.get("workspace_ids"), existing.workspace_ids)
-        tags = _values(changes.get("tags"), existing.tags)
-        metadata = changes.get("metadata", existing.metadata)
-        if not isinstance(metadata, Mapping):
-            raise ValueError("metadata must be a mapping")
+        prepared = prepare_memory_update(existing, changes)
         columns = ["title = ?", "content = ?", "summary = ?", "type = ?", "status = ?", "metadata = ?", "updated_at = ?"]
-        values: list[object] = [title, content, summary, memory_type, status, json.dumps(dict(metadata), sort_keys=True), _now_text()]
-        if "access_score" in changes:
-            columns.append("access_score = ?")
-            values.append(changes["access_score"])
-        if "last_accessed_at" in changes:
-            columns.append("last_accessed_at = ?")
-            values.append(changes["last_accessed_at"])
-        if "last_surfaced_at" in changes:
-            columns.append("last_surfaced_at = ?")
-            values.append(changes["last_surfaced_at"])
+        values: list[object] = [
+            prepared.title,
+            prepared.content,
+            prepared.summary,
+            prepared.memory_type,
+            prepared.status,
+            json.dumps(prepared.metadata, sort_keys=True),
+            _now_text(),
+        ]
+        for column_name, value in prepared.optional_columns.items():
+            columns.append(f"{column_name} = ?")
+            values.append(value)
         values.append(normalized_id)
         self._connection.execute(f"UPDATE memories SET {', '.join(columns)} WHERE id = ?", values)
-        self._replace_workspaces(normalized_id, workspace_ids)
-        self._replace_tags(normalized_id, tags)
+        self._replace_workspaces(normalized_id, prepared.workspace_ids)
+        self._replace_tags(normalized_id, prepared.tags)
         self.touched_ids.append(normalized_id)
         self._stage_hook("domain_mutation")
-        self._replace_fts(normalized_id, title, summary or "", content, tags)
+        self._replace_fts(normalized_id, prepared.title, prepared.summary or "", prepared.content, prepared.tags)
         self._stage_hook("projection_update")
         return self.get_memory(normalized_id)  # type: ignore[return-value]
 
     def create_memory(self, **values: object) -> MemoryRecord:
-        memory_id = _canonical_id(values.get("memory_id", uuid4()))
-        if self._connection.execute("SELECT 1 FROM memories WHERE id = ?", (memory_id,)).fetchone() is not None:
-            raise CurationActionFatalError(f"memory {memory_id!r} already exists")
-        title = str(values.get("title", "")).strip()
-        content = str(values.get("content", "")).strip()
-        if not title or not content:
-            raise ValueError("title and content must be non-empty")
-        memory_type = str(values.get("memory_type", values.get("type", "journal")))
-        status = str(values.get("status", "active"))
-        workspace_ids = _values(values.get("workspace_ids", []), [])
-        if not workspace_ids:
-            raise ValueError("workspace_ids must contain at least one non-empty value")
-        tags = _values(values.get("tags", []), [])
-        summary = values.get("summary") or _build_summary(title, content, memory_type)
-        created_at = str(values.get("created_at", _now_text()))
-        updated_at = str(values.get("updated_at", created_at))
-        metadata = cast(Mapping[str, object], values.get("metadata", {}))
+        prepared = prepare_memory_create(values)
+        if self._connection.execute("SELECT 1 FROM memories WHERE id = ?", (prepared.memory_id,)).fetchone() is not None:
+            raise CurationActionFatalError(f"memory {prepared.memory_id!r} already exists")
         next_ref_row = self._connection.execute(
             "SELECT COALESCE(MAX(memory_ref), 0) + 1 FROM memories"
         ).fetchone()
         memory_ref = int(next_ref_row[0]) if next_ref_row is not None else 1
         self._connection.execute(
             "INSERT INTO memories (id, memory_ref, title, content, summary, type, status, created_at, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (memory_id, memory_ref, title, content, str(summary), memory_type, status, created_at, updated_at, json.dumps(dict(metadata), sort_keys=True)),
+            (
+                prepared.memory_id,
+                memory_ref,
+                prepared.title,
+                prepared.content,
+                prepared.summary,
+                prepared.memory_type,
+                prepared.status,
+                prepared.created_at,
+                prepared.updated_at,
+                json.dumps(prepared.metadata, sort_keys=True),
+            ),
         )
-        self._replace_workspaces(memory_id, workspace_ids)
-        self._replace_tags(memory_id, tags)
-        self.touched_ids.append(memory_id)
-        self._new_ids.add(memory_id)
+        self._replace_workspaces(prepared.memory_id, prepared.workspace_ids)
+        self._replace_tags(prepared.memory_id, prepared.tags)
+        self.touched_ids.append(prepared.memory_id)
+        self._new_ids.add(prepared.memory_id)
         self._stage_hook("domain_mutation")
-        self._replace_fts(memory_id, title, str(summary), content, tags)
+        self._replace_fts(prepared.memory_id, prepared.title, prepared.summary, prepared.content, prepared.tags)
         self._stage_hook("projection_update")
-        record = self.get_memory(memory_id)
+        record = self.get_memory(prepared.memory_id)
         assert record is not None
         return record
 
@@ -823,7 +711,7 @@ class _SQLiteCurationTransaction:
     def add_link(self, source_id: str | UUID, target_id: str | UUID, link_type: str, context: str = "") -> MemoryLink:
         source = self._require_access(source_id)
         target = self._require_endpoint(target_id)
-        normalized_type = _normalize_link_type(link_type)
+        normalized_type = normalize_link_type(link_type)
         normalized_context = context.strip()
         self._connection.execute(
             "INSERT INTO links (source_id, target_id, type, context) VALUES (?, ?, ?, ?) ON CONFLICT(source_id, target_id, type) DO UPDATE SET context = excluded.context",
@@ -838,7 +726,7 @@ class _SQLiteCurationTransaction:
         target = self._require_endpoint(target_id)
         cursor = self._connection.execute(
             "DELETE FROM links WHERE source_id = ? AND target_id = ? AND type = ?",
-            (source, target, _normalize_link_type(link_type)),
+            (source, target, normalize_link_type(link_type)),
         )
         self.touched_ids.extend([source, target])
         self._stage_hook("domain_mutation")
@@ -853,14 +741,14 @@ class _SQLiteCurationTransaction:
         return self.update_memory(memory_id, metadata=metadata)
 
     def _require_access(self, memory_id: str | UUID) -> str:
-        normalized_id = _canonical_id(memory_id)
+        normalized_id = canonical_id(memory_id)
         if normalized_id not in self._target_ids and normalized_id not in self._new_ids:
             if self._connection.execute("SELECT 1 FROM memories WHERE id = ?", (normalized_id,)).fetchone() is not None:
                 raise CurationActionFatalError(f"callback discovered unlocked target {normalized_id!r}")
         return normalized_id
 
     def _require_endpoint(self, memory_id: str | UUID) -> str:
-        normalized_id = _canonical_id(memory_id)
+        normalized_id = canonical_id(memory_id)
         if normalized_id.startswith("ext:"):
             return normalized_id
         if normalized_id in self._target_ids or normalized_id in self._new_ids:
@@ -892,78 +780,8 @@ class _SQLiteCurationTransaction:
         )
 
 
-def _normalize_result(result: MutationResult | Mapping[str, object] | object) -> _MutationResultData:
-    if isinstance(result, MutationResult):
-        return _MutationResultData(result.operation, list(result.affected_ids), result.verification_descriptor)
-    operation = _field(result, "operation", None)
-    affected_ids = _field(result, "affected_ids", [])
-    if not isinstance(operation, str) or not isinstance(affected_ids, Sequence) or isinstance(affected_ids, (str, bytes)):
-        raise CurationActionFatalError("callback must return MutationResult")
-    descriptor = _field(result, "verification_descriptor", None)
-    if descriptor is not None and not isinstance(descriptor, CurationVerificationDescriptor):
-        raise CurationActionFatalError("mutation result verification descriptor is invalid")
-    return _MutationResultData(operation, [str(value) for value in affected_ids], descriptor)
-
-
-def _canonical_target_ids(values: Sequence[str | UUID]) -> list[str]:
-    normalized = {_canonical_id(value) for value in values}
-    if "" in normalized:
-        raise CurationActionFatalError("target IDs must be non-empty")
-    return sorted(normalized, key=lambda value: value.encode("utf-8"))
-
-
-def _local_memory_ids(values: Sequence[str | UUID]) -> list[str]:
-    return [value for value in _canonical_target_ids(values) if not value.startswith("ext:")]
-
-
-def _canonical_id(value: object) -> str:
-    if value is None:
-        raise CurationActionFatalError("identity must be non-null")
-    return unicodedata.normalize("NFC", str(value)).strip()
-
-
-def _field(value: object, name: str, default: object = None) -> object:
-    if isinstance(value, Mapping):
-        return value.get(name, default)
-    return getattr(value, name, default)
-
-
-def _text(value: object, fallback: str) -> str:
-    return fallback if value is None else str(value).strip()
-
-
-def _values(value: object, fallback: Sequence[str]) -> list[str]:
-    source = fallback if value is None else value
-    if not isinstance(source, Sequence) or isinstance(source, (str, bytes)):
-        raise ValueError("collection value expected")
-    return sorted({str(item).strip() for item in source if str(item).strip()}, key=lambda item: item.encode("utf-8"))
-
-
-def _normalize_link_type(link_type: str) -> str:
-    normalized = re.sub(r"[\s-]+", "_", link_type.strip()).upper()
-    if not normalized:
-        raise ValueError("link_type must be non-empty")
-    return normalized
-
-
-def _link_token_key(key: str) -> tuple[str, str, str] | None:
-    raw = key.removeprefix("link:") if key.startswith("link:") else key
-    parts = raw.split(":")
-    if len(parts) != 3 or any(not part for part in parts):
-        return None
-    return parts[0], parts[1], parts[2]
-
-
 def _now_text() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _build_summary(title: str, content: str, memory_type: str) -> str:
-    # Keep the transaction primitive independent from the public repository
-    # while retaining its established summary shape.
-    from mcp_memory.core.summaries import build_deterministic_summary
-
-    return build_deterministic_summary(title=title, content=content, memory_type=memory_type)
 
 
 def _hydrate_record(connection: sqlite3.Connection, row: sqlite3.Row) -> MemoryRecord:
@@ -992,100 +810,9 @@ def _links_for_memory(connection: sqlite3.Connection, memory_id: str) -> list[Me
     return [MemoryLink(str(row[0]), str(row[1]), str(row[2]), str(row[3] or "")) for row in rows]
 
 
-def _link_mapping(link: MemoryLink) -> dict[str, str | None]:
-    return {"source_id": link.source_id, "target_id": link.target_id, "type": link.link_type, "context": link.context}
-
-
-def _snapshot(record: MemoryRecord) -> dict[str, Any]:
-    return record_snapshot(record)
-
-
-def _semantic_token(record: MemoryRecord) -> str:
-    return record_token(record)
-
-
-def _state_token(records: Mapping[str, MemoryRecord], ids: Sequence[str]) -> str | None:
-    if not records:
-        return None
-    return canonical_token({"targets": list(ids), "records": {key: _snapshot(records[key]) for key in sorted(records, key=lambda value: value.encode("utf-8"))}})
-
-
 def _is_retryable_sqlite_error(error: sqlite3.OperationalError) -> bool:
     message = str(error).lower()
     return "locked" in message or "busy" in message
-
-
-def _check_replay_identity(
-    receipt: CurationActionReceipt,
-    *,
-    run_id: UUID,
-    action_id: UUID,
-    operation: str | None,
-    target_ids: Sequence[str],
-    expected_tokens: Mapping[str, str],
-    preconditions: Any | None,
-    payload: Any | None,
-    verification_descriptor: CurationVerificationDescriptor | None,
-) -> None:
-    if receipt.intent_hash is None:
-        raise CurationActionFatalError(
-            f"curation action identity collision: legacy-unverifiable receipt for {run_id}/{action_id}"
-        )
-    if operation is None:
-        raise CurationActionFatalError(
-            f"curation action identity collision: operation is required for {run_id}/{action_id}"
-        )
-    candidate = _action_intent_hash(
-        operation=operation,
-        target_ids=target_ids,
-        expected_tokens=expected_tokens,
-        preconditions=preconditions,
-        payload=payload,
-    )
-    if candidate != receipt.intent_hash:
-        raise CurationActionFatalError(f"curation action identity collision for {run_id}/{action_id}")
-    if (
-        receipt.verification_descriptor is not None
-        and verification_descriptor is not None
-        and receipt.verification_descriptor != verification_descriptor
-    ):
-        raise CurationActionFatalError(f"curation action identity collision for {run_id}/{action_id}")
-
-
-def _action_intent_hash(
-    *,
-    operation: str,
-    target_ids: Sequence[str],
-    expected_tokens: Mapping[str, str],
-    preconditions: Any | None,
-    payload: Any | None,
-) -> str:
-    try:
-        return action_intent_token(
-            operation=operation,
-            target_ids=target_ids,
-            expected_tokens=expected_tokens,
-            preconditions=preconditions,
-            payload=payload,
-        )
-    except (TypeError, ValueError) as exc:
-        raise CurationActionFatalError("action intent is not canonically representable") from exc
-
-
-
-__all__ = [
-    "CurationActionContractError",
-    "CurationActionError",
-    "CurationActionFatalError",
-    "CurationActionInjectedFailure",
-    "CurationActionStaleError",
-    "CurationActionStore",
-    "CurationActionTransientError",
-    "CurationTransaction",
-    "MutationReceipt",
-    "MutationResult",
-    "SQLiteCurationActionStore",
-]
 
 
 MutationReceipt = CurationActionReceipt
