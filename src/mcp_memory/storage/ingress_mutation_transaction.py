@@ -6,9 +6,6 @@ import json
 import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
-from typing import Protocol
-from unicodedata import normalize
 from uuid import uuid4
 
 from mcp_memory.core.curation_identity import record_snapshot, record_token
@@ -16,49 +13,35 @@ from mcp_memory.core.ingress_evidence import (
     IngressActionReceipt,
     IngressReceiptStatus,
     SourceCoverage,
-    SourceCoverageOutcome,
 )
 from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
 from mcp_memory.core.journal import RECOVERABLE_RETENTION_SECONDS
-from mcp_memory.core.ports.ingress import (
-    IngressActionReceiptIdentityConflictError,
-    SourceCoverageAssignmentConflictError,
-)
+from mcp_memory.core.ports.ingress import SourceCoverageAssignmentConflictError
 from mcp_memory.core.ports.memory import MemoryRecord
+from mcp_memory.storage.ingress_mutation_uow import (
+    IngressDomainTransaction,
+    IngressMutationInjectedFailure,
+    IngressMutationResult,
+    check_digest,
+    coverage_for_action,
+    fail_stage,
+    identifier,
+    json_text,
+    now_text,
+    prepare_append,
+    prepare_create,
+)
+from mcp_memory.storage.ingress_mutation_uow import (
+    journal_entry_ids as _to_journal_entry_ids,
+)
 from mcp_memory.utils.db import DatabaseManager
 
-
-class IngressMutationInjectedFailure(RuntimeError):
-    """Failure raised by a test-only transaction stage hook."""
-
-
-class IngressMutationResult:
-    """Normalized result returned by an ingress domain callback."""
-
-    def __init__(self, operation: str, affected_ids: Sequence[str] = ()) -> None:
-        self.operation = operation
-        self.affected_ids = tuple(str(value) for value in affected_ids)
-
-
-class IngressDomainTransaction(Protocol):
-    """Connection-scoped create/append domain surface."""
-
-    touched_ids: list[str]
-
-    def get_memory(self, memory_id: str) -> MemoryRecord | None: ...
-
-    def create_memory(self, **values: object) -> MemoryRecord: ...
-
-    def append_memory(
-        self,
-        memory_id: str,
-        content: str,
-        *,
-        summary: str | None | object = None,
-        tags: Sequence[str] | None = None,
-        workspace_ids: Sequence[str] | None = None,
-        metadata: Mapping[str, object] | None = None,
-    ) -> MemoryRecord: ...
+__all__ = [
+    "IngressDomainTransaction",
+    "IngressMutationInjectedFailure",
+    "IngressMutationResult",
+    "SQLiteIngressMutationStore",
+]
 
 
 class SQLiteIngressMutationStore:
@@ -97,19 +80,19 @@ class SQLiteIngressMutationStore:
         mutation_evidence_id: str | None = None,
         journal_task_id: str | None = None,
     ) -> IngressActionReceipt:
-        normalized_batch = _identifier(batch_id, "batch_id")
-        normalized_operation = _identifier(operation, "operation")
+        normalized_batch = identifier(batch_id, "batch_id")
+        normalized_operation = identifier(operation, "operation")
         if normalized_operation not in {"create", "append"}:
             raise ValueError("ingress operation must be create or append")
         identity = action_identity(normalized_operation, entry_ids, target_ids)
         digest = canonical_payload_digest(payload)
         normalized_journal_task = (
-            None if journal_task_id is None else _identifier(journal_task_id, "journal_task_id")
+            None if journal_task_id is None else identifier(journal_task_id, "journal_task_id")
         )
-        journal_entry_ids = (
-            () if normalized_journal_task is None else _journal_entry_ids(identity.entry_ids)
+        entry_journal_ids = (
+            () if normalized_journal_task is None else _to_journal_entry_ids(identity.entry_ids)
         )
-        normalized_coverage = _coverage_for_action(
+        normalized_coverage = coverage_for_action(
             source_coverage,
             entry_ids=identity.entry_ids,
             action_id=identity.action_id,
@@ -121,7 +104,7 @@ class SQLiteIngressMutationStore:
             connection.execute("BEGIN IMMEDIATE")
             existing = _receipt_for_action(connection, identity.action_id)
             if existing is not None:
-                _check_digest(existing, digest)
+                check_digest(existing, digest)
                 connection.rollback()
                 return existing
 
@@ -134,7 +117,7 @@ class SQLiteIngressMutationStore:
                 canonical_payload_digest=digest,
                 status=IngressReceiptStatus.UNOBSERVED,
                 mutation_evidence_id=mutation_evidence_id,
-                created_at=_now_text(),
+                created_at=now_text(),
             )
             connection.execute(
                 """
@@ -183,7 +166,7 @@ class SQLiteIngressMutationStore:
                 status=IngressReceiptStatus.APPLIED_UNVERIFIED,
                 mutation_evidence_id=mutation_evidence_id or str(event_id),
                 created_at=provisional.created_at,
-                terminalized_at=_now_text(),
+                terminalized_at=now_text(),
                 before_revision_tokens={key: record_token(value) for key, value in before.items()},
                 after_revision_tokens={key: record_token(value) for key, value in after.items()},
             )
@@ -198,8 +181,8 @@ class SQLiteIngressMutationStore:
                 (
                     receipt.status.value,
                     receipt.mutation_evidence_id,
-                    _json_text(receipt.before_revision_tokens),
-                    _json_text(receipt.after_revision_tokens),
+                    json_text(receipt.before_revision_tokens),
+                    json_text(receipt.after_revision_tokens),
                     receipt.terminalized_at,
                     receipt.error_code,
                     receipt.action_id,
@@ -210,7 +193,7 @@ class SQLiteIngressMutationStore:
             if normalized_journal_task is not None:
                 _move_claimed_journal_entries(
                     connection,
-                    journal_entry_ids,
+                    entry_journal_ids,
                     task_id=normalized_journal_task,
                 )
                 self._fail_stage("journal_reconcile")
@@ -268,7 +251,7 @@ class SQLiteIngressMutationStore:
                 id, operation, actor_kind, family, action_id, schema_version, status, created_at
             ) VALUES (?, ?, 'system', 'ingress', ?, 1, 'applied', ?)
             """,
-            (event_id, operation, action_id, _now_text()),
+            (event_id, operation, action_id, now_text()),
         )
         for memory_id in _canonical_ids([*before, *after]):
             previous = before.get(memory_id)
@@ -286,30 +269,16 @@ class SQLiteIngressMutationStore:
                     event_id,
                     memory_id,
                     int(previous is not None),
-                    None if previous is None else _json_text(record_snapshot(previous)),
+                    None if previous is None else json_text(record_snapshot(previous)),
                     int(current is not None),
-                    None if current is None else _json_text(record_snapshot(current)),
+                    None if current is None else json_text(record_snapshot(current)),
                     None if previous is None else record_token(previous),
                     None if current is None else record_token(current),
                 ),
             )
 
     def _fail_stage(self, stage: str) -> None:
-        if self._fault_injector is not None:
-            self._fault_injector(stage)
-        normalized = None if self._fault_stage is None else self._fault_stage.replace("-", "_")
-        aliases = {
-            "action_reserved": {"action_reserved", "reserve"},
-            "after_domain_mutation": {"domain", "after_domain_mutation"},
-            "repair_intent": {"repair", "repair_intent"},
-            "history": {"history"},
-            "before_receipt_coverage_commit": {
-                "receipt", "coverage", "before_receipt_coverage_commit"
-            },
-            "journal_reconcile": {"journal", "journal_reconcile"},
-        }
-        if normalized in aliases.get(stage, {stage}):
-            raise IngressMutationInjectedFailure(f"injected ingress transaction failure at {stage}")
+        fail_stage(stage, fault_stage=self._fault_stage, fault_injector=self._fault_injector)
 
 
 class _SQLiteIngressDomainTransaction:
@@ -318,25 +287,12 @@ class _SQLiteIngressDomainTransaction:
         self.touched_ids: list[str] = []
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
-        normalized_id = _identifier(memory_id, "memory_id")
+        normalized_id = identifier(memory_id, "memory_id")
         row = self._connection.execute("SELECT * FROM memories WHERE id = ?", (normalized_id,)).fetchone()
         return None if row is None else _hydrate_record(self._connection, row)
 
     def create_memory(self, **values: object) -> MemoryRecord:
-        memory_id = _identifier(str(values.get("memory_id", uuid4())), "memory_id")
-        title = _required_text(values.get("title"), "title")
-        content = _required_text(values.get("content"), "content")
-        memory_type = str(values.get("memory_type", values.get("type", "observation")))
-        status = str(values.get("status", "active"))
-        workspace_ids = _values(values.get("workspace_ids", ()))
-        if not workspace_ids:
-            raise ValueError("workspace_ids must contain at least one non-empty value")
-        tags = _values(values.get("tags", ()), normalize_tags=True)
-        created_at = str(values.get("created_at", _now_text()))
-        summary = str(values.get("summary") or _build_summary(title, content, memory_type))
-        metadata = values.get("metadata", {})
-        if not isinstance(metadata, Mapping):
-            raise ValueError("metadata must be a mapping")
+        prepared = prepare_create(values)
         next_ref = self._connection.execute("SELECT COALESCE(MAX(memory_ref), 0) + 1 FROM memories").fetchone()[0]
         self._connection.execute(
             """
@@ -345,42 +301,48 @@ class _SQLiteIngressDomainTransaction:
                 archived_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0.0, NULL, NULL, ?)
             """,
-            (memory_id, int(next_ref), title, content, summary, memory_type, status, created_at, created_at, _json_text(dict(metadata))),
+            (
+                prepared.memory_id,
+                int(next_ref),
+                prepared.title,
+                prepared.content,
+                prepared.summary,
+                prepared.memory_type,
+                prepared.status,
+                prepared.created_at,
+                prepared.created_at,
+                json_text(prepared.metadata),
+            ),
         )
-        self._replace_mappings(memory_id, workspace_ids, tags)
-        self._replace_fts(memory_id, title, summary, content, tags)
-        self.touched_ids.append(memory_id)
-        return self.get_memory(memory_id)  # type: ignore[return-value]
+        self._replace_mappings(prepared.memory_id, prepared.workspace_ids, prepared.tags)
+        self._replace_fts(prepared.memory_id, prepared.title, prepared.summary, prepared.content, prepared.tags)
+        self.touched_ids.append(prepared.memory_id)
+        return self.get_memory(prepared.memory_id)  # type: ignore[return-value]
 
     def append_memory(
         self,
         memory_id: str,
         content: str,
         *,
-        summary: str | None | object = None,
+        summary: str | object | None = None,
         tags: Sequence[str] | None = None,
         workspace_ids: Sequence[str] | None = None,
         metadata: Mapping[str, object] | None = None,
     ) -> MemoryRecord:
-        normalized_id = _identifier(memory_id, "memory_id")
+        normalized_id = identifier(memory_id, "memory_id")
         existing = self.get_memory(normalized_id)
         if existing is None:
             raise ValueError(f"memory {normalized_id!r} was not found")
-        addition = _required_text(content, "content")
-        merged_content = existing.content if addition in existing.content else f"{existing.content.rstrip()}\n\n{addition}"
-        merged_tags = _values(tags if tags is not None else existing.tags, normalize_tags=True)
-        merged_workspaces = _values(workspace_ids if workspace_ids is not None else existing.workspace_ids)
-        merged_metadata = dict(existing.metadata)
-        if metadata is not None:
-            merged_metadata.update(metadata)
-        resolved_summary = existing.summary if summary is None else str(summary)
-        updated_at = _now_text()
+        prepared = prepare_append(
+            existing, content, summary=summary, tags=tags, workspace_ids=workspace_ids, metadata=metadata
+        )
+        updated_at = now_text()
         self._connection.execute(
             "UPDATE memories SET content = ?, summary = ?, metadata = ?, updated_at = ? WHERE id = ?",
-            (merged_content.strip(), resolved_summary, _json_text(merged_metadata), updated_at, normalized_id),
+            (prepared.content, prepared.summary, json_text(prepared.metadata), updated_at, normalized_id),
         )
-        self._replace_mappings(normalized_id, merged_workspaces, merged_tags)
-        self._replace_fts(normalized_id, existing.title, resolved_summary or "", merged_content.strip(), merged_tags)
+        self._replace_mappings(normalized_id, prepared.workspace_ids, prepared.tags)
+        self._replace_fts(normalized_id, existing.title, prepared.summary or "", prepared.content, prepared.tags)
         self.touched_ids.append(normalized_id)
         return self.get_memory(normalized_id)  # type: ignore[return-value]
 
@@ -404,29 +366,6 @@ class _SQLiteIngressDomainTransaction:
         )
 
 
-def _coverage_for_action(
-    coverage: Sequence[SourceCoverage] | None,
-    *,
-    entry_ids: Sequence[str],
-    action_id: str,
-    operation: str,
-) -> tuple[SourceCoverage, ...]:
-    if coverage is None:
-        outcome = SourceCoverageOutcome.CREATED if operation == "create" else SourceCoverageOutcome.APPENDED
-        return tuple(SourceCoverage(entry_id, outcome, action_id) for entry_id in entry_ids)
-    normalized = tuple(coverage)
-    if _canonical_ids([item.entry_id for item in normalized]) != _canonical_ids(entry_ids):
-        raise ValueError("source coverage must contain exactly the action entry IDs")
-    result: list[SourceCoverage] = []
-    for item in normalized:
-        if item.action_id not in {None, action_id}:
-            raise ValueError("source coverage action ID does not match the mutation")
-        if item.outcome is SourceCoverageOutcome.UNOBSERVED:
-            raise ValueError("create and append require terminal handled source coverage")
-        result.append(SourceCoverage(item.entry_id, item.outcome, action_id, item.reason))
-    return tuple(sorted(result, key=lambda value: value.entry_id.encode("utf-8")))
-
-
 def _assign_coverage(connection: sqlite3.Connection, coverage: SourceCoverage) -> None:
     connection.execute(
         "INSERT OR IGNORE INTO ingress_source_coverage (entry_id, outcome, action_id, reason) VALUES (?, ?, ?, ?)",
@@ -434,6 +373,8 @@ def _assign_coverage(connection: sqlite3.Connection, coverage: SourceCoverage) -
     )
     row = connection.execute("SELECT outcome, action_id FROM ingress_source_coverage WHERE entry_id = ?", (coverage.entry_id,)).fetchone()
     assert row is not None
+    from mcp_memory.core.ingress_evidence import SourceCoverageOutcome
+
     stored = (str(row[1]) if row[1] is not None else None, SourceCoverageOutcome(str(row[0])))
     requested = (coverage.action_id, coverage.outcome)
     if stored != requested:
@@ -475,19 +416,12 @@ def _receipt_for_action(connection: sqlite3.Connection, action_id: str) -> Ingre
     )
 
 
-def _check_digest(receipt: IngressActionReceipt, requested_digest: str) -> None:
-    if receipt.canonical_payload_digest != requested_digest:
-        raise IngressActionReceiptIdentityConflictError(
-            receipt.action_id, receipt.canonical_payload_digest, requested_digest
-        )
-
-
 def _receipt_values(receipt: IngressActionReceipt) -> tuple[object, ...]:
     return (
-        receipt.action_id, receipt.batch_id, receipt.operation, _json_text(receipt.entry_ids),
-        _json_text(receipt.target_ids), receipt.canonical_payload_digest, receipt.status.value,
-        receipt.mutation_evidence_id, _json_text(receipt.before_revision_tokens),
-        _json_text(receipt.after_revision_tokens), receipt.created_at, receipt.terminalized_at,
+        receipt.action_id, receipt.batch_id, receipt.operation, json_text(receipt.entry_ids),
+        json_text(receipt.target_ids), receipt.canonical_payload_digest, receipt.status.value,
+        receipt.mutation_evidence_id, json_text(receipt.before_revision_tokens),
+        json_text(receipt.after_revision_tokens), receipt.created_at, receipt.terminalized_at,
         receipt.error_code,
     )
 
@@ -523,58 +457,5 @@ def _hydrate_record(connection: sqlite3.Connection, row: sqlite3.Row) -> MemoryR
 
 
 def _canonical_ids(values: Sequence[str]) -> tuple[str, ...]:
-    normalized = {_identifier(value, "identity") for value in values}
+    normalized = {identifier(value, "identity") for value in values}
     return tuple(sorted(normalized, key=lambda value: value.encode("utf-8")))
-
-
-def _journal_entry_ids(values: Sequence[str]) -> tuple[int, ...]:
-    if not values:
-        raise ValueError("journal entry IDs must contain only positive integer IDs")
-    result: list[int] = []
-    for value in values:
-        normalized = str(value).strip()
-        if not normalized.isdigit() or int(normalized) <= 0:
-            raise ValueError("journal entry IDs must be positive integer IDs")
-        result.append(int(normalized))
-    return tuple(result)
-
-
-def _identifier(value: object, name: str) -> str:
-    normalized = normalize("NFC", str(value)).strip()
-    if not normalized:
-        raise ValueError(f"{name} must be non-empty")
-    return normalized
-
-
-def _required_text(value: object, name: str) -> str:
-    text = "" if value is None else str(value).strip()
-    if not text:
-        raise ValueError(f"{name} must be non-empty")
-    return text
-
-
-def _values(value: object, *, normalize_tags: bool = False) -> list[str]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise ValueError("collection value expected")
-    result = set()
-    for item in value:
-        text = str(item).strip()
-        if normalize_tags:
-            text = text.lower().replace("_", "-")
-        if text:
-            result.add(text)
-    return sorted(result, key=lambda item: item.encode("utf-8"))
-
-
-def _json_text(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _now_text() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _build_summary(title: str, content: str, memory_type: str) -> str:
-    from mcp_memory.core.summaries import build_deterministic_summary
-
-    return build_deterministic_summary(title=title, content=content, memory_type=memory_type)
