@@ -41,7 +41,7 @@ from mcp_memory.daemon_ports import HookPersistencePort
 from mcp_memory.daemon_process import find_free_port
 from mcp_memory.daemon_runtime import DaemonRuntimeSession
 from mcp_memory.hook_reminders import HookReminderService
-from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_global_daemon_bootstrap_spec
+from mcp_memory.mcp.runtime import create_runtime_composition, resolve_global_daemon_bootstrap_spec
 from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup
 
 logger = logging.getLogger(__name__)
@@ -251,7 +251,7 @@ def create_daemon_app(
                 arguments,
             ),
             runtime_version=_resolve_runtime_version(),
-            runtime_factory=lambda runtime_spec: create_runtime_from_spec(runtime_spec),
+            runtime_factory=lambda runtime_spec: create_runtime_composition(runtime_spec),
             embedding_warmup=_warm_embedding_model,
             embedding_warmup_done=_consume_embedding_warmup_result,
             dashboard_builder=_ensure_dashboard_frontend_ready,

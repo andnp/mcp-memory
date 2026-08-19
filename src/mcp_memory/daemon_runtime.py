@@ -8,7 +8,6 @@ from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
-from typing import cast
 
 from fastapi import FastAPI
 
@@ -33,7 +32,6 @@ from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import (
     DaemonCapabilityBundle,
     RuntimeBootstrapSpec,
-    RuntimeCapabilityBundles,
     RuntimeComposition,
     create_runtime_composition,
 )
@@ -55,7 +53,7 @@ class DaemonRuntimeSession:
         post_tool_use_handler: Callable[[dict[str, object]], Awaitable[dict[str, object]]],
         session_end_handler: Callable[[dict[str, object]], Awaitable[dict[str, object]]],
         runtime_version: str | None,
-        runtime_factory: Callable[[RuntimeBootstrapSpec], RuntimeComposition | ApplicationContext] = create_runtime_composition,
+        runtime_factory: Callable[[RuntimeBootstrapSpec], RuntimeComposition] = create_runtime_composition,
         embedding_warmup: Callable[[DaemonCapabilityBundle], Coroutine[object, object, bool]] = warm_embedding_model,
         embedding_warmup_done: EmbeddingWarmupCompletionPort = consume_embedding_warmup_result,
         dashboard_builder: Callable[[Path], None] = ensure_dashboard_frontend_ready,
@@ -99,34 +97,19 @@ class DaemonRuntimeSession:
             raise RuntimeError("daemon_runtime_lock_unavailable:global") from exc
 
         try:
-            composition = self.runtime_factory(self.spec)
-            if isinstance(composition, RuntimeComposition):
-                self.composition = composition
-            else:
-                context = cast(ApplicationContext, composition)
-                self.composition = RuntimeComposition(
-                    context=context,
-                    capabilities=RuntimeCapabilityBundles(
-                        memory=context.memory_capabilities(),
-                        mutation=context.mutation_capabilities(),
-                        provider=context.provider_capabilities(),
-                        background=context.background_task_capabilities(),
-                        task=context.task_runtime_capabilities(),
-                        management=context.management_capabilities(),
-                    ),
-                )
-            runtime = self.runtime
-            daemon = self.composition.daemon
-            assert runtime.db_manager is not None
-            bootstrap_background_tasks(self.composition.capabilities.background)
-            self.worker = build_runtime_task_worker(self.composition.capabilities.task)
+            self.composition = self.runtime_factory(self.spec)
+            composition = self.composition
+            daemon = composition.daemon
+            assert daemon.memory.db_manager is not None
+            bootstrap_background_tasks(daemon.background)
+            self.worker = build_runtime_task_worker(daemon.task)
             self.warmup_task = asyncio.create_task(self.embedding_warmup(daemon))
             self.warmup_task.add_done_callback(self.embedding_warmup_done)
             self.backup_task = asyncio.create_task(run_periodic_backup_loop(daemon))
             if self.worker is not None:
                 await self.worker.start()
 
-            self.hook_service = HookReminderService(runtime.db_manager, None)
+            self.hook_service = HookReminderService(daemon.memory.db_manager, None)
             def routes_provider() -> DaemonRoutes:
                 return self.app.state.routes
 
@@ -146,14 +129,14 @@ class DaemonRuntimeSession:
             await self.transport.start()
 
             service = ManagementService(
-                runtime.management_capabilities(),
+                composition.capabilities.management,
                 controller=DaemonControllerView(
                     hook_service=self.hook_service,
                     transport_server=self.transport,
                 ),
             )
             self.app.state.routes = DaemonRoutes(
-                ctx=runtime,
+                ctx=composition.context,
                 service=service,
                 management=service.capabilities,
                 hook_service=self.hook_service,

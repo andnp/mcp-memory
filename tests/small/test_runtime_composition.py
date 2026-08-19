@@ -1,7 +1,10 @@
+import asyncio
+from collections.abc import Callable, Coroutine
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from fastapi import FastAPI
 
 from mcp_memory.config import Config
 from mcp_memory.context import (
@@ -18,6 +21,7 @@ from mcp_memory.daemon_lifecycle import FilesystemLock
 from mcp_memory.daemon_runtime import DaemonRuntimeSession
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.mcp.runtime import (
+    RuntimeBootstrapSpec,
     RuntimeCapabilityBundles,
     RuntimeComposition,
     RuntimeResources,
@@ -299,3 +303,154 @@ async def test_daemon_stop_closes_composition_once(monkeypatch, tmp_path) -> Non
     await session.stop()
 
     assert close_calls == ["composition"]
+
+
+@pytest.mark.asyncio
+async def test_daemon_session_uses_typed_bundle_for_startup_and_cleanup(monkeypatch, tmp_path) -> None:
+    """The daemon session uses composed ports while preserving lifecycle order."""
+    events: list[str] = []
+
+    class _Lock:
+        def __init__(self, path) -> None:
+            return None
+
+        def acquire(self, *, timeout_seconds: float) -> None:
+            events.append("lock.acquire")
+
+        def release(self) -> None:
+            events.append("lock.release")
+
+    class _Worker:
+        async def start(self) -> None:
+            events.append("worker.start")
+
+        async def stop(self, grace_seconds: float) -> None:
+            events.append("worker.stop")
+
+    class _Transport:
+        def __init__(self, **kwargs) -> None:
+            events.append("transport.construct")
+
+        async def start(self) -> None:
+            events.append("transport.start")
+
+        async def stop(self) -> None:
+            events.append("transport.stop")
+
+    class _HookService:
+        def __init__(self, db_manager, workspace_id) -> None:
+            events.append("hook.construct")
+
+        def get_active_client_count(self, *, now=None) -> int:
+            return 0
+
+    class _ManagementService:
+        capabilities = object()
+        federation_source = None
+        dashboard_static_root = tmp_path
+
+        def __init__(self, capabilities, *, controller) -> None:
+            events.append("management.construct")
+
+    async def _pending_payload() -> dict[str, object]:
+        await asyncio.Event().wait()
+        return {}
+
+    async def _pending_bool() -> bool:
+        await asyncio.Event().wait()
+        return False
+
+    def _warmup(daemon) -> Coroutine[object, object, bool]:
+        events.append("warmup.create")
+        return _pending_bool()
+
+    def _backup(daemon):
+        events.append("backup.create")
+        return _pending_payload()
+
+    class _Composition:
+        context = object()
+        capabilities = SimpleNamespace(management=object())
+        daemon = SimpleNamespace(
+            memory=SimpleNamespace(db_manager=object()),
+            background=object(),
+            task=object(),
+        )
+
+        def close(self) -> None:
+            events.append("composition.close")
+
+    spec = SimpleNamespace(
+        lock_path=tmp_path / "daemon.lock",
+        config=SimpleNamespace(daemon=SimpleNamespace(shutdown_grace_seconds=0.2)),
+    )
+    app = FastAPI()
+    monkeypatch.setattr("mcp_memory.daemon_runtime.FilesystemLock", _Lock)
+    monkeypatch.setattr("mcp_memory.daemon_runtime.resolve_daemon_metadata_path", lambda scope: tmp_path / "metadata")
+    monkeypatch.setattr("mcp_memory.daemon_runtime.resolve_daemon_socket_path", lambda: tmp_path / "daemon.sock")
+    monkeypatch.setattr(
+        "mcp_memory.daemon_runtime.bootstrap_background_tasks",
+        lambda capabilities: events.append("background.bootstrap"),
+    )
+    monkeypatch.setattr("mcp_memory.daemon_runtime.build_runtime_task_worker", lambda capabilities: _Worker())
+    monkeypatch.setattr("mcp_memory.daemon_runtime.run_periodic_backup_loop", _backup)
+    monkeypatch.setattr("mcp_memory.daemon_runtime.HookReminderService", _HookService)
+    monkeypatch.setattr("mcp_memory.daemon_runtime.DaemonZmqServer", _Transport)
+    monkeypatch.setattr("mcp_memory.daemon_runtime.ManagementService", _ManagementService)
+    monkeypatch.setattr(
+        "mcp_memory.daemon_runtime.resolve_record_thought_writeback_flush_context",
+        lambda daemon: None,
+    )
+    monkeypatch.setattr(
+        "mcp_memory.daemon_runtime.write_metadata",
+        lambda path, metadata: events.append("metadata.write"),
+    )
+    monkeypatch.setattr(
+        "mcp_memory.daemon_runtime.remove_metadata",
+        lambda path, expected_pid: events.append("metadata.remove"),
+    )
+
+    session = DaemonRuntimeSession(
+        app=app,
+        spec=spec,
+        host="127.0.0.1",
+        port=8123,
+        enable_idle_shutdown=False,
+        request_scope_context_factory=lambda arguments: cast(ApplicationContext, object()),
+        session_start_handler=lambda arguments: _pending_payload(),
+        post_tool_use_handler=lambda arguments: _pending_payload(),
+        session_end_handler=lambda arguments: _pending_payload(),
+        runtime_version=None,
+        runtime_factory=cast(
+            Callable[[RuntimeBootstrapSpec], RuntimeComposition],
+            lambda runtime_spec: _Composition(),
+        ),
+        embedding_warmup=_warmup,
+        dashboard_builder=lambda path: events.append("dashboard.build"),
+    )
+
+    await session.start()
+
+    assert events == [
+        "lock.acquire",
+        "background.bootstrap",
+        "warmup.create",
+        "backup.create",
+        "worker.start",
+        "hook.construct",
+        "transport.construct",
+        "transport.start",
+        "management.construct",
+        "metadata.write",
+        "dashboard.build",
+    ]
+
+    await session.stop()
+
+    assert events[-5:] == [
+        "transport.stop",
+        "worker.stop",
+        "composition.close",
+        "metadata.remove",
+        "lock.release",
+    ]
