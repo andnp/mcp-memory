@@ -10,6 +10,7 @@ from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import RecordSearchResult
 
 from mcp_memory.config import Config
+from mcp_memory.core.ports.embedding_maintenance import EmbeddingDatabaseHealthPort
 from mcp_memory.core.ports.memory import (
     MemoryLink,
     MemoryMaintenanceReadPort,
@@ -34,7 +35,6 @@ from mcp_memory.integrations.searchkernel_record_pipeline import (
     MEMORY_SEMANTIC_ABSTENTION_DIAGNOSTIC_PREFIX,
     build_memory_record_pipeline,
 )
-from mcp_memory.utils.db import DatabaseManager
 
 if TYPE_CHECKING:
     from mcp_memory.application.memory_embedding_maintenance import (
@@ -176,7 +176,7 @@ class RelationalMemorySearchService(
         *,
         embedder: EmbeddingBatchProvider | None = None,
         vector_store: Any | None = None,
-        db_manager: DatabaseManager | None = None,
+        database_health: EmbeddingDatabaseHealthPort | None = None,
         task_queue=None,
         work_items=None,
         embedding_repair_queue=None,
@@ -193,7 +193,7 @@ class RelationalMemorySearchService(
                 config,
                 embedder=embedder,
                 vector_store=vector_store,
-                db_manager=db_manager,
+                database_health=database_health,
                 task_queue=task_queue,
                 work_items=work_items,
                 embedding_repair_queue=embedding_repair_queue,
@@ -204,7 +204,6 @@ class RelationalMemorySearchService(
         self._config = config
         self._embedder = embedder
         self._vector_store = vector_store
-        self._db_manager = db_manager
         self._embedding_maintenance = embedding_maintenance
         self._query_embedding_cache = query_embedding_cache or QueryEmbeddingCache()
         memory_repository = cast(MemoryRepositoryPort, repository)

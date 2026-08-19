@@ -605,7 +605,6 @@ def _local_policy_builder(
             config,
             embedder=embedder,
             vector_store=vector_store,
-            db_manager=db_manager,
         )
 
         def search_case(case: SearchQualityCase) -> SearchPolicyObservation:
@@ -1089,7 +1088,6 @@ def run_in_process(
                 Config(),
                 embedder=TopicEmbedder(),
                 vector_store=SQLiteVectorStore(manager),
-                db_manager=manager,
             )
             id_to_label = {memory_id: label for label, memory_id in label_to_id.items()}
 

@@ -914,7 +914,6 @@ def test_embedding_health_and_rebuild_remain_service_owned(db_manager) -> None:
         Config(),
         embedder=_FakeEmbedder(),
         vector_store=vector_store,
-        db_manager=db_manager,
     )
     record = repository.create_memory(
         title="Identity policy",

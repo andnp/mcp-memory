@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 from searchkernel.runtime import QueryEmbeddingCache
@@ -8,6 +10,7 @@ from mcp_memory.application.memory_embedding_maintenance import (
     MemoryEmbeddingMaintenance,
 )
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.ports.embedding_maintenance import EmbeddingDatabaseHealthError
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import SQLiteCurationStore
 from mcp_memory.embedding_integrity_event_store import EmbeddingIntegrityEventRepository
@@ -34,6 +37,28 @@ from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager
 
 
+class _SQLiteEmbeddingDatabaseHealth:
+    def __init__(self, db_manager: DatabaseManager) -> None:
+        self._db_manager = db_manager
+
+    def run_integrity_check(self, operation: Callable[[], None]) -> None:
+        try:
+            quick_check = self._db_manager.get_connection().execute("PRAGMA quick_check").fetchone()
+            if quick_check is not None and str(quick_check[0]).lower() != "ok":
+                raise EmbeddingDatabaseHealthError(f"quick_check_failed:{quick_check[0]}")
+            operation()
+        except sqlite3.Error as exc:
+            raise EmbeddingDatabaseHealthError(str(exc)) from exc
+
+    def retry_after_reopen(self, operation: Callable[[], None]) -> bool:
+        try:
+            self._db_manager.close()
+            self.run_integrity_check(operation)
+        except (EmbeddingDatabaseHealthError, OSError, ValueError):
+            return False
+        return True
+
+
 def build_sqlite_runtime_components(
     spec: StorageBootstrapSpec,
     *,
@@ -54,13 +79,14 @@ def build_sqlite_runtime_components(
     task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
     work_items = SQLiteWorkItemRepository(db_manager)
     embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
+    database_health = _SQLiteEmbeddingDatabaseHealth(db_manager)
     query_embedding_cache = QueryEmbeddingCache()
     embedding_maintenance = MemoryEmbeddingMaintenance(
         repository,
         spec.config,
         embedder=embedder,
         vector_store=vector_store,
-        db_manager=db_manager,
+        database_health=database_health,
         task_queue=task_queue,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
@@ -72,7 +98,7 @@ def build_sqlite_runtime_components(
         spec.config,
         embedder=embedder,
         vector_store=vector_store,
-        db_manager=db_manager,
+        database_health=database_health,
         task_queue=task_queue,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,

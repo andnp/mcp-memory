@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -13,6 +12,10 @@ from typing import Any, cast
 from searchkernel.ports.content_source import IngestionError, IngestionReceipt
 
 from mcp_memory.config import Config
+from mcp_memory.core.ports.embedding_maintenance import (
+    EmbeddingDatabaseHealthError,
+    EmbeddingDatabaseHealthPort,
+)
 from mcp_memory.core.ports.memory import MemoryRecord
 from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_DETERMINISTIC,
@@ -66,7 +69,7 @@ class MemoryEmbeddingMaintenance:
         *,
         embedder: Any | None = None,
         vector_store: Any | None = None,
-        db_manager: Any | None = None,
+        database_health: EmbeddingDatabaseHealthPort | None = None,
         task_queue: Any | None = None,
         work_items: Any | None = None,
         embedding_repair_queue: Any | None = None,
@@ -78,7 +81,7 @@ class MemoryEmbeddingMaintenance:
         self._embedder = with_local_embedding_cache(embedder, embedding_cache_path)
         self._vector_store = vector_store
         self._record_ingestor: MemoryRecordIngestor | None = None
-        self._db_manager = db_manager
+        self._database_health = database_health
         self._work_items = work_items
         self._repair_queue = embedding_repair_queue
         wait_seconds = max(background_repair_wait_seconds, 0.0)
@@ -108,7 +111,7 @@ class MemoryEmbeddingMaintenance:
             getattr(ctx, "config", None) or Config(),
             embedder=getattr(ctx, "embedder", None),
             vector_store=getattr(ctx, "vector_store", None),
-            db_manager=getattr(ctx, "db_manager", None),
+            database_health=getattr(ctx, "embedding_database_health", None),
             task_queue=getattr(ctx, "task_queue", None),
             work_items=getattr(ctx, "work_items", None),
             embedding_repair_queue=getattr(ctx, "embedding_repair_queue", None),
@@ -162,14 +165,17 @@ class MemoryEmbeddingMaintenance:
             self._run_integrity_check_once()
             self.mark_semantic_recovered()
             self._health.last_recovery_at = check_timestamp
-        except (OSError, sqlite3.Error, ValueError) as exc:
-            recovered = self._retry_after_reopen(
-                "startup health check",
-                lambda: self._run_integrity_check_once() or True,
+        except (EmbeddingDatabaseHealthError, OSError, ValueError) as exc:
+            recovered = (
+                self._database_health is not None
+                and self._database_health.retry_after_reopen(self._run_integrity_check_once)
             )
             if not recovered:
                 self.mark_semantic_failure(exc, fallback=False)
                 self._health.integrity_check_error = str(exc)
+            else:
+                self.mark_semantic_recovered()
+                logger.info("Semantic search recovered after startup health check by reopening the database")
         return self.get_health()
 
     def rebuild_semantic_index(self, *, limit: int = 10_000) -> dict[str, int | bool | str | None]:
@@ -428,40 +434,24 @@ class MemoryEmbeddingMaintenance:
         self._health.oldest_queued_repair_age_seconds = snapshot.oldest_queued_age_seconds
 
     def _run_integrity_check_once(self) -> None:
-        if self._embedder is None or self._vector_store is None:
+        embedder = self._embedder
+        vector_store = self._vector_store
+        if embedder is None or vector_store is None:
             return
-        connection = None
-        if self._db_manager is not None:
-            get_connection = getattr(self._db_manager, "get_connection", None)
-            if callable(get_connection):
-                connection = get_connection()
-        if isinstance(connection, sqlite3.Connection):
-            quick_check = connection.execute("PRAGMA quick_check").fetchone()
-            if quick_check is not None and str(quick_check[0]).lower() != "ok":
-                raise sqlite3.DatabaseError(f"quick_check_failed:{quick_check[0]}")
-            query_embedding = [0.0]
-        else:
-            query_embedding = [0.0] * max(_active_embedder_dimension(self._embedder) or 1, 1)
-        self._vector_store.search(
-            source_kind="memory",
-            model_name=self._embedder.model_name,
-            query_embedding=query_embedding,
-            limit=1,
-        )
 
-    def _retry_after_reopen(self, reason: str, operation):
-        close = None if self._db_manager is None else getattr(self._db_manager, "close", None)
-        if not callable(close):
-            return None
-        try:
-            close()
-            result = operation()
-        except (OSError, sqlite3.Error, ValueError) as retry_exc:
-            logger.warning("Semantic search recovery after %s failed: %s", reason, retry_exc)
-            return None
-        self.mark_semantic_recovered()
-        logger.info("Semantic search recovered after %s by reopening the database connection", reason)
-        return result
+        def search_vector_store() -> None:
+            query_embedding = [0.0] * max(_active_embedder_dimension(embedder) or 1, 1)
+            vector_store.search(
+                source_kind="memory",
+                model_name=embedder.model_name,
+                query_embedding=query_embedding,
+                limit=1,
+            )
+
+        if self._database_health is None:
+            search_vector_store()
+            return
+        self._database_health.run_integrity_check(search_vector_store)
 
     def _run_integrity_scan(self, *, scan_limit: int) -> dict[str, Any]:
         scan_integrity = getattr(self._vector_store, "scan_integrity", None)

@@ -2061,7 +2061,6 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         config=__import__("mcp_memory.config", fromlist=["Config"]).Config(),
         embedder=None,
         vector_store=SQLiteVectorStore(db_manager),
-        db_manager=db_manager,
         task_queue=task_queue,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,

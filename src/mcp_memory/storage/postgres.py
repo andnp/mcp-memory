@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import psycopg
@@ -8,6 +9,7 @@ from searchkernel.runtime import QueryEmbeddingCache
 
 from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
 from mcp_memory.config import PostgresStorageConfig
+from mcp_memory.core.ports.embedding_maintenance import EmbeddingDatabaseHealthError
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres_connection import (
@@ -51,6 +53,25 @@ class UnsupportedPostgresRuntimeComponent:
         raise PostgresBackendNotImplementedError(
             f"storage backend 'postgres' does not yet support {self._feature_name}; attempted to access {name}"
         )
+
+
+class _PostgresEmbeddingDatabaseHealth:
+    def __init__(self, connection_manager: PostgresConnectionManager) -> None:
+        self._connection_manager = connection_manager
+
+    def run_integrity_check(self, operation: Callable[[], None]) -> None:
+        try:
+            operation()
+        except psycopg.Error as exc:
+            raise EmbeddingDatabaseHealthError(str(exc)) from exc
+
+    def retry_after_reopen(self, operation: Callable[[], None]) -> bool:
+        try:
+            self._connection_manager.close()
+            self.run_integrity_check(operation)
+        except (EmbeddingDatabaseHealthError, OSError, ValueError):
+            return False
+        return True
 
 
 def inspect_postgres_bootstrap_state(config: PostgresStorageConfig) -> StorageBootstrapState:
@@ -181,12 +202,13 @@ def build_postgres_runtime_components(
         connection_manager,
         event_repository=embedding_integrity_events,
     )
+    database_health = _PostgresEmbeddingDatabaseHealth(connection_manager)
     embedding_maintenance = MemoryEmbeddingMaintenance(
         repository,
         spec.config,
         embedder=embedder,
         vector_store=vector_store,
-        db_manager=connection_manager,
+        database_health=database_health,
         task_queue=task_queue if enable_background_repair_queue else None,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
