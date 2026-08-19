@@ -1,7 +1,7 @@
 import pytest
 
 from mcp_memory.management.models import AgentRunHistoryListPayload, AgentRunHistoryPayload
-from mcp_memory.management.query_runner import SQLiteManagementQueryAdapter
+from mcp_memory.utils.sql_portable_runner import SQLiteManagementQueryAdapter
 from mcp_memory.management.task_reporting_service import (
     TaskReportingService,
     TaskReportingServiceDependencies,

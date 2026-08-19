@@ -15,7 +15,7 @@ from mcp_memory.management.agent_run_reporting import (
     extract_run_result_metadata,
 )
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
-from mcp_memory.management.query_runner import ManagementQueryAdapter
+from mcp_memory.utils.sql_portable_runner import ManagementQueryAdapter
 from mcp_memory.management.reporting_rows import coerce_task_result_view
 from mcp_memory.management.task_sampling_summary import (
     SAMPLER_OUTCOME_NEUTRAL,

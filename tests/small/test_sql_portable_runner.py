@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any
 
-from mcp_memory.management.query_runner import ManagementQueryRunner
+from mcp_memory.utils.sql_portable_runner import ManagementQueryRunner
 
 
 def test_management_query_runner_uses_sqlite_api_without_query_rewrite() -> None:

@@ -27,7 +27,6 @@ from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload, NerdMetricsPayload
-from mcp_memory.management.query_runner import SQLiteManagementQueryAdapter
 from mcp_memory.management.service import ManagementService
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
@@ -35,6 +34,7 @@ from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
+from mcp_memory.utils.sql_portable_runner import SQLiteManagementQueryAdapter
 
 pytestmark = pytest.mark.small
 
