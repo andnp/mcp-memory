@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
 
-import { ApiError, fetchNerdMetrics, type NerdMetricsScope } from '../lib/api';
+import { ApiError, fetchNerdMetrics } from '../lib/api';
 import { WorkspaceScopeSelector } from '../components/WorkspaceScopeSelector';
+import { useScopeSelector } from '../hooks/useScopeSelector';
 
 function PlotFigure({ chart }: { chart: HTMLElement | SVGElement | null }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -49,38 +50,22 @@ const NERD_WINDOW_OPTIONS: Record<NerdWindow, { label: string; window_hours: num
 const NERD_WINDOW_ORDER: NerdWindow[] = ['24h', '7d', '30d'];
 
 export function RetrievalPage() {
-  const [selectedScope, setSelectedScope] = useState<NerdMetricsScope>('global');
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const [selectedWindow, setSelectedWindow] = useState<NerdWindow>('7d');
   const selectedWindowConfig = NERD_WINDOW_OPTIONS[selectedWindow];
 
-  const workspaceOptionsQuery = useQuery({
+  const {
+    selectedScope,
+    selectedWorkspaceId,
+    workspaceOptions,
+    workspaceOptionsPending,
+    workspaceOptionsError,
+    selectGlobal,
+    selectWorkspace,
+  } = useScopeSelector({
     queryKey: ['retrieval-metrics', 'workspace-options', selectedWindow],
-    queryFn: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global' }),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    retry: false,
+    fetchOptions: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global' }),
+    deriveOptions: (data) => data?.composition.by_workspace ?? [],
   });
-
-  const workspaceOptions = useMemo(
-    () => workspaceOptionsQuery.data?.composition.by_workspace ?? [],
-    [workspaceOptionsQuery.data],
-  );
-
-  useEffect(() => {
-    if (selectedScope !== 'workspace') {
-      return;
-    }
-    if (workspaceOptions.some((option) => option.key === selectedWorkspaceId)) {
-      return;
-    }
-    const fallbackWorkspaceId = workspaceOptions[0]?.key ?? '';
-    if (fallbackWorkspaceId) {
-      setSelectedWorkspaceId(fallbackWorkspaceId);
-      return;
-    }
-    setSelectedScope('global');
-  }, [selectedScope, selectedWorkspaceId, workspaceOptions]);
 
   const retrievalQuery = useQuery({
     queryKey: ['retrieval-metrics', selectedWindow, selectedScope, selectedWorkspaceId],
@@ -93,16 +78,6 @@ export function RetrievalPage() {
     refetchInterval: 5000,
     retry: false,
   });
-
-  function handleWorkspaceChange(workspaceId: string) {
-    if (!workspaceId) {
-      setSelectedScope('global');
-      setSelectedWorkspaceId('');
-      return;
-    }
-    setSelectedWorkspaceId(workspaceId);
-    setSelectedScope('workspace');
-  }
 
   const searchTagTimelineChart = useMemo(() => {
     const rows = retrievalQuery.data?.retrieval.tag_timelines.flatMap((series) =>
@@ -212,10 +187,10 @@ export function RetrievalPage() {
               selectedScope={selectedScope}
               selectedWorkspaceId={selectedWorkspaceId}
               workspaceOptions={workspaceOptions}
-              workspaceOptionsPending={workspaceOptionsQuery.isPending}
-              workspaceOptionsError={workspaceOptionsQuery.isError}
-              onSelectGlobal={() => setSelectedScope('global')}
-              onSelectWorkspace={handleWorkspaceChange}
+              workspaceOptionsPending={workspaceOptionsPending}
+              workspaceOptionsError={workspaceOptionsError}
+              onSelectGlobal={selectGlobal}
+              onSelectWorkspace={selectWorkspace}
             />
           </div>
         </div>
