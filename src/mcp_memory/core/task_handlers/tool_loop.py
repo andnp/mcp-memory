@@ -128,7 +128,7 @@ async def run_internal_tool_loop(
 
 
 async def _dispatch_internal_tool(
-    tool_dispatch: ToolDispatchPort,
+    tool_dispatch: ToolDispatchPort[ApplicationContext],
     ctx: ApplicationContext,
     name: str,
     arguments: dict[str, Any],

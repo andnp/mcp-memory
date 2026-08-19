@@ -247,7 +247,7 @@ def create_runtime_composition(
     workspace_root = spec.workspace_root if isinstance(spec, WorkspaceRuntimeSpec) else None
     embedder = build_embedder(spec.config.embeddings)
     internal_tool_call_tracker = InternalToolCallTracker()
-    tool_dispatch: ToolDispatchPort = McpInternalToolDispatch()
+    tool_dispatch: ToolDispatchPort[ApplicationContext] = McpInternalToolDispatch()
     storage = build_storage_runtime_components(
         StorageBootstrapSpec(
             memory_path=spec.memory_path,

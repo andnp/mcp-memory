@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol, TypeVar
 
-if TYPE_CHECKING:
-    from mcp_memory.context import ApplicationContext
+CtxT = TypeVar("CtxT", contravariant=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,12 +20,12 @@ class ToolResponsePart:
     text: str | None
 
 
-class ToolDispatchPort(Protocol):
+class ToolDispatchPort(Protocol[CtxT]):
     def available_tools(self) -> Mapping[str, ToolDefinition]: ...
 
     async def dispatch(
         self,
-        ctx: ApplicationContext,
+        ctx: CtxT,
         name: str,
         arguments: dict[str, object],
     ) -> Sequence[ToolResponsePart]: ...

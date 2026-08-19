@@ -214,7 +214,7 @@ class TaskRuntimeCapabilities:
     work_items: WorkItemRepository | None = None
     embedding_repair_queue: object | None = None
     internal_tool_call_tracker: object | None = None
-    tool_dispatch: ToolDispatchPort | None = None
+    tool_dispatch: ToolDispatchPort[ApplicationContext] | None = None
     housekeeping: MaintenanceHousekeepingPort | None = None
 
     @classmethod
@@ -321,7 +321,7 @@ class _TaskRuntimeContextAdapter:
     work_items: WorkItemRepository | None
     embedding_repair_queue: object | None
     internal_tool_call_tracker: object | None
-    tool_dispatch: ToolDispatchPort | None
+    tool_dispatch: ToolDispatchPort[ApplicationContext] | None
     housekeeping: MaintenanceHousekeepingPort | None
 
 
@@ -471,7 +471,7 @@ class ApplicationContext:
     ingress_quality_evidence: Any = None
     ingress_mutation_transaction: Any = None
     internal_tool_call_tracker: Any = None
-    tool_dispatch: ToolDispatchPort | None = None
+    tool_dispatch: ToolDispatchPort[ApplicationContext] | None = None
     housekeeping: MaintenanceHousekeepingPort | None = None
     _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)
 
