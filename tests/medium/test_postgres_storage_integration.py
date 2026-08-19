@@ -639,6 +639,8 @@ async def test_postgres_backup_loop_skips_sqlite_snapshot_work(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """The typed daemon bundle skips SQLite snapshots for Postgres storage."""
+
     from mcp_memory.config import Config
     from mcp_memory.daemon_app import _run_periodic_backup_loop
 
@@ -653,14 +655,20 @@ async def test_postgres_backup_loop_skips_sqlite_snapshot_work(
     config.backups.create_startup_snapshot = True
 
     with PostgresConnectionManager(postgres_storage_config) as manager:
-        runtime = SimpleNamespace(
-            config=config,
-            db_manager=manager,
-            memory_path=tmp_path / "memories",
-            storage_backend="postgres",
+        daemon = SimpleNamespace(
+            memory=SimpleNamespace(
+                config=config,
+                memory_path=tmp_path / "memories",
+            ),
+            resources=SimpleNamespace(
+                storage=SimpleNamespace(
+                    backend="postgres",
+                    db_manager=manager,
+                ),
+            ),
         )
 
-        await asyncio.wait_for(_run_periodic_backup_loop(runtime), timeout=1.0)
+        await asyncio.wait_for(_run_periodic_backup_loop(daemon), timeout=1.0)
 
     assert called == []
 

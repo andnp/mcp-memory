@@ -4,15 +4,14 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from mcp_memory.config import resolve_backup_dir
 from mcp_memory.core.journal_operations import flush_record_thought_writeback_outbox
+from mcp_memory.daemon_ports import BackupPort, EmbeddingModelPort, WritebackDependencies, WritebackFlushPort
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
+from mcp_memory.mcp.runtime import DaemonCapabilityBundle
 from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
-from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 logger = logging.getLogger(__name__)
 RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS = 5.0
@@ -34,13 +33,11 @@ def ensure_dashboard_frontend_ready(static_root: Path) -> None:
     )
 
 
-async def warm_embedding_model(embedder: Any) -> bool:
-    if embedder is None:
+async def warm_embedding_model(daemon: DaemonCapabilityBundle) -> bool:
+    embedder = daemon.resources.embedder
+    if not isinstance(embedder, EmbeddingModelPort):
         return False
-    cache_model = getattr(embedder, "cache_model", None)
-    if not callable(cache_model):
-        return False
-    return bool(await asyncio.to_thread(cache_model))
+    return bool(await asyncio.to_thread(embedder.cache_model))
 
 
 def consume_embedding_warmup_result(task: asyncio.Task[bool]) -> None:
@@ -48,16 +45,20 @@ def consume_embedding_warmup_result(task: asyncio.Task[bool]) -> None:
         task.result()
 
 
-async def run_periodic_backup_loop(runtime, *, backup_fn=create_and_prune_sqlite_backup) -> None:
-    config = getattr(runtime, "config", None)
-    db_manager = getattr(runtime, "db_manager", None)
-    memory_path = getattr(runtime, "memory_path", None)
-    storage_backend = getattr(runtime, "storage_backend", None) or "sqlite"
+async def run_periodic_backup_loop(
+    daemon: DaemonCapabilityBundle,
+    *,
+    backup_fn: BackupPort = create_and_prune_sqlite_backup,
+) -> None:
+    config = daemon.memory.config
+    db_manager = daemon.resources.storage.db_manager
+    memory_path = daemon.memory.memory_path
+    storage_backend = daemon.resources.storage.backend or "sqlite"
     if config is None or db_manager is None or memory_path is None:
         return
 
     backup_config = config.backups
-    app_data_dir = Path(memory_path).parent
+    app_data_dir = memory_path.parent
     if backup_config.warn_on_shared_storage:
         log_shared_storage_risks(app_data_dir)
 
@@ -76,7 +77,7 @@ async def run_periodic_backup_loop(runtime, *, backup_fn=create_and_prune_sqlite
         try:
             result = await asyncio.to_thread(
                 backup_fn,
-                Path(db_manager.db_path),
+                memory_path / "indices" / "memory.db",
                 backup_dir,
                 max_snapshots=backup_config.max_snapshots,
             )
@@ -89,44 +90,25 @@ async def run_periodic_backup_loop(runtime, *, backup_fn=create_and_prune_sqlite
             logger.warning("SQLite backup snapshot failed: %s", exc)
 
 
-@dataclass(frozen=True)
-class RecordThoughtWritebackFlushContext:
-    journal: Any
-    task_queue: Any
-    writeback_cache: Any
-    suppression_config: Any = None
+def resolve_record_thought_writeback_flush_context(
+    daemon: DaemonCapabilityBundle,
+) -> WritebackDependencies | None:
+    return daemon.writeback
 
 
-def resolve_record_thought_writeback_flush_context(runtime) -> RecordThoughtWritebackFlushContext | None:
-    cache_state = resolve_shared_mode_cache_state(
-        getattr(runtime, "config", None),
-        storage_backend=getattr(runtime, "storage_backend", None),
-        read_cache=getattr(runtime, "read_cache", None),
-    )
-    if not cache_state.writeback_active:
-        return None
-    journal = getattr(runtime, "journal", None)
-    if journal is None or cache_state.writeback_cache is None:
-        return None
-    return RecordThoughtWritebackFlushContext(
-        journal=journal,
-        task_queue=getattr(runtime, "task_queue", None),
-        writeback_cache=cache_state.writeback_cache,
-        suppression_config=(
-            None if getattr(runtime, "config", None) is None else runtime.config.ingest_suppression
-        ),
-    )
-
-
-def flush_record_thought_writeback_once(runtime, *, flush_fn=flush_record_thought_writeback_outbox) -> int:
-    flush_context = resolve_record_thought_writeback_flush_context(runtime)
-    if flush_context is None:
+def flush_record_thought_writeback_once(
+    daemon: DaemonCapabilityBundle,
+    *,
+    flush_fn: WritebackFlushPort = flush_record_thought_writeback_outbox,
+) -> int:
+    writeback = resolve_record_thought_writeback_flush_context(daemon)
+    if writeback is None:
         return 0
     result = flush_fn(
-        flush_context.journal,
-        task_queue=flush_context.task_queue,
-        suppression_config=flush_context.suppression_config,
-        writeback_cache=flush_context.writeback_cache,
+        writeback.journal,
+        task_queue=writeback.task_queue,
+        suppression_config=writeback.suppression_config,
+        writeback_cache=writeback.writeback_cache,
     )
     if result.flushed_count > 0:
         logger.info(
@@ -138,7 +120,7 @@ def flush_record_thought_writeback_once(runtime, *, flush_fn=flush_record_though
 
 
 async def run_record_thought_writeback_flush_loop(
-    runtime,
+    daemon: DaemonCapabilityBundle,
     *,
     executor: ThreadPoolExecutor,
     poll_seconds: float = RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS,
@@ -146,7 +128,7 @@ async def run_record_thought_writeback_flush_loop(
     loop = asyncio.get_running_loop()
     while True:
         try:
-            await loop.run_in_executor(executor, flush_record_thought_writeback_once, runtime)
+            await loop.run_in_executor(executor, flush_record_thought_writeback_once, daemon)
         except asyncio.CancelledError:
             raise
         except Exception:

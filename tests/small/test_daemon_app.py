@@ -11,38 +11,19 @@ import pytest
 
 import mcp_memory.core.journal_operations as journal_operations_module
 import mcp_memory.daemon_app as daemon_app_module
-from mcp_memory.config import Config, StorageCacheMode
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.daemon_ports import WritebackDependencies
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 pytestmark = pytest.mark.small
 
 
-@pytest.mark.parametrize(
-    ("enabled", "mode", "read_cache"),
-    [
-        (False, "writeback", object()),
-        (True, "readonly", object()),
-        (True, "writeback", None),
-    ],
-)
-def test_flush_record_thought_writeback_once_noops_when_cache_mode_inactive(
+def test_flush_record_thought_writeback_once_noops_without_writeback_capability(
     monkeypatch: pytest.MonkeyPatch,
-    enabled: bool,
-    mode: StorageCacheMode,
-    read_cache: object | None,
 ) -> None:
-    config = Config()
-    config.storage.cache.enabled = enabled
-    config.storage.cache.mode = mode
+    """The app wrapper does not flush when composition found no writeback port."""
 
-    runtime = SimpleNamespace(
-        config=config,
-        storage_backend="postgres",
-        journal=object(),
-        read_cache=read_cache,
-        task_queue=object(),
-    )
+    daemon = SimpleNamespace(writeback=None)
     flush_calls: list[str] = []
 
     def _unexpected_flush(*args, **kwargs):
@@ -52,19 +33,37 @@ def test_flush_record_thought_writeback_once_noops_when_cache_mode_inactive(
 
     monkeypatch.setattr(daemon_app_module, "flush_record_thought_writeback_outbox", _unexpected_flush)
 
-    assert daemon_app_module._flush_record_thought_writeback_once(runtime) == 0
+    assert daemon_app_module._flush_record_thought_writeback_once(daemon) == 0
     assert flush_calls == []
+
+
+@pytest.mark.asyncio
+async def test_warm_embedding_model_uses_daemon_embedder_port() -> None:
+    """Warmup invokes the typed embedder capability and reports its result."""
+
+    class _Embedder:
+        def cache_model(self) -> bool:
+            return True
+
+    daemon = SimpleNamespace(resources=SimpleNamespace(embedder=_Embedder()))
+
+    assert await daemon_app_module._warm_embedding_model(daemon) is True
+    assert await daemon_app_module._warm_embedding_model(
+        SimpleNamespace(resources=SimpleNamespace(embedder=None))
+    ) is False
 
 
 @pytest.mark.asyncio
 async def test_record_thought_writeback_flush_loop_runs_immediately_then_polls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The flush loop runs once immediately, then observes its poll interval."""
+
     call_times: list[float] = []
     first_call = threading.Event()
     second_call = threading.Event()
 
-    def _fake_flush_once(_runtime) -> int:
+    def _fake_flush_once(_daemon) -> int:
         call_times.append(time.monotonic())
         if len(call_times) == 1:
             first_call.set()
@@ -104,9 +103,8 @@ async def test_record_thought_writeback_flush_loop_shutdown_does_not_wait_for_ti
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = Config()
-    config.storage.cache.enabled = True
-    config.storage.cache.mode = "writeback"
+    """Cancellation leaves an in-flight authoritative write for executor shutdown."""
+
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     assert cache.enqueue_record_thought_outbox_entry(
         content="queued thought",
@@ -137,12 +135,12 @@ async def test_record_thought_writeback_flush_loop_shutdown_does_not_wait_for_ti
             finally:
                 completed.set()
 
-    runtime = SimpleNamespace(
-        config=config,
-        storage_backend="postgres",
-        journal=SlowJournal(),
-        read_cache=cache,
-        task_queue=None,
+    daemon = SimpleNamespace(
+        writeback=WritebackDependencies(
+            journal=SlowJournal(),
+            task_queue=None,
+            writeback_cache=cache,
+        ),
     )
     monkeypatch.setattr(
         journal_operations_module,
@@ -153,7 +151,7 @@ async def test_record_thought_writeback_flush_loop_shutdown_does_not_wait_for_ti
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="daemon-app-shutdown-test")
     task = asyncio.create_task(
         daemon_app_module._run_record_thought_writeback_flush_loop(
-            runtime,
+            daemon,
             executor=executor,
             poll_seconds=60.0,
         )

@@ -4,10 +4,11 @@ import asyncio
 import os
 import sys
 import time
+from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from fastapi import FastAPI
 
@@ -24,11 +25,13 @@ from mcp_memory.daemon_background import (
 )
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
+from mcp_memory.daemon_ports import EmbeddingWarmupCompletionPort
 from mcp_memory.daemon_process import remove_metadata, write_metadata
 from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import (
+    DaemonCapabilityBundle,
     RuntimeBootstrapSpec,
     RuntimeCapabilityBundles,
     RuntimeComposition,
@@ -53,8 +56,8 @@ class DaemonRuntimeSession:
         session_end_handler: Callable[[dict[str, object]], Any],
         runtime_version: str | None,
         runtime_factory: Callable[[RuntimeBootstrapSpec], RuntimeComposition | ApplicationContext] = create_runtime_composition,
-        embedding_warmup: Callable[[Any], Any] = warm_embedding_model,
-        embedding_warmup_done: Callable[[asyncio.Task[bool]], None] = consume_embedding_warmup_result,
+        embedding_warmup: Callable[[DaemonCapabilityBundle], Coroutine[object, object, bool]] = warm_embedding_model,
+        embedding_warmup_done: EmbeddingWarmupCompletionPort = consume_embedding_warmup_result,
         dashboard_builder: Callable[[Path], None] = ensure_dashboard_frontend_ready,
     ) -> None:
         self.app = app
@@ -113,12 +116,13 @@ class DaemonRuntimeSession:
                     ),
                 )
             runtime = self.runtime
+            daemon = self.composition.daemon
             assert runtime.db_manager is not None
             bootstrap_background_tasks(self.composition.capabilities.background)
             self.worker = build_runtime_task_worker(self.composition.capabilities.task)
-            self.warmup_task = asyncio.create_task(self.embedding_warmup(runtime.embedder))
+            self.warmup_task = asyncio.create_task(self.embedding_warmup(daemon))
             self.warmup_task.add_done_callback(self.embedding_warmup_done)
-            self.backup_task = asyncio.create_task(run_periodic_backup_loop(runtime))
+            self.backup_task = asyncio.create_task(run_periodic_backup_loop(daemon))
             if self.worker is not None:
                 await self.worker.start()
 
@@ -168,14 +172,14 @@ class DaemonRuntimeSession:
                 self.dashboard_builder,
                 self.app.state.routes.service.dashboard_static_root,
             )
-            if resolve_record_thought_writeback_flush_context(runtime) is not None:
+            if resolve_record_thought_writeback_flush_context(daemon) is not None:
                 self.writeback_executor = ThreadPoolExecutor(
                     max_workers=1,
                     thread_name_prefix="record-thought-writeback-flush",
                 )
                 self.writeback_task = asyncio.create_task(
                     run_record_thought_writeback_flush_loop(
-                        runtime,
+                        daemon,
                         executor=self.writeback_executor,
                     )
                 )
