@@ -9,9 +9,9 @@ from searchkernel.runtime import QueryEmbeddingCache
 
 from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
 from mcp_memory.config import PostgresStorageConfig
-from mcp_memory.core.ports.embedding_maintenance import EmbeddingDatabaseHealthError
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.bootstrap import StorageBootstrapState
+from mcp_memory.storage.guarded_health_check import GuardedHealthCheck
 from mcp_memory.storage.postgres_connection import (
     PostgresConnectionManager,
 )
@@ -59,20 +59,16 @@ class UnsupportedPostgresRuntimeComponent:
 class _PostgresEmbeddingDatabaseHealth:
     def __init__(self, connection_manager: PostgresConnectionManager) -> None:
         self._connection_manager = connection_manager
+        self._guard = GuardedHealthCheck(
+            exception_type=psycopg.Error,
+            reopen=connection_manager.close,
+        )
 
     def run_integrity_check(self, operation: Callable[[], None]) -> None:
-        try:
-            operation()
-        except psycopg.Error as exc:
-            raise EmbeddingDatabaseHealthError(str(exc)) from exc
+        self._guard.run_integrity_check(operation)
 
     def retry_after_reopen(self, operation: Callable[[], None]) -> bool:
-        try:
-            self._connection_manager.close()
-            self.run_integrity_check(operation)
-        except (EmbeddingDatabaseHealthError, OSError, ValueError):
-            return False
-        return True
+        return self._guard.retry_after_reopen(operation)
 
 
 def inspect_postgres_bootstrap_state(config: PostgresStorageConfig) -> StorageBootstrapState:
