@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from mcp_memory.context import MemoryPipelineContext, MemoryReadCapabilities, MutationCapabilities
-from mcp_memory.core.ports.memory import MemoryReadPort
-from mcp_memory.integrations.memory_retrieval import MemoryRetrievalPort
-from mcp_memory.relational.queries import RelationalMemoryQueries
+from mcp_memory.core.ports.memory import MemoryQueriesPort, MemoryReadPort
+from mcp_memory.core.retrieval import MemoryRetrievalPort
+
+# Runtime facades remain the compatibility boundary for public runtime fields;
+# no existing core port preserves RuntimeInfoFacade's metadata contract.
 from mcp_memory.runtime_facades import JournalFacade, RuntimeInfoFacade, TaskQueueFacade
 
 
@@ -15,7 +17,7 @@ class MemoryPipeline:
     runtime_info: RuntimeInfoFacade
     journal: JournalFacade
     task_queue: TaskQueueFacade
-    memory_queries: RelationalMemoryQueries | None
+    memory_queries: MemoryQueriesPort | None
     repository: object | None
     search: MemoryReadPort | None
     retrieval: MemoryRetrievalPort | None
@@ -27,6 +29,8 @@ class MemoryPipeline:
         controller: Any | None = None,
         *,
         mutation: MutationCapabilities | None = None,
+        memory_queries: MemoryQueriesPort | None = None,
+        retrieval: MemoryRetrievalPort | None = None,
     ) -> MemoryPipeline:
         capabilities = (
             ctx
@@ -60,15 +64,8 @@ class MemoryPipeline:
             ),
             journal=JournalFacade(journal=cast(Any, journal)),
             task_queue=TaskQueueFacade(task_queue=cast(Any, task_queue)),
-            memory_queries=(
-                RelationalMemoryQueries(cast(Any, capabilities.repository))
-                if capabilities.repository is not None
-                else None
-            ),
             repository=capabilities.repository,
             search=cast(MemoryReadPort | None, capabilities.relational_search),
-            retrieval=cast(
-                MemoryRetrievalPort | None,
-                getattr(ctx, "memory_retrieval", None),
-            ),
+            memory_queries=memory_queries,
+            retrieval=retrieval,
         )

@@ -9,7 +9,8 @@ from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingM
 from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
-from mcp_memory.core.ports import EmbeddingMaintenancePort
+from mcp_memory.core.ports import EmbeddingMaintenancePort, MemoryReadPort
+from mcp_memory.core.retrieval import MemoryRetrievalPort as CoreMemoryRetrievalPort
 from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.integrations.memory_retrieval import (
@@ -87,6 +88,7 @@ from mcp_memory.management.task_reporting_service import (
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
+from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.serialization import (
     task_payload,
 )
@@ -106,7 +108,6 @@ class ManagementService:
         memory = capabilities.memory
         mutation = capabilities.mutation
         provider = capabilities.provider
-        pipeline = MemoryPipeline.from_context(memory, controller, mutation=mutation)
         resources = (
             ManagementContextResources.from_capabilities(capabilities)
             if is_composed_capabilities
@@ -122,21 +123,7 @@ class ManagementService:
         )
         self._workspace_id = memory.workspace_id
         self._config = memory.config
-        self._runtime_info = pipeline.runtime_info
-        self._journal = pipeline.journal
-        self._task_queue = pipeline.task_queue
-        self._memory_queries = pipeline.memory_queries
         self._repository = cast(Any, mutation.repository)
-        self._mutation_history = cast(Any, resources.mutation_history)
-        self._curation = cast(Any, mutation.curation)
-        self._action_store = cast(Any, mutation.curation_action_store)
-        self._provider_usage = resources.provider_usage
-        self._runtime_logs = resources.runtime_logs
-        self._embedding_integrity_events = resources.embedding_integrity_events
-        self._retrieval_telemetry = resources.retrieval_telemetry
-        self._read_cache = cast(Any, memory.read_cache)
-        self._embedder = cast(Any, memory.embedder)
-        self._vector_store = cast(Any, memory.vector_store)
         self._relational_search: MemorySearchPort | None = memory.relational_search
         self._search_health = memory.search_health
         self._embedding_maintenance: EmbeddingMaintenancePort = (
@@ -147,11 +134,37 @@ class ManagementService:
             retrieval = build_memory_retrieval_facade(
                 self._repository,
                 config=memory.config,
-                vector_store=self._vector_store,
-                embedder=self._embedder,
+                vector_store=memory.vector_store,
+                embedder=memory.embedder,
                 embedding_maintenance=self._embedding_maintenance,
                 native_search=self._relational_search,
             )
+        memory_queries = (
+            RelationalMemoryQueries(cast(MemoryReadPort, memory.repository))
+            if memory.repository is not None
+            else None
+        )
+        pipeline = MemoryPipeline.from_context(
+            memory,
+            controller,
+            mutation=mutation,
+            memory_queries=memory_queries,
+            retrieval=cast(CoreMemoryRetrievalPort | None, retrieval),
+        )
+        self._runtime_info = pipeline.runtime_info
+        self._journal = pipeline.journal
+        self._task_queue = pipeline.task_queue
+        self._memory_queries = pipeline.memory_queries
+        self._mutation_history = cast(Any, resources.mutation_history)
+        self._curation = cast(Any, mutation.curation)
+        self._action_store = cast(Any, mutation.curation_action_store)
+        self._provider_usage = resources.provider_usage
+        self._runtime_logs = resources.runtime_logs
+        self._embedding_integrity_events = resources.embedding_integrity_events
+        self._retrieval_telemetry = resources.retrieval_telemetry
+        self._read_cache = cast(Any, memory.read_cache)
+        self._embedder = cast(Any, memory.embedder)
+        self._vector_store = cast(Any, memory.vector_store)
         self._retrieval = retrieval
         self.federation_source = (
             MemoryFederationSource(

@@ -101,8 +101,10 @@ def test_search_cache_request_normalizes_ranking_context_without_timing_fields()
 
 FORBIDDEN_CORE_IMPORT_ROOTS = (
     "mcp_memory.application",
+    "mcp_memory.integrations",
     "mcp_memory.management",
     "mcp_memory.mcp",
+    "mcp_memory.relational",
     "mcp_memory.storage",
 )
 
@@ -122,6 +124,7 @@ ALLOWED_TRANSITIONAL_CORE_IMPORTS = {
     ("task_handlers/tool_loop.py", "mcp_memory.mcp.internal_tools"),
     ("task_handlers/tool_loop.py", "mcp_memory.mcp.transport"),
     ("tasks.py", "mcp_memory.storage.sqlite_task_queue"),
+    ("task_handlers/curator_support.py", "mcp_memory.integrations.memory_retrieval"),
 }
 
 

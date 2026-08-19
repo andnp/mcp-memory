@@ -183,6 +183,30 @@ class MemoryReadPort(Protocol):
 
 
 @runtime_checkable
+class MemoryQueriesPort(Protocol):
+    def get_memory(self, memory_id: str) -> MemoryRecord | None: ...
+
+    def list_memories(
+        self,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[MemoryRecord]: ...
+
+    def get_links(
+        self,
+        memory_id: str,
+        *,
+        direction: str = "outgoing",
+        link_type: str | None = None,
+    ) -> list[MemoryLink]: ...
+
+    def get_superseded_records(self, memory_id: str) -> list[MemoryRecord]: ...
+
+
+@runtime_checkable
 class MemoryMutationPort(Protocol):
     def create_memories(
         self,

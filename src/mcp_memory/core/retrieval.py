@@ -7,7 +7,7 @@ import math
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 DEFAULT_RETRIEVAL_LIMIT = 10
 MAX_RETRIEVAL_LIMIT = 100
@@ -140,6 +140,74 @@ class RetrievalResult(Generic[T]):
     diagnostics: RetrievalDiagnostics = field(default_factory=RetrievalDiagnostics)
 
 
+class MemoryRetrievalPort(Protocol):
+    async def search(
+        self,
+        request: RetrievalRequest | str | Mapping[str, object],
+        *,
+        limit: int = DEFAULT_RETRIEVAL_LIMIT,
+        adaptive_limit: bool = False,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        tags: tuple[str, ...] | None = None,
+        include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
+        filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
+    ) -> object: ...
+
+    async def search_with_diagnostics(
+        self,
+        request: RetrievalRequest | str | Mapping[str, object],
+        *,
+        limit: int = DEFAULT_RETRIEVAL_LIMIT,
+        adaptive_limit: bool = False,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        tags: tuple[str, ...] | None = None,
+        include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
+        filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
+        debug: bool = False,
+    ) -> tuple[object, object]: ...
+
+    def search_sync(
+        self,
+        request: RetrievalRequest | str | Mapping[str, object],
+        *,
+        limit: int = DEFAULT_RETRIEVAL_LIMIT,
+        adaptive_limit: bool = False,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        tags: tuple[str, ...] | None = None,
+        include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
+        filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
+    ) -> object: ...
+
+    def search_sync_with_diagnostics(
+        self,
+        request: RetrievalRequest | str | Mapping[str, object],
+        *,
+        limit: int = DEFAULT_RETRIEVAL_LIMIT,
+        adaptive_limit: bool = False,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        tags: tuple[str, ...] | None = None,
+        include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
+        filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
+        debug: bool = False,
+    ) -> tuple[object, object]: ...
+
+
 AsyncSearch = Callable[[RetrievalRequest], Awaitable[RetrievalResult[T] | Sequence[T]]]
 SyncSearch = Callable[[RetrievalRequest], RetrievalResult[T] | Sequence[T]]
 
@@ -250,6 +318,7 @@ __all__ = [
     "MAX_RETRIEVAL_LIMIT",
     "MAX_RETRIEVAL_QUERY_LENGTH",
     "BoundedRetrievalService",
+    "MemoryRetrievalPort",
     "RetrievalDiagnostics",
     "RetrievalFailure",
     "RetrievalRequest",
