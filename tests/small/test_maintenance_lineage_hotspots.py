@@ -7,6 +7,7 @@ from mcp_memory.core.maintenance_schedule import SWEEPER_TASK_NAME
 from mcp_memory.core.task_handlers.maintenance_housekeeping import handle_sweeper_task
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.storage.sqlite_maintenance_housekeeping import SQLiteMaintenanceHousekeeping
 
 pytestmark = pytest.mark.small
 
@@ -32,6 +33,7 @@ def _task(workspace_id: str = "workspace-a") -> TaskRecord:
 
 
 def test_sweeper_reports_lineage_hotspots_and_prunes_sqlite_dead_metadata(db_manager) -> None:
+    """Reports lineage hotspots and removes obsolete SQLite metadata keys."""
     repository = RelationalMemoryRepository(db_manager)
     child_ids = [f"child-{index:02d}" for index in range(12)]
     original = repository.create_memory(
@@ -56,7 +58,12 @@ def test_sweeper_reports_lineage_hotspots_and_prunes_sqlite_dead_metadata(db_man
         repository.add_link(original.id, target.id, "AMENDS", "Auto-linked from shared tags (lineage)")
 
     result = handle_sweeper_task(
-        ApplicationContext(db_manager=db_manager, repository=repository, workspace_id="workspace-a"),
+        ApplicationContext(
+            db_manager=db_manager,
+            repository=repository,
+            workspace_id="workspace-a",
+            housekeeping=SQLiteMaintenanceHousekeeping(db_manager),
+        ),
         _task(),
     )
 
@@ -83,6 +90,7 @@ def test_sweeper_reports_lineage_hotspots_and_prunes_sqlite_dead_metadata(db_man
 
 
 def test_sweeper_lineage_hotspots_are_empty_for_clean_memory(db_manager) -> None:
+    """Reports no lineage hotspots for a compact clean memory."""
     repository = RelationalMemoryRepository(db_manager)
     record = repository.create_memory(
         title="Focused memory",
@@ -93,7 +101,12 @@ def test_sweeper_lineage_hotspots_are_empty_for_clean_memory(db_manager) -> None
     assert record is not None
 
     result = handle_sweeper_task(
-        ApplicationContext(db_manager=db_manager, repository=repository, workspace_id="workspace-a"),
+        ApplicationContext(
+            db_manager=db_manager,
+            repository=repository,
+            workspace_id="workspace-a",
+            housekeeping=SQLiteMaintenanceHousekeeping(db_manager),
+        ),
         _task(),
     )
 

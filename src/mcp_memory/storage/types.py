@@ -8,6 +8,7 @@ from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.core.ports import (
     EmbeddingMaintenancePort,
+    MaintenanceHousekeepingPort,
     MemoryIDResolutionPort,
     ReadCacheValidationPort,
     SearchHealthPort,
@@ -50,6 +51,7 @@ class StorageBackendResources:
     startup_health: StartupHealthPort | None = None
     read_cache_validation: ReadCacheValidationPort | None = None
     memory_id_resolution: MemoryIDResolutionPort | None = None
+    housekeeping: MaintenanceHousekeepingPort | None = None
 
 
 @dataclass(frozen=True)

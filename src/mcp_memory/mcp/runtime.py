@@ -252,8 +252,9 @@ def create_runtime_composition(
         search_health=storage.search_health,
         startup_health=storage.startup_health,
         read_cache_validation=storage.read_cache_validation,
-        memory_id_resolution=storage.memory_id_resolution,
-        internal_tool_call_tracker=internal_tool_call_tracker,
+            memory_id_resolution=storage.memory_id_resolution,
+            housekeeping=storage.housekeeping,
+            internal_tool_call_tracker=internal_tool_call_tracker,
     )
     return RuntimeComposition(
         context=context,
@@ -315,6 +316,7 @@ def _runtime_resources_from_context(context: ApplicationContext) -> RuntimeResou
             startup_health=context.startup_health,
             read_cache_validation=context.read_cache_validation,
             memory_id_resolution=context.memory_id_resolution,
+            housekeeping=context.housekeeping,
         ),
         embedder=cast(EmbeddingBatchProvider | None, context.embedder),
         provider_registry=cast(dict[str, dict[str, object]], context.ai_provider_registry or {}),

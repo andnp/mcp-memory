@@ -30,6 +30,7 @@ from mcp_memory.storage.ingress_evidence_store import (
 )
 from mcp_memory.storage.ingress_mutation_transaction import SQLiteIngressMutationStore
 from mcp_memory.storage.ingress_quality_store import SQLiteIngressQualityEvidenceStore
+from mcp_memory.storage.sqlite_maintenance_housekeeping import SQLiteMaintenanceHousekeeping
 from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
 from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
@@ -66,6 +67,7 @@ def build_sqlite_runtime_components(
     enable_background_repair_queue: bool,
 ) -> StorageBackendResources:
     db_manager = DatabaseManager(spec.memory_path / "indices" / "memory.db")
+    housekeeping = SQLiteMaintenanceHousekeeping(db_manager)
     journal = System1Journal(db_manager)
     repository = SQLiteRelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)
@@ -137,4 +139,5 @@ def build_sqlite_runtime_components(
         startup_health=relational_search,
         read_cache_validation=relational_search,
         memory_id_resolution=relational_search,
+        housekeeping=housekeeping,
     )

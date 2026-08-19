@@ -28,6 +28,7 @@ from mcp_memory.storage.postgres_ingress_evidence_store import (
 from mcp_memory.storage.postgres_ingress_mutation_transaction import PostgresIngressMutationStore
 from mcp_memory.storage.postgres_ingress_quality_store import PostgresIngressQualityEvidenceStore
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
+from mcp_memory.storage.postgres_maintenance_housekeeping import PostgresMaintenanceHousekeeping
 from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
 from mcp_memory.storage.postgres_provider_policy_event_store import PostgresProviderPolicyEventRepository
@@ -180,6 +181,7 @@ def build_postgres_runtime_components(
         tolerate_outage=tolerate_outage,
     )
     connection_manager = PostgresConnectionManager(spec.config.storage.postgres)
+    housekeeping = PostgresMaintenanceHousekeeping(connection_manager)
     repository = PostgresRelationalMemoryRepository(connection_manager)
     journal = PostgresSystem1Journal(connection_manager)
     task_queue = PostgresTaskQueue(connection_manager)
@@ -264,4 +266,5 @@ def build_postgres_runtime_components(
         startup_health=relational_search,
         read_cache_validation=relational_search,
         memory_id_resolution=relational_search,
+        housekeeping=housekeeping,
     )

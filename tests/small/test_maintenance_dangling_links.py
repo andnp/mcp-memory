@@ -4,11 +4,13 @@ import pytest
 
 from mcp_memory.core.task_handlers.maintenance_housekeeping import reconcile_dangling_links
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.storage.sqlite_maintenance_housekeeping import SQLiteMaintenanceHousekeeping
 
 pytestmark = pytest.mark.small
 
 
 def test_reconcile_dangling_links_is_bounded_deterministic_and_idempotent(db_manager) -> None:
+    """Deletes bounded dangling-link batches in stable order and then idles."""
     repository = RelationalMemoryRepository(db_manager)
     source = repository.create_memory("Source", "Source content.", ["workspace-a"], memory_id="source")
     archived = repository.create_memory("Archived", "Archived content.", ["workspace-a"], memory_id="archived")
@@ -31,8 +33,9 @@ def test_reconcile_dangling_links_is_bounded_deterministic_and_idempotent(db_man
     connection.commit()
     connection.execute("PRAGMA foreign_keys = ON")
 
-    first = reconcile_dangling_links(connection, sqlite_mode=True, batch_size=1)
-    second = reconcile_dangling_links(connection, sqlite_mode=True, batch_size=1)
+    housekeeping = SQLiteMaintenanceHousekeeping(db_manager)
+    first = reconcile_dangling_links(housekeeping, batch_size=1)
+    second = reconcile_dangling_links(housekeeping, batch_size=1)
 
     assert first == {
         "scanned": 3,
@@ -51,5 +54,6 @@ def test_reconcile_dangling_links_is_bounded_deterministic_and_idempotent(db_man
 
 
 def test_reconcile_dangling_links_rejects_unbounded_batch_size(db_manager) -> None:
+    """Rejects a non-positive dangling-link batch before opening a transaction."""
     with pytest.raises(ValueError, match="batch_size must be positive"):
-        reconcile_dangling_links(db_manager.get_connection(), sqlite_mode=True, batch_size=0)
+        reconcile_dangling_links(SQLiteMaintenanceHousekeeping(db_manager), batch_size=0)

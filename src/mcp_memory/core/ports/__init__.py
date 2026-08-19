@@ -9,7 +9,15 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .curation import CurationActionStore, CurationRepository, CurationTransaction, MutationResult
-    from .maintenance import MaintenanceReadRepositoryLike
+    from .maintenance import (
+        ArchivedMemoryGcResult,
+        DanglingLinkReconciliationResult,
+        ExternalLinkRecord,
+        LineageMemoryRecord,
+        MaintenanceHousekeepingPort,
+        MaintenanceHousekeepingTransaction,
+        MaintenanceReadRepositoryLike,
+    )
     from .memory import (
         MemoryLink,
         MemoryMaintenanceReadPort,
@@ -56,6 +64,12 @@ _EXPORTS = {
     "CurationTransaction": ("curation", "CurationTransaction"),
     "MutationResult": ("curation", "MutationResult"),
     "MaintenanceReadRepositoryLike": ("maintenance", "MaintenanceReadRepositoryLike"),
+    "ArchivedMemoryGcResult": ("maintenance", "ArchivedMemoryGcResult"),
+    "DanglingLinkReconciliationResult": ("maintenance", "DanglingLinkReconciliationResult"),
+    "ExternalLinkRecord": ("maintenance", "ExternalLinkRecord"),
+    "LineageMemoryRecord": ("maintenance", "LineageMemoryRecord"),
+    "MaintenanceHousekeepingPort": ("maintenance", "MaintenanceHousekeepingPort"),
+    "MaintenanceHousekeepingTransaction": ("maintenance", "MaintenanceHousekeepingTransaction"),
     "MemoryLink": ("memory", "MemoryLink"),
     "MemoryMaintenanceReadPort": ("memory", "MemoryMaintenanceReadPort"),
     "MemoryMutationPort": ("memory", "MemoryMutationPort"),
@@ -92,10 +106,16 @@ _EXPORTS = {
 }
 
 __all__ = (
+    "ArchivedMemoryGcResult",
     "CurationActionStore",
     "CurationRepository",
     "CurationTransaction",
+    "DanglingLinkReconciliationResult",
     "EmbeddingMaintenancePort",
+    "ExternalLinkRecord",
+    "LineageMemoryRecord",
+    "MaintenanceHousekeepingPort",
+    "MaintenanceHousekeepingTransaction",
     "MaintenanceReadRepositoryLike",
     "MemoryIDResolutionPort",
     "MemoryLink",

@@ -13,6 +13,7 @@ from mcp_memory.core.task_handlers.maintenance_housekeeping import (
 )
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.storage.sqlite_maintenance_housekeeping import SQLiteMaintenanceHousekeeping
 
 pytestmark = pytest.mark.small
 
@@ -53,6 +54,7 @@ def _sweeper_task() -> TaskRecord:
 
 
 def test_gc_reports_only_safe_archived_memories(db_manager) -> None:
+    """Reports protected and linked archives without deleting them."""
     repository = RelationalMemoryRepository(db_manager)
     eligible = repository.create_memory("Eligible", "Old archived memory.", ["workspace-a"], memory_id="eligible")
     protected = repository.create_memory("Protected", "Keep this memory.", ["workspace-a"], memory_id="protected")
@@ -73,8 +75,7 @@ def test_gc_reports_only_safe_archived_memories(db_manager) -> None:
     connection.commit()
 
     result = gc_archived_memories(
-        connection,
-        sqlite_mode=True,
+        SQLiteMaintenanceHousekeeping(db_manager),
         cutoff=datetime.now(UTC) - timedelta(days=90),
         batch_size=10,
     )
@@ -90,6 +91,7 @@ def test_gc_reports_only_safe_archived_memories(db_manager) -> None:
 
 
 def test_gc_delete_cleans_projections_embeddings_links_and_protection(db_manager) -> None:
+    """Deletes an eligible archive and all of its owned projections."""
     repository = RelationalMemoryRepository(db_manager)
     candidate = repository.create_memory("Delete me", "Archived content.", ["workspace-a"], memory_id="delete-me")
     replacement = repository.create_memory("Replacement", "Replacement content.", ["workspace-a"], memory_id="replacement")
@@ -118,8 +120,7 @@ def test_gc_delete_cleans_projections_embeddings_links_and_protection(db_manager
     connection.commit()
 
     result = gc_archived_memories(
-        connection,
-        sqlite_mode=True,
+        SQLiteMaintenanceHousekeeping(db_manager),
         cutoff=datetime.now(UTC) - timedelta(days=90),
         batch_size=10,
         mode="delete",
@@ -135,6 +136,7 @@ def test_gc_delete_cleans_projections_embeddings_links_and_protection(db_manager
 
 
 def test_sweeper_uses_configured_delete_mode(db_manager) -> None:
+    """Uses the configured memory GC mode through the storage port."""
     repository = RelationalMemoryRepository(db_manager)
     candidate = repository.create_memory("Delete via sweeper", "Archived content.", ["workspace-a"])
     assert candidate is not None
@@ -146,6 +148,7 @@ def test_sweeper_uses_configured_delete_mode(db_manager) -> None:
             config=Config(maintenance=MaintenanceConfig(memory_gc_mode="delete")),
             db_manager=db_manager,
             repository=repository,
+            housekeeping=SQLiteMaintenanceHousekeeping(db_manager),
         ),
         _sweeper_task(),
     )

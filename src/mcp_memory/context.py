@@ -8,6 +8,7 @@ from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.core.ports import (
     EmbeddingMaintenancePort,
+    MaintenanceHousekeepingPort,
     MemoryIDResolutionPort,
     ReadCacheValidationPort,
     SearchHealthPort,
@@ -212,6 +213,7 @@ class TaskRuntimeCapabilities:
     work_items: WorkItemRepository | None = None
     embedding_repair_queue: object | None = None
     internal_tool_call_tracker: object | None = None
+    housekeeping: MaintenanceHousekeepingPort | None = None
 
     @classmethod
     def from_context(cls, ctx: TaskRuntimeContext) -> TaskRuntimeCapabilities:
@@ -223,6 +225,7 @@ class TaskRuntimeCapabilities:
             work_items=ctx.work_items,
             embedding_repair_queue=getattr(ctx, "embedding_repair_queue", None),
             internal_tool_call_tracker=getattr(ctx, "internal_tool_call_tracker", None),
+            housekeeping=getattr(ctx, "housekeeping", None),
         )
 
     def as_context(self) -> TaskRuntimeContext:
@@ -256,6 +259,7 @@ class TaskRuntimeCapabilities:
             work_items=self.work_items,
             embedding_repair_queue=self.embedding_repair_queue,
             internal_tool_call_tracker=self.internal_tool_call_tracker,
+            housekeeping=self.housekeeping,
         ))
 
 
@@ -313,6 +317,7 @@ class _TaskRuntimeContextAdapter:
     work_items: WorkItemRepository | None
     embedding_repair_queue: object | None
     internal_tool_call_tracker: object | None
+    housekeeping: MaintenanceHousekeepingPort | None
 
 
 class _ApplicationContextView:
@@ -396,6 +401,7 @@ _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
         "internal_tool_call_tracker",
         "curation_quality",
         "direct_mutation_evidence",
+        "housekeeping",
     }
 )
 
@@ -459,6 +465,7 @@ class ApplicationContext:
     ingress_quality_evidence: Any = None
     ingress_mutation_transaction: Any = None
     internal_tool_call_tracker: Any = None
+    housekeeping: MaintenanceHousekeepingPort | None = None
     _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
