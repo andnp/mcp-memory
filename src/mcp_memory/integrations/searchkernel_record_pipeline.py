@@ -9,8 +9,12 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
+from searchkernel.adapters.rerank.cross_encoder import (
+    CrossEncoderReranker,
+    sentence_transformers_cross_encoder,
+)
 from searchkernel.domain import RecordHit, Vector
-from searchkernel.ports import AsyncEmbeddingProvider, EmbeddingBatchProvider
+from searchkernel.ports import AsyncEmbeddingProvider, EmbeddingBatchProvider, Reranker
 from searchkernel.runtime import QueryEmbeddingCache
 from searchkernel.search.record_pipeline import (
     RecordSearchCandidate,
@@ -440,6 +444,7 @@ def build_memory_record_pipeline(
         vector_store=adapted_vector_store,
         graph_store=MemoryGraphStore(cast(MemoryRepositoryPort, policy_repository)),
         embedding_provider=embedding_provider,
+        reranker=_build_reranker(searchkernel_config, diagnostics),
         config=record_search_config,
         policy=policy,
         continue_on_error=None,
@@ -457,6 +462,26 @@ def build_memory_record_pipeline(
         semantic_only_abstain_threshold=resolved_config.search_ranking.semantic_only_abstain_threshold,
         diagnostics=MemoryRecordPipelineDiagnostics(tuple(diagnostics)),
     )
+
+
+def _build_reranker(
+    searchkernel_config: SearchKernelConfig, diagnostics: list[str]
+) -> Reranker | None:
+    """Construct the configured reranker, failing open on load errors.
+
+    Model loading (weight download, torch init) happens here rather than
+    inside the pipeline's per-request rerank call, so a load failure must
+    degrade to no reranker instead of breaking pipeline construction.
+    """
+    if searchkernel_config.rerank_policy != "cross_encoder":
+        return None
+    model_name = searchkernel_config.rerank_model
+    try:
+        score = sentence_transformers_cross_encoder(model_name)
+    except Exception as error:
+        diagnostics.append(f"reranker unavailable ({type(error).__name__}); skipping rerank")
+        return None
+    return CrossEncoderReranker(score, model_name=model_name)
 
 
 def _routing_fingerprint(config: SearchKernelConfig) -> str:
