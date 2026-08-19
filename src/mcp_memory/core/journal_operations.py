@@ -8,9 +8,9 @@ from typing import cast
 
 from mcp_memory.core.journal import JournalEntry, System1Journal
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
+from mcp_memory.core.ports.journal import RecordThoughtWritebackPort
 from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord
 from mcp_memory.core.system1_scheduling import System1IngestScheduleResult, schedule_system1_ingest
-from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 logger = logging.getLogger(__name__)
 _RECORD_THOUGHT_AUTHORITATIVE_TIMEOUT_SECONDS = 5.0
@@ -140,7 +140,7 @@ def flush_record_thought_writeback_outbox(
     *,
     task_queue: TaskQueue | None,
     suppression_config,
-    writeback_cache: SharedReadCache | None,
+    writeback_cache: RecordThoughtWritebackPort | None,
     flush_limit: int = _RECORD_THOUGHT_OUTBOX_FLUSH_LIMIT,
 ) -> RecordThoughtWritebackFlushResult:
     if writeback_cache is None or flush_limit < 1:
@@ -190,7 +190,7 @@ class RecordThoughtOperation:
         task_queue: TaskQueue | None,
         workspace_id: str | None,
         suppression_config=None,
-        writeback_cache: SharedReadCache | None = None,
+        writeback_cache: RecordThoughtWritebackPort | None = None,
         max_outbox_entries: int | None = None,
     ) -> None:
         self._journal = journal

@@ -111,7 +111,6 @@ FORBIDDEN_CORE_IMPORT_ROOTS = (
 # exemptions for future core imports.
 ALLOWED_TRANSITIONAL_CORE_IMPORTS = {
     ("ingest_claim_lifecycle.py", "mcp_memory.mcp.internal_ingest_keys"),
-    ("journal_operations.py", "mcp_memory.storage.shared_read_cache"),
     (
         "task_handlers/embedding_repair.py",
         "mcp_memory.application.memory_embedding_maintenance",
