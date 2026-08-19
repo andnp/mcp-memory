@@ -89,6 +89,7 @@ def test_searchkernel_defaults_to_lenient_failure_mode() -> None:
     assert config.query_expansion_policy == "vector"
     assert config.rerank_policy == "disabled"
     assert config.rerank_budget == 0
+    assert config.rerank_model == "BAAI/bge-reranker-v2-m3"
     assert config.active_feature_fingerprint() is None
 
 
@@ -119,12 +120,36 @@ rerank_budget = 4
     )
 
 
+def test_searchkernel_loads_cross_encoder_rerank_policy(tmp_path: Path) -> None:
+    """Load the cross-encoder rerank policy and its model override."""
+    config_path = tmp_path / "cross-encoder-searchkernel-config.toml"
+    config_path.write_text(
+        """
+[searchkernel]
+rerank_policy = "cross_encoder"
+rerank_budget = 4
+rerank_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.searchkernel.rerank_policy == "cross_encoder"
+    assert loaded.searchkernel.rerank_budget == 4
+    assert loaded.searchkernel.rerank_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    assert loaded.searchkernel.active_feature_fingerprint() == (
+        "rerank:cross_encoder:4:cross-encoder/ms-marco-MiniLM-L-6-v2"
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
         ("query_expansion_policy", "llm", "query_expansion_policy"),
         ("rerank_policy", "cross-encoder", "rerank_policy"),
         ("rerank_budget", -1, "rerank_budget"),
+        ("rerank_model", "", "rerank_model"),
     ],
 )
 def test_searchkernel_rejects_invalid_advanced_policy_settings(
