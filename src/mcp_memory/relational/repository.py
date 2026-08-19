@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,8 +17,6 @@ from mcp_memory.core.ports.memory import (
     _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
     _QUALITY_SIGNAL_ALIASES,
     FTS_QUERY_TOKEN_PATTERN,
-    VALID_MEMORY_STATUSES,
-    VALID_MEMORY_TYPES,
     MemoryCreateRequest,
     MemoryLink,
     MemoryReadContext,
@@ -28,6 +25,16 @@ from mcp_memory.core.ports.memory import (
     build_memory_summary,
     build_read_cache_validation_token,
     parse_memory_ref,
+)
+from mcp_memory.relational.record_helpers import (
+    NormalizedMemoryRecord,
+    hydrate_memory_record,
+    normalize_link_type,
+    normalize_values,
+    serialize_metadata,
+    validate_memory_status,
+    validate_memory_type,
+    validate_required_text,
 )
 from mcp_memory.utils.db import DatabaseManager
 
@@ -78,7 +85,7 @@ class RelationalMemoryRepository:
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
         tokens: dict[str, str] = {}
-        for memory_id in self._normalize_values(memory_ids):
+        for memory_id in normalize_values(memory_ids):
             record = self.get_memory(memory_id)
             if record is None:
                 continue
@@ -106,7 +113,7 @@ class RelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
     ) -> list[MemoryRecord]:
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return []
         resolved_ids = [
@@ -157,7 +164,8 @@ class RelationalMemoryRepository:
         records_by_id: dict[str, MemoryRecord] = {}
         for row in rows:
             metadata = json.loads(row["metadata"] or "{}")
-            records_by_id[str(row["id"])] = MemoryRecord(
+            records_by_id[str(row["id"])] = hydrate_memory_record(
+                NormalizedMemoryRecord(
                 id=row["id"],
                 memory_ref=row["memory_ref"],
                 title=row["title"],
@@ -175,6 +183,7 @@ class RelationalMemoryRepository:
                 metadata=metadata,
                 workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
                 tags=_split_csv_values(row["tags_csv"]),
+                )
             )
         return [records_by_id[memory_id] for memory_id in resolved_ids if memory_id in records_by_id]
 
@@ -262,7 +271,8 @@ class RelationalMemoryRepository:
                 next_memory_ref += 1
 
         return [
-            MemoryRecord(
+            hydrate_memory_record(
+                NormalizedMemoryRecord(
                 id=item.memory_id,
                 title=item.title,
                 content=item.content,
@@ -280,6 +290,7 @@ class RelationalMemoryRepository:
                 tags=sorted(item.tags),
                 memory_ref=first_memory_ref + index,
                 archived_at=item.archived_at,
+                )
             )
             for index, item in enumerate(prepared)
         ]
@@ -290,17 +301,17 @@ class RelationalMemoryRepository:
         updated_timestamp = request.updated_at or created_timestamp
         normalized_title = request.title.strip()
         normalized_content = request.content.strip()
-        normalized_workspace_ids = self._normalize_values(list(request.workspace_ids))
-        normalized_tags = self._normalize_values(list(request.tags))
-        normalized_type = self._validate_memory_type(request.memory_type)
-        normalized_status = self._validate_memory_status(request.status)
+        normalized_workspace_ids = normalize_values(list(request.workspace_ids))
+        normalized_tags = normalize_values(list(request.tags))
+        normalized_type = validate_memory_type(request.memory_type)
+        normalized_status = validate_memory_status(request.status)
         archived_timestamp = self._utc_now() if normalized_status == "archived" else None
-        self._validate_required_text("title", normalized_title)
-        self._validate_required_text("content", normalized_content)
+        validate_required_text("title", normalized_title)
+        validate_required_text("content", normalized_content)
         if not normalized_workspace_ids:
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
-        summary_text = request.summary or self._build_summary(
+        summary_text = request.summary or build_memory_summary(
             title=normalized_title,
             content=normalized_content,
             memory_type=normalized_type,
@@ -315,7 +326,7 @@ class RelationalMemoryRepository:
             created_at=created_timestamp,
             updated_at=updated_timestamp,
             archived_at=archived_timestamp,
-            metadata=json.dumps(request.metadata or {}, sort_keys=True),
+            metadata=serialize_metadata(request.metadata),
             workspace_ids=normalized_workspace_ids,
             tags=normalized_tags,
         )
@@ -327,7 +338,7 @@ class RelationalMemoryRepository:
         link_type: str,
         context: str = "",
     ):
-        normalized_link_type = self._normalize_link_type(link_type)
+        normalized_link_type = normalize_link_type(link_type)
         conn = self._db.get_connection()
         with conn:
             conn.execute(
@@ -350,7 +361,7 @@ class RelationalMemoryRepository:
         target_id: str,
         link_type: str,
     ) -> bool:
-        normalized_link_type = self._normalize_link_type(link_type)
+        normalized_link_type = normalize_link_type(link_type)
         conn = self._db.get_connection()
         with conn:
             cursor = conn.execute(
@@ -459,7 +470,7 @@ class RelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
     ) -> list[RankedMemoryCandidate]:
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return []
         resolved_ids = [
@@ -527,7 +538,8 @@ class RelationalMemoryRepository:
         for row in rows:
             metadata = json.loads(row["metadata"] or "{}")
             ranked_by_id[str(row["id"])] = RankedMemoryCandidate(
-                record=MemoryRecord(
+                record=hydrate_memory_record(
+                    NormalizedMemoryRecord(
                     id=row["id"],
                     memory_ref=row["memory_ref"],
                     title=row["title"],
@@ -544,6 +556,7 @@ class RelationalMemoryRepository:
                     metadata=metadata,
                     workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
                     tags=_split_csv_values(row["tags_csv"]),
+                    )
                 ),
                 incoming_links_count=int(row["incoming_links_count"] or 0),
                 has_incoming_supersedes=bool(row["has_incoming_supersedes"]),
@@ -862,7 +875,7 @@ class RelationalMemoryRepository:
         params: list[str] = [resolved_memory_id]
         if link_type is not None:
             query += " AND type = ?"
-            params.append(self._normalize_link_type(link_type))
+            params.append(normalize_link_type(link_type))
         query += f" {order_by}"
 
         rows = conn.execute(query, params).fetchall()
@@ -877,7 +890,7 @@ class RelationalMemoryRepository:
         ]
 
     def has_incoming_link(self, memory_id: str, link_type: str):
-        normalized_link_type = self._normalize_link_type(link_type)
+        normalized_link_type = normalize_link_type(link_type)
         resolved_memory_id = self.resolve_memory_id(memory_id)
         if resolved_memory_id is None:
             return False
@@ -899,7 +912,7 @@ class RelationalMemoryRepository:
         return 0 if row is None else int(row[0])
 
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return 0
         resolved_ids = [
@@ -981,7 +994,7 @@ class RelationalMemoryRepository:
         resolved_memory_id = self.resolve_memory_id(memory_id)
         if resolved_memory_id is None:
             return None
-        normalized_workspace_ids = self._normalize_values(workspace_ids)
+        normalized_workspace_ids = normalize_values(workspace_ids)
         if not normalized_workspace_ids:
             return self.get_memory(resolved_memory_id)
 
@@ -989,7 +1002,7 @@ class RelationalMemoryRepository:
         if current is None:
             return None
 
-        merged_workspace_ids = self._normalize_values(
+        merged_workspace_ids = normalize_values(
             [*current.workspace_ids, *normalized_workspace_ids]
         )
         conn = self._db.get_connection()
@@ -1075,7 +1088,7 @@ class RelationalMemoryRepository:
             conn,
             existing_memory_ids,
         )
-        superseded_target_ids = self._normalize_values(
+        superseded_target_ids = normalize_values(
             [
                 link.target_id
                 for memory_id in existing_memory_ids
@@ -1214,18 +1227,18 @@ class RelationalMemoryRepository:
             return None
 
         normalized_type = (
-            self._validate_memory_type(memory_type) if memory_type is not None else None
+            validate_memory_type(memory_type) if memory_type is not None else None
         )
         normalized_status = (
-            self._validate_memory_status(status) if status is not None else None
+            validate_memory_status(status) if status is not None else None
         )
         normalized_title = title.strip() if title is not None else None
         normalized_content = content.strip() if content is not None else None
         if normalized_title is not None:
-            self._validate_required_text("title", normalized_title)
+            validate_required_text("title", normalized_title)
         if normalized_content is not None:
-            self._validate_required_text("content", normalized_content)
-        if workspace_ids is not None and not self._normalize_values(workspace_ids):
+            validate_required_text("content", normalized_content)
+        if workspace_ids is not None and not normalize_values(workspace_ids):
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
         existing = self.get_memory(resolved_memory_id)
@@ -1236,7 +1249,7 @@ class RelationalMemoryRepository:
         if summary is _SUMMARY_UNSET and (
             normalized_title is not None or normalized_content is not None or normalized_type is not None
         ):
-            resolved_summary = self._build_summary(
+            resolved_summary = build_memory_summary(
                 title=normalized_title or existing.title,
                 content=normalized_content or existing.content,
                 memory_type=normalized_type or existing.type,
@@ -1262,7 +1275,7 @@ class RelationalMemoryRepository:
 
         if metadata is not None:
             columns.append("metadata = ?")
-            values.append(json.dumps(metadata, sort_keys=True))
+            values.append(serialize_metadata(metadata))
 
         if normalized_status is not None and normalized_status != existing.status:
             columns.append("archived_at = ?")
@@ -1283,20 +1296,20 @@ class RelationalMemoryRepository:
                 self._replace_workspace_mappings(
                     conn,
                     resolved_memory_id,
-                    self._normalize_values(workspace_ids),
+                    normalize_values(workspace_ids),
                 )
             if tags is not None:
                 self._replace_tag_mappings(
                     conn,
                     resolved_memory_id,
-                    self._normalize_values(tags),
+                    normalize_values(tags),
                 )
             current_row = conn.execute(
                 "SELECT title, summary, content FROM memories WHERE id = ?",
                 (resolved_memory_id,),
             ).fetchone()
             current_tags = (
-                self._normalize_values(tags)
+                normalize_values(tags)
                 if tags is not None
                 else [row[0] for row in conn.execute(
                     """
@@ -1447,7 +1460,8 @@ class RelationalMemoryRepository:
             (row["id"],),
         ).fetchall()
         metadata = json.loads(row["metadata"] or "{}")
-        return MemoryRecord(
+        return hydrate_memory_record(
+            NormalizedMemoryRecord(
             id=row["id"],
             memory_ref=row["memory_ref"],
             title=row["title"],
@@ -1464,6 +1478,7 @@ class RelationalMemoryRepository:
             metadata=metadata,
             workspace_ids=[workspace_row[0] for workspace_row in workspace_rows],
             tags=[tag_row[0] for tag_row in tag_rows],
+            )
         )
 
     def _candidate_record_from_row(
@@ -1473,7 +1488,8 @@ class RelationalMemoryRepository:
         workspace_ids: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> MemoryRecord:
-        return MemoryRecord(
+        return hydrate_memory_record(
+            NormalizedMemoryRecord(
             id=row["id"],
             memory_ref=row["memory_ref"],
             title=row["title"],
@@ -1494,6 +1510,7 @@ class RelationalMemoryRepository:
                 else workspace_ids
             ),
             tags=_split_csv_values(row["tags_csv"]) if tags is None else tags,
+            )
         )
 
     def resolve_memory_id(self, memory_id: str) -> str | None:
@@ -1566,48 +1583,8 @@ class RelationalMemoryRepository:
             (memory_id, title, summary, content, " ".join(tags)),
         )
 
-    def _normalize_values(self, values: list[str]):
-        normalized_values = []
-        seen = set()
-        for value in values:
-            normalized_value = value.strip()
-            if not normalized_value or normalized_value in seen:
-                continue
-            seen.add(normalized_value)
-            normalized_values.append(normalized_value)
-        return normalized_values
-
-    def _validate_memory_type(self, memory_type: str):
-        normalized_type = memory_type.strip()
-        if normalized_type not in VALID_MEMORY_TYPES:
-            raise ValueError(
-                f"invalid memory_type: {memory_type!r}. Expected one of {sorted(VALID_MEMORY_TYPES)}"
-            )
-        return normalized_type
-
-    def _validate_memory_status(self, status: str):
-        normalized_status = status.strip()
-        if normalized_status not in VALID_MEMORY_STATUSES:
-            raise ValueError(
-                f"invalid status: {status!r}. Expected one of {sorted(VALID_MEMORY_STATUSES)}"
-            )
-        return normalized_status
-
-    def _validate_required_text(self, field_name: str, value: str):
-        if not value:
-            raise ValueError(f"{field_name} must be non-empty")
-
-    def _normalize_link_type(self, link_type: str) -> str:
-        normalized_link_type = re.sub(r"[\s-]+", "_", link_type.strip()).upper()
-        if not normalized_link_type:
-            raise ValueError("link_type must be non-empty")
-        return normalized_link_type
-
     def _utc_now(self):
         return datetime.now(UTC).isoformat()
-
-    def _build_summary(self, *, title: str, content: str, memory_type: str | None = None):
-        return build_memory_summary(title=title, content=content, memory_type=memory_type)
 
 
 SQLiteRelationalMemoryRepository = RelationalMemoryRepository

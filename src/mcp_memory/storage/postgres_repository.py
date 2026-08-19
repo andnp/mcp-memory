@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -17,17 +16,25 @@ from mcp_memory.core.ports.memory import (
     _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
     _QUALITY_SIGNAL_ALIASES,
     FTS_QUERY_TOKEN_PATTERN,
-    VALID_MEMORY_STATUSES,
-    VALID_MEMORY_TYPES,
     MemoryCreateRequest,
     MemoryLink,
     MemoryReadContext,
     MemoryRecord,
     RankedMemoryCandidate,
+    build_memory_summary,
     build_read_cache_validation_token,
     parse_memory_ref,
 )
-from mcp_memory.core.summaries import build_deterministic_summary
+from mcp_memory.relational.record_helpers import (
+    NormalizedMemoryRecord,
+    hydrate_memory_record,
+    normalize_link_type,
+    normalize_values,
+    serialize_metadata,
+    validate_memory_status,
+    validate_memory_type,
+    validate_required_text,
+)
 from mcp_memory.storage.buffered_writer import BufferedWriter
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
 
@@ -81,7 +88,7 @@ class PostgresRelationalMemoryRepository:
         )
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return {}
 
@@ -104,7 +111,7 @@ class PostgresRelationalMemoryRepository:
                     existing_memory_ids,
                     direction="incoming",
                 )
-                superseded_target_ids = self._normalize_values(
+                superseded_target_ids = normalize_values(
                     [
                         link.target_id
                         for memory_id in existing_memory_ids
@@ -141,7 +148,7 @@ class PostgresRelationalMemoryRepository:
         status: str | None = None,
         include_superseded: bool = False,
     ) -> list[MemoryRecord]:
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return []
         resolved_ids = [
@@ -326,16 +333,16 @@ class PostgresRelationalMemoryRepository:
         updated_timestamp = request.updated_at or created_timestamp
         normalized_title = request.title.strip()
         normalized_content = request.content.strip()
-        normalized_workspace_ids = self._normalize_values(list(request.workspace_ids))
-        normalized_tags = self._normalize_values(list(request.tags))
-        normalized_type = self._validate_memory_type(request.memory_type)
-        normalized_status = self._validate_memory_status(request.status)
-        self._validate_required_text("title", normalized_title)
-        self._validate_required_text("content", normalized_content)
+        normalized_workspace_ids = normalize_values(list(request.workspace_ids))
+        normalized_tags = normalize_values(list(request.tags))
+        normalized_type = validate_memory_type(request.memory_type)
+        normalized_status = validate_memory_status(request.status)
+        validate_required_text("title", normalized_title)
+        validate_required_text("content", normalized_content)
         if not normalized_workspace_ids:
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
-        summary_text = request.summary or self._build_summary(
+        summary_text = request.summary or build_memory_summary(
             title=normalized_title,
             content=normalized_content,
             memory_type=normalized_type,
@@ -350,7 +357,7 @@ class PostgresRelationalMemoryRepository:
             created_at=created_timestamp,
             updated_at=updated_timestamp,
             archived_at=self._utc_now() if normalized_status == "archived" else None,
-            metadata=json.dumps(request.metadata or {}, sort_keys=True),
+            metadata=serialize_metadata(request.metadata),
             workspace_ids=normalized_workspace_ids,
             tags=normalized_tags,
         )
@@ -455,7 +462,7 @@ class PostgresRelationalMemoryRepository:
                     existing_memory_ids,
                     direction="incoming",
                 )
-                superseded_target_ids = self._normalize_values(
+                superseded_target_ids = normalize_values(
                     [
                         link.target_id
                         for memory_id in existing_memory_ids
@@ -525,22 +532,22 @@ class PostgresRelationalMemoryRepository:
         if existing is None:
             return None
 
-        normalized_type = self._validate_memory_type(memory_type) if memory_type is not None else None
-        normalized_status = self._validate_memory_status(status) if status is not None else None
+        normalized_type = validate_memory_type(memory_type) if memory_type is not None else None
+        normalized_status = validate_memory_status(status) if status is not None else None
         normalized_title = title.strip() if title is not None else None
         normalized_content = content.strip() if content is not None else None
         if normalized_title is not None:
-            self._validate_required_text("title", normalized_title)
+            validate_required_text("title", normalized_title)
         if normalized_content is not None:
-            self._validate_required_text("content", normalized_content)
-        if workspace_ids is not None and not self._normalize_values(workspace_ids):
+            validate_required_text("content", normalized_content)
+        if workspace_ids is not None and not normalize_values(workspace_ids):
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
         resolved_summary = summary
         if summary is _SUMMARY_UNSET and (
             normalized_title is not None or normalized_content is not None or normalized_type is not None
         ):
-            resolved_summary = self._build_summary(
+            resolved_summary = build_memory_summary(
                 title=normalized_title or existing.title,
                 content=normalized_content or existing.content,
                 memory_type=normalized_type or existing.type,
@@ -566,7 +573,7 @@ class PostgresRelationalMemoryRepository:
 
         if metadata is not None:
             columns.append("metadata = %s::jsonb")
-            values.append(json.dumps(metadata, sort_keys=True))
+            values.append(serialize_metadata(metadata))
 
         if normalized_status is not None and normalized_status != existing.status:
             columns.append("archived_at = %s")
@@ -586,15 +593,15 @@ class PostgresRelationalMemoryRepository:
                     self._replace_workspace_mappings(
                         cursor,
                         resolved_memory_id,
-                        self._normalize_values(workspace_ids),
+                        normalize_values(workspace_ids),
                     )
                 if tags is not None:
                     self._replace_tag_mappings(
                         cursor,
                         memory_id,
-                        self._normalize_values(tags),
+                        normalize_values(tags),
                     )
-                effective_tags = existing.tags if tags is None else self._normalize_values(tags)
+                effective_tags = existing.tags if tags is None else normalize_values(tags)
                 self._upsert_search_document(
                     cursor,
                     memory_id=resolved_memory_id,
@@ -872,7 +879,7 @@ class PostgresRelationalMemoryRepository:
         include_superseded: bool = False,
         timing_ms: dict[str, float] | None = None,
     ) -> list[RankedMemoryCandidate]:
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return []
         resolved_ids = [
@@ -1318,7 +1325,7 @@ class PostgresRelationalMemoryRepository:
         )
 
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
-        normalized_ids = self._normalize_values(memory_ids)
+        normalized_ids = normalize_values(memory_ids)
         if not normalized_ids:
             return 0
         resolved_ids = [
@@ -1371,7 +1378,7 @@ class PostgresRelationalMemoryRepository:
         resolved_memory_id = self.resolve_memory_id(memory_id)
         if resolved_memory_id is None:
             return None
-        normalized_workspace_ids = self._normalize_values(workspace_ids)
+        normalized_workspace_ids = normalize_values(workspace_ids)
         if not normalized_workspace_ids:
             return self.get_memory(resolved_memory_id)
 
@@ -1379,7 +1386,7 @@ class PostgresRelationalMemoryRepository:
         if current is None:
             return None
 
-        merged_workspace_ids = self._normalize_values([*current.workspace_ids, *normalized_workspace_ids])
+        merged_workspace_ids = normalize_values([*current.workspace_ids, *normalized_workspace_ids])
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 self._replace_workspace_mappings(cursor, resolved_memory_id, merged_workspace_ids)
@@ -1397,7 +1404,7 @@ class PostgresRelationalMemoryRepository:
         link_type: str,
         context: str = "",
     ):
-        normalized_link_type = self._normalize_link_type(link_type)
+        normalized_link_type = normalize_link_type(link_type)
         normalized_context = context.strip()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
@@ -1438,7 +1445,7 @@ class PostgresRelationalMemoryRepository:
         params: list[object] = [resolved_memory_id]
         if link_type is not None:
             query += " AND type = %s"
-            params.append(self._normalize_link_type(link_type))
+            params.append(normalize_link_type(link_type))
         query += f" {order_by}"
 
         with self._sessions.open_connection() as connection:
@@ -1461,7 +1468,7 @@ class PostgresRelationalMemoryRepository:
         target_id: str,
         link_type: str,
     ) -> bool:
-        normalized_link_type = self._normalize_link_type(link_type)
+        normalized_link_type = normalize_link_type(link_type)
         existing = self.get_links(source_id, direction="outgoing", link_type=normalized_link_type)
         if not any(link.target_id == target_id for link in existing):
             return False
@@ -1476,7 +1483,7 @@ class PostgresRelationalMemoryRepository:
         return True
 
     def has_incoming_link(self, memory_id: str, link_type: str):
-        normalized_link_type = self._normalize_link_type(link_type)
+        normalized_link_type = normalize_link_type(link_type)
         resolved_memory_id = self.resolve_memory_id(memory_id)
         if resolved_memory_id is None:
             return False
@@ -1728,7 +1735,8 @@ class PostgresRelationalMemoryRepository:
             (memory_id,),
         )
         tag_rows = cursor.fetchall()
-        return MemoryRecord(
+        return hydrate_memory_record(
+            NormalizedMemoryRecord(
             id=memory_id,
             title=str(row[1]),
             content=str(row[2]),
@@ -1746,6 +1754,7 @@ class PostgresRelationalMemoryRepository:
             archived_at=None if row[14] is None else str(row[14]),
             workspace_ids=[str(workspace_row[0]) for workspace_row in workspace_rows],
             tags=[str(tag_row[0]) for tag_row in tag_rows],
+            )
         )
 
     def _record_from_memory_row(
@@ -1755,7 +1764,8 @@ class PostgresRelationalMemoryRepository:
         workspace_ids: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> MemoryRecord:
-        return MemoryRecord(
+        return hydrate_memory_record(
+            NormalizedMemoryRecord(
             id=str(row[0]),
             title=str(row[1]),
             content=str(row[2]),
@@ -1773,6 +1783,7 @@ class PostgresRelationalMemoryRepository:
             archived_at=None if row[14] is None else str(row[14]),
             workspace_ids=[] if workspace_ids is None else workspace_ids,
             tags=[] if tags is None else tags,
+            )
         )
 
     def _replace_workspace_mappings(self, cursor: CursorLike, memory_id: str, workspace_ids: list[str]) -> None:
@@ -1854,52 +1865,8 @@ class PostgresRelationalMemoryRepository:
             ),
         )
 
-    def _normalize_values(self, values: list[str]) -> list[str]:
-        normalized_values: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            normalized_value = value.strip()
-            if not normalized_value or normalized_value in seen:
-                continue
-            seen.add(normalized_value)
-            normalized_values.append(normalized_value)
-        return normalized_values
-
-    def _validate_memory_type(self, memory_type: str) -> str:
-        normalized_type = memory_type.strip()
-        if normalized_type not in VALID_MEMORY_TYPES:
-            raise ValueError(
-                f"invalid memory_type: {memory_type!r}. Expected one of {sorted(VALID_MEMORY_TYPES)}"
-            )
-        return normalized_type
-
-    def _validate_memory_status(self, status: str) -> str:
-        normalized_status = status.strip()
-        if normalized_status not in VALID_MEMORY_STATUSES:
-            raise ValueError(
-                f"invalid status: {status!r}. Expected one of {sorted(VALID_MEMORY_STATUSES)}"
-            )
-        return normalized_status
-
-    def _validate_required_text(self, field_name: str, value: str) -> None:
-        if not value:
-            raise ValueError(f"{field_name} must be non-empty")
-
-    def _normalize_link_type(self, link_type: str) -> str:
-        normalized_link_type = re.sub(r"[\s-]+", "_", link_type.strip()).upper()
-        if not normalized_link_type:
-            raise ValueError("link_type must be non-empty")
-        return normalized_link_type
-
     def _utc_now(self) -> str:
         return datetime.now(UTC).isoformat()
-
-    def _build_summary(self, *, title: str, content: str, memory_type: str | None = None) -> str:
-        return build_deterministic_summary(
-            title=title,
-            content=content,
-            memory_type=memory_type,
-        )
 
     def _load_metadata(self, raw_value: object) -> dict[str, object]:
         if raw_value is None:

@@ -771,15 +771,24 @@ def test_postgres_repository_create_read_update_and_list_memory(
         workspace_ids=["workspace-c"],
         tags=["facts"],
     )
+    archived = repository.create_memory(
+        title="Archived observation",
+        content="An archived record keeps its archive timestamp.",
+        workspace_ids=["workspace-archive"],
+        tags=["retention"],
+        status="archived",
+    )
 
-    assert created is not None
-    assert secondary is not None
+    assert created is not None and secondary is not None and archived is not None
 
     UUID(created.id)
     assert created.type == "plan"
     assert created.workspace_ids == ["workspace-a", "workspace-b"]
     assert created.tags == ["sqlite", "testing"]
     assert created.metadata == {"priority": "high"}
+    assert secondary.summary == "Second record for list filtering."
+    assert archived.status == "archived"
+    assert archived.archived_at is not None
 
     fetched = repository.get_memory(created.id)
     assert fetched is not None
