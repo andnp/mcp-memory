@@ -2,69 +2,35 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import math
-import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import Any
-from uuid import UUID, uuid5
+from uuid import UUID
 
 from pydantic import BaseModel
 
+from ..utils.canonical_identity import canonicalize, normalize, normalize_text, stable_hash, stable_uuid5
 from .curation_models import CurationAction
 
 SCHEMA_VERSION = 1
 # Stable namespace; changing this is an identity schema change.
 CURATION_ACTION_NAMESPACE = UUID("2f5b4bb8-4f1b-5e2f-8f9d-6a7d8e9c0b1a")
 
-
-def _text(value: str, *, identifier: bool = False) -> str:
-    value = unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
-    return value.strip() if identifier else value
-
-
-def _normalize(value: Any) -> Any:
-    if isinstance(value, str):
-        return _text(value)
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, bool) or value is None or isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("canonical JSON does not support non-finite numbers")
-        return value
-    if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("canonical JSON object keys must be strings")
-            normalized_key = _text(key)
-            if normalized_key in result:
-                raise ValueError(f"duplicate canonical JSON key: {normalized_key!r}")
-            result[normalized_key] = _normalize(item)
-        return result
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        return [_normalize(item) for item in value]
-    raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
+_normalize = normalize
 
 
 def canonical_json(value: Any) -> bytes:
     """Return the exact UTF-8 bytes used by all curation identities."""
-    return json.dumps(
-        _normalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
+    return canonicalize(value).encode("utf-8")
 
 
 def canonical_token(value: Any) -> str:
-    return "v1:" + hashlib.sha256(canonical_json(value)).hexdigest()
+    return stable_hash(value)
 
 
 def _identifier(value: Any) -> str:
     if not isinstance(value, (str, UUID)):
         raise TypeError("identity identifiers must be strings or UUIDs")
-    return _text(str(value), identifier=True)
+    return normalize_text(str(value), collapse=True)
 
 
 def _set_values(values: Sequence[Any]) -> list[str]:
@@ -95,12 +61,12 @@ def _canonical_action_value(value: Any, *, key: str | None = None) -> Any:
     if isinstance(value, BaseModel):
         return _canonical_action_value(value.model_dump(mode="json"), key=key)
     if isinstance(value, str):
-        return _identifier(value) if key in _ACTION_IDENTIFIER_KEYS else _text(value)
+        return _identifier(value) if key in _ACTION_IDENTIFIER_KEYS else normalize_text(value)
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, Mapping):
         return {
-            _text(str(name)): _canonical_action_value(item, key=_text(str(name)))
+            normalize_text(str(name)): _canonical_action_value(item, key=normalize_text(str(name)))
             for name, item in value.items()
         }
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
@@ -282,7 +248,7 @@ def action_id(plan_id: Any, position: int, action: CurationAction | Mapping[str,
         "preconditions": canonicalize_action_value(preconditions),
         "evidence": canonicalize_action_value(evidence),
     }
-    return uuid5(CURATION_ACTION_NAMESPACE, canonical_json(name).decode("utf-8"))
+    return stable_uuid5(CURATION_ACTION_NAMESPACE, name)
 
 
 # Descriptive aliases make the contract convenient without duplicating logic.
