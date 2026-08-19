@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from mcp_memory.daemon_ports import HookClientCountPort, HookPersistencePort, TransportDiagnosticsPort
 from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.service import ManagementService
@@ -41,15 +42,15 @@ class DaemonRoutes:
     ctx: Any
     service: ManagementService
     management: ManagementCapabilities | None
-    hook_service: Any
+    hook_service: HookPersistencePort
     metadata_path: Path
     federation_source: MemoryFederationSource | None = None
 
 
 @dataclass(frozen=True)
 class DaemonControllerView:
-    hook_service: Any | None = None
-    transport_server: Any | None = None
+    hook_service: HookClientCountPort | None = None
+    transport_server: TransportDiagnosticsPort | None = None
 
     @property
     def has_runtime(self) -> bool:
