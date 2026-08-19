@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import {
@@ -6,11 +6,11 @@ import {
   fetchNerdMetrics,
   fetchSelectorStats,
   type SelectorFeatureRollupRow,
-  type NerdMetricsScope,
   type SelectorMetricSnapshot,
   type SelectorPopulationSnapshot,
 } from '../lib/api';
 import { WorkspaceScopeSelector } from '../components/WorkspaceScopeSelector';
+import { useScopeSelector } from '../hooks/useScopeSelector';
 
 type SelectorWindow = '24h' | '7d' | '30d';
 
@@ -180,39 +180,24 @@ function statusTone(status: string): string {
 
 export function SelectorStatsPage() {
   const [selectedWindow, setSelectedWindow] = useState<SelectorWindow>('24h');
-  const [selectedScope, setSelectedScope] = useState<NerdMetricsScope>('global');
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const selectedWindowConfig = SELECTOR_WINDOW_OPTIONS[selectedWindow];
   const metricKindByKey = Object.fromEntries(
     SNAPSHOT_METRIC_ORDER.map((metric) => [metric.key, metric.kind]),
   ) as Record<string, 'number' | 'age'>;
 
-  const workspaceOptionsQuery = useQuery({
+  const {
+    selectedScope,
+    selectedWorkspaceId,
+    workspaceOptions,
+    workspaceOptionsPending,
+    workspaceOptionsError,
+    selectGlobal,
+    selectWorkspace,
+  } = useScopeSelector({
     queryKey: ['selector-stats', 'workspace-options', selectedWindow],
-    queryFn: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global', bucket_minutes: 60 }),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    retry: false,
+    fetchOptions: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global', bucket_minutes: 60 }),
+    deriveOptions: (data) => data?.composition.by_workspace ?? [],
   });
-  const workspaceOptions = useMemo(
-    () => workspaceOptionsQuery.data?.composition.by_workspace ?? [],
-    [workspaceOptionsQuery.data],
-  );
-
-  useEffect(() => {
-    if (selectedScope !== 'workspace') {
-      return;
-    }
-    if (workspaceOptions.some((option) => option.key === selectedWorkspaceId)) {
-      return;
-    }
-    const fallbackWorkspaceId = workspaceOptions[0]?.key ?? '';
-    if (fallbackWorkspaceId) {
-      setSelectedWorkspaceId(fallbackWorkspaceId);
-      return;
-    }
-    setSelectedScope('global');
-  }, [selectedScope, selectedWorkspaceId, workspaceOptions]);
 
   const selectorQuery = useQuery({
     queryKey: ['selector-stats', selectedWindow, selectedScope, selectedWorkspaceId],
@@ -226,16 +211,6 @@ export function SelectorStatsPage() {
     refetchInterval: 10000,
     retry: false,
   });
-
-  function handleWorkspaceChange(workspaceId: string) {
-    if (!workspaceId) {
-      setSelectedScope('global');
-      setSelectedWorkspaceId('');
-      return;
-    }
-    setSelectedWorkspaceId(workspaceId);
-    setSelectedScope('workspace');
-  }
 
   if (selectorQuery.isPending) {
     return <section className="panel p-4 text-xs text-muted">Loading selector stats…</section>;
@@ -290,10 +265,10 @@ export function SelectorStatsPage() {
               selectedScope={selectedScope}
               selectedWorkspaceId={selectedWorkspaceId}
               workspaceOptions={workspaceOptions}
-              workspaceOptionsPending={workspaceOptionsQuery.isPending}
-              workspaceOptionsError={workspaceOptionsQuery.isError}
-              onSelectGlobal={() => setSelectedScope('global')}
-              onSelectWorkspace={handleWorkspaceChange}
+              workspaceOptionsPending={workspaceOptionsPending}
+              workspaceOptionsError={workspaceOptionsError}
+              onSelectGlobal={selectGlobal}
+              onSelectWorkspace={selectWorkspace}
             />
           </div>
         </div>
