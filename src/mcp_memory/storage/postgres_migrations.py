@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from mcp_memory.utils.migration_runner import Migration, apply_migrations
 
 POSTGRES_SCHEMA_VERSION = 36
 
+PostgresMigration = Migration
 
-@dataclass(frozen=True)
-class PostgresMigration:
-    version: int
-    name: str
-    statements: tuple[str, ...]
+_RECORD_SCHEMA_VERSION_STATEMENT = """
+    INSERT INTO schema_metadata(key, value)
+    VALUES (%s, %s)
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    """
 
 
 POSTGRES_MIGRATIONS = (
@@ -1045,19 +1046,10 @@ POSTGRES_MIGRATIONS = (
 
 
 def apply_postgres_migrations(cursor, *, current_version: int | None) -> int:
-    effective_version = 0 if current_version is None else current_version
-    for migration in POSTGRES_MIGRATIONS:
-        if migration.version <= effective_version:
-            continue
-        for statement in migration.statements:
-            cursor.execute(statement)
-        cursor.execute(
-            """
-            INSERT INTO schema_metadata(key, value)
-            VALUES (%s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-            """,
-            ("schema_version", str(migration.version)),
-        )
-        effective_version = migration.version
-    return effective_version
+    return apply_migrations(
+        cursor,
+        POSTGRES_MIGRATIONS,
+        current_version=current_version,
+        record_progress_statement=_RECORD_SCHEMA_VERSION_STATEMENT,
+        record_progress_params=("schema_version",),
+    )
