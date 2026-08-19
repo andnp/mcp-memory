@@ -117,7 +117,6 @@ ALLOWED_TRANSITIONAL_CORE_IMPORTS = {
         "task_handlers/embedding_repair.py",
         "mcp_memory.application.memory_embedding_maintenance",
     ),
-    ("task_handlers/ingest.py", "mcp_memory.mcp.validation"),
     ("task_handlers/maintenance_framework.py", "mcp_memory.management.agent_run_reporting"),
     ("task_handlers/maintenance_framework.py", "mcp_memory.management.task_sampling_summary"),
     ("task_handlers/maintenance_work_items.py", "mcp_memory.management.models"),
