@@ -30,15 +30,15 @@ from mcp_memory.mcp.internal_service_support import (
     _merge_memory_metadata,
     _normalize_tags,
 )
-from mcp_memory.mcp.validation import (
+from mcp_memory.mcp.validation import validate_ingest_mutation_payload
+from mcp_memory.serialization import internal_mutation_record_payload
+from mcp_memory.storage.ingress_mutation_transaction import IngressMutationResult
+from mcp_memory.toolkit.arg_validation import (
     optional_object,
     optional_string,
     require_string,
     string_list,
-    validate_ingest_mutation_payload,
 )
-from mcp_memory.serialization import internal_mutation_record_payload
-from mcp_memory.storage.ingress_mutation_transaction import IngressMutationResult
 
 __all__ = [
     "INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY",

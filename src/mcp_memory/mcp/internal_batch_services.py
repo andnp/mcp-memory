@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.internal_work_item_services import resolve_internal_workspace_scope
-from mcp_memory.mcp.validation import optional_positive_int, optional_string, string_list
 from mcp_memory.serialization import compact_memory_record_payload
+from mcp_memory.toolkit.arg_validation import optional_positive_int, optional_string, string_list
 
 
 def internal_list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:

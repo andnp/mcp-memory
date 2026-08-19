@@ -7,7 +7,7 @@ from mcp_memory.application.skill_review_contract import (
     parse_skill_review_ledger_request,
 )
 from mcp_memory.mcp.tools import RETRIEVAL_MODES
-from mcp_memory.mcp.validation import (
+from mcp_memory.toolkit.arg_validation import (
     optional_bool,
     optional_nonnegative_int,
     optional_positive_int,

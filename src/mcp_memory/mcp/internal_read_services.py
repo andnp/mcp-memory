@@ -12,12 +12,12 @@ from mcp_memory.mcp.services import (
     search_memory_records_async_service,
     search_memory_records_service,
 )
-from mcp_memory.mcp.validation import optional_bool, optional_positive_int, optional_string, require_string
 from mcp_memory.serialization import (
     agent_link_payload,
     agent_memory_record_payload,
     agent_memory_record_payload_with_metadata,
 )
+from mcp_memory.toolkit.arg_validation import optional_bool, optional_positive_int, optional_string, require_string
 
 _DEFAULT_MAINTENANCE_SEARCH_LIMIT = 10
 _DEFAULT_MAINTENANCE_RELATIONSHIP_LIMIT = 20

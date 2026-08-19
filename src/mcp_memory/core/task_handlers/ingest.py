@@ -934,7 +934,7 @@ def build_next_ingest_batch_payload(ctx: ApplicationContext, arguments: dict[str
     if ctx.journal is None:
         return {"status": "error", "error": "journal_not_initialized"}
 
-    from mcp_memory.mcp.validation import optional_positive_int, optional_string, require_string
+    from mcp_memory.toolkit.arg_validation import optional_positive_int, optional_string, require_string
 
     task_id = require_string(arguments, "task_id")
     requested_workspace_id = optional_string(arguments, "workspace_id")

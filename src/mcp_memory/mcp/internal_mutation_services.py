@@ -13,8 +13,14 @@ from mcp_memory.mcp.internal_service_support import (
     _merge_memory_metadata,
     _normalize_tags,
 )
-from mcp_memory.mcp.validation import optional_bool, optional_object, optional_string, require_string, string_list
 from mcp_memory.serialization import internal_mutation_record_payload
+from mcp_memory.toolkit.arg_validation import (
+    optional_bool,
+    optional_object,
+    optional_string,
+    require_string,
+    string_list,
+)
 
 
 def _maybe_record_ingest_tool_invocation(ctx: ApplicationContext, arguments: dict[str, Any], *, tool_name: str) -> None:
