@@ -19,6 +19,11 @@ from mcp_memory.serialization import (
     search_result_payload_compact,
     search_result_payload_with_debug_fields,
 )
+from mcp_memory.utils.read_through_cache import (
+    InFlightCoalescer,
+    StaleFallbackLoader,
+    ValidationTokenResolver,
+)
 
 SEARCH_READ_GUIDANCE = (
     "Read promising memory_ref values with read_memory_record or read_memory_records."
@@ -252,14 +257,16 @@ def _load_cached_search_fallback(
     except Exception:
         logger.warning("Shared read cache stale fallback load failed", exc_info=True)
         return None
-    if payload is None:
-        return None
-    logger.warning(
-        "Serving cached stale search response after authoritative failure",
-        exc_info=error,
+    loader: StaleFallbackLoader[dict[str, object]] = StaleFallbackLoader(
+        logger=logger,
+        message="Serving cached stale search response after authoritative failure",
     )
-    return _annotate_cached_fallback(
-        _compact_cached_search_payload(payload), cache_status="stale_fallback"
+    return loader.load(
+        lambda: payload,
+        error=error,
+        annotate=lambda payload: _annotate_cached_fallback(
+            _compact_cached_search_payload(payload), cache_status="stale_fallback"
+        ),
     )
 
 
@@ -336,13 +343,17 @@ def _load_cached_read_fallback(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    payload = cache.load_read_response(memory_id)
-    if payload is None:
-        return None
-    logger.warning(
-        "Serving cached stale read response after authoritative failure", exc_info=error
+    loader: StaleFallbackLoader[dict[str, object]] = StaleFallbackLoader(
+        logger=logger,
+        message="Serving cached stale read response after authoritative failure",
     )
-    return _annotate_cached_fallback(payload, cache_status="stale_fallback")
+    return loader.load(
+        lambda: cache.load_read_response(memory_id),
+        error=error,
+        annotate=lambda payload: _annotate_cached_fallback(
+            payload, cache_status="stale_fallback"
+        ),
+    )
 
 
 def _store_cached_search_response(
@@ -369,6 +380,22 @@ def _store_cached_search_response(
             logger.warning("Shared read cache search response write failed", exc_info=True)
 
 
+def _inflight_search_coalescer(
+    ctx: MemoryReadPort,
+    *,
+    caller_kind: str,
+    debug_enabled: bool,
+) -> InFlightCoalescer[
+    SharedReadCacheSearchRequest, SharedReadCacheInFlightSearch, dict[str, object]
+]:
+    return InFlightCoalescer(
+        cache_provider=lambda: getattr(ctx, "read_cache", None),
+        enabled=lambda: _shared_read_cache_enabled(
+            ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+        ),
+    )
+
+
 def _begin_inflight_search_coalescing(
     ctx: MemoryReadPort,
     request: SharedReadCacheSearchRequest,
@@ -376,19 +403,15 @@ def _begin_inflight_search_coalescing(
     caller_kind: str,
     debug_enabled: bool,
 ) -> SharedReadCacheInFlightSearch | None:
-    if not _shared_read_cache_enabled(
+    coalescer = _inflight_search_coalescer(
         ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
-    ):
-        return None
-    cache = getattr(ctx, "read_cache", None)
-    if cache is None:
-        return None
+    )
     try:
-        entry = cache.begin_inflight_search(request)
+        entry = coalescer.begin(request)
     except Exception:
         logger.warning("Shared read cache in-flight coalescing failed", exc_info=True)
         return None
-    if entry.is_leader:
+    if entry is not None and entry.is_leader:
         _ACTIVE_INFLIGHT_SEARCH.set(entry)
     return entry
 
@@ -405,9 +428,10 @@ def _finish_inflight_search_coalescing(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return
+    coalescer = _inflight_search_coalescer(ctx, caller_kind="", debug_enabled=False)
     try:
         try:
-            cache.finish_inflight_search(entry, payload=payload, error=error)
+            coalescer.finish(entry, payload=payload, error=error)
         except Exception:
             logger.warning("Shared read cache in-flight completion failed", exc_info=True)
     finally:
@@ -420,25 +444,14 @@ def _resolve_read_cache_validation_tokens(
     memory_ids: list[str],
 ) -> dict[str, str]:
     resolver = _read_cache_validation_resolver(ctx)
-    if not callable(resolver) or not memory_ids:
-        return {}
-    normalized_ids: list[str] = []
-    seen_ids: set[str] = set()
-    for memory_id in memory_ids:
-        if not isinstance(memory_id, str) or not memory_id or memory_id in seen_ids:
-            continue
-        normalized_ids.append(memory_id)
-        seen_ids.add(memory_id)
-    if not normalized_ids:
-        return {}
-    tokens = resolver(normalized_ids)
-    if not isinstance(tokens, dict):
-        return {}
-    return {
-        memory_id: token
-        for memory_id, token in tokens.items()
-        if isinstance(memory_id, str) and isinstance(token, str) and token
-    }
+    token_resolver: ValidationTokenResolver[str, str] = ValidationTokenResolver(resolver)
+    return token_resolver.resolve(
+        memory_ids,
+        key_filter=lambda memory_id: isinstance(memory_id, str) and bool(memory_id),
+        result_filter=lambda memory_id, token: isinstance(memory_id, str)
+        and isinstance(token, str)
+        and bool(token),
+    )
 
 
 def _resolve_read_cache_validation_token(
