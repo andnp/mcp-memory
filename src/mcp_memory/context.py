@@ -193,7 +193,7 @@ class ProviderCapabilities:
 class BackgroundTaskCapabilities:
     config: Config | None = None
     journal: object | None = None
-    task_queue: object | None = None
+    task_queue: TaskQueueProtocol | None = None
 
     @classmethod
     def from_context(
@@ -220,7 +220,7 @@ class TaskRuntimeCapabilities:
             mutation=MutationCapabilities.from_context(ctx),
             provider=ProviderCapabilities.from_context(ctx),
             session_id=ctx.session_id,
-            work_items=cast(WorkItemRepository | None, getattr(ctx, "work_items", None)),
+            work_items=ctx.work_items,
             embedding_repair_queue=getattr(ctx, "embedding_repair_queue", None),
             internal_tool_call_tracker=getattr(ctx, "internal_tool_call_tracker", None),
         )
