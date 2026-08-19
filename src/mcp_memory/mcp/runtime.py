@@ -27,13 +27,18 @@ from mcp_memory.context import (
     ProviderCapabilities,
     TaskRuntimeCapabilities,
 )
+from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.ports.tasks import TaskQueue
 from mcp_memory.core.providers import build_agentic_ai_provider, build_json_ai_provider
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.storage import ensure_memory_dirs
 from mcp_memory.curation_quality_store import PostgresCurationQualityStore, SQLiteCurationQualityStore
+from mcp_memory.daemon_ports import WritebackDependencies
 from mcp_memory.embeddings import build_embedder
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.storage.factory import StorageBackendResources, build_storage_runtime_components
+from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.types import StorageBootstrapSpec
 
 
@@ -97,15 +102,40 @@ class RuntimeResources:
 
 
 @dataclass(frozen=True)
+class DaemonCapabilityBundle:
+    """Stable composition-owned capabilities for daemon lifecycle workers."""
+
+    memory: MemoryReadCapabilities
+    background: BackgroundTaskCapabilities
+    task: TaskRuntimeCapabilities
+    resources: RuntimeResources
+    writeback: WritebackDependencies | None
+
+
+@dataclass(frozen=True)
 class RuntimeComposition:
     context: ApplicationContext
     capabilities: RuntimeCapabilityBundles
     resources: RuntimeResources | None = None
+    daemon: DaemonCapabilityBundle = field(init=False)
     _closed: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.resources is None:
             object.__setattr__(self, "resources", _runtime_resources_from_context(self.context))
+        resources = self.resources
+        assert resources is not None
+        object.__setattr__(
+            self,
+            "daemon",
+            DaemonCapabilityBundle(
+                memory=self.capabilities.memory,
+                background=self.capabilities.background,
+                task=self.capabilities.task,
+                resources=resources,
+                writeback=_daemon_writeback_dependencies(self.capabilities.memory, resources),
+            ),
+        )
 
     def close(self) -> None:
         if self._closed:
@@ -321,6 +351,25 @@ def _runtime_resources_from_context(context: ApplicationContext) -> RuntimeResou
         embedder=cast(EmbeddingBatchProvider | None, context.embedder),
         provider_registry=cast(dict[str, dict[str, object]], context.ai_provider_registry or {}),
         internal_tool_call_tracker=cast(InternalToolCallTracker, context.internal_tool_call_tracker),
+    )
+
+
+def _daemon_writeback_dependencies(
+    memory: MemoryReadCapabilities,
+    resources: RuntimeResources,
+) -> WritebackDependencies | None:
+    cache_state = resolve_shared_mode_cache_state(
+        memory.config,
+        storage_backend=resources.storage.backend,
+        read_cache=resources.storage.read_cache,
+    )
+    if cache_state.writeback_cache is None or resources.storage.journal is None:
+        return None
+    return WritebackDependencies(
+        journal=cast(System1Journal, resources.storage.journal),
+        task_queue=cast(TaskQueue | None, resources.storage.task_queue),
+        writeback_cache=cast(SharedReadCache, cache_state.writeback_cache),
+        suppression_config=None if memory.config is None else memory.config.ingest_suppression,
     )
 
 

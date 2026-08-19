@@ -10,7 +10,11 @@ from mcp_memory.core.agent_runtime import (
     bootstrap_background_tasks,
     build_runtime_task_worker,
 )
-from mcp_memory.mcp.runtime import create_runtime_composition, resolve_workspace_runtime_spec
+from mcp_memory.mcp.runtime import (
+    DaemonCapabilityBundle,
+    create_runtime_composition,
+    resolve_workspace_runtime_spec,
+)
 from mcp_memory.mcp.services import (
     search_memory_records_async_service,
     search_memory_records_service,
@@ -28,6 +32,12 @@ def test_runtime_composition_routes_typed_capabilities_to_consumers(tmp_path: Pa
     try:
         capabilities = composition.capabilities
 
+        assert isinstance(composition.daemon, DaemonCapabilityBundle)
+        assert composition.daemon.memory is capabilities.memory
+        assert composition.daemon.background is capabilities.background
+        assert composition.daemon.task is capabilities.task
+        assert composition.daemon.resources is composition.resources
+        assert composition.daemon.writeback is None
         assert capabilities.memory.repository is composition.context.repository
         assert capabilities.mutation.repository is composition.context.repository
         assert capabilities.provider.ai_provider_registry is composition.context.ai_provider_registry

@@ -146,6 +146,11 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     assert resources.embedder is embedder
     assert resources.provider_registry is provider_registry
     assert resources.internal_tool_call_tracker is composition.context.internal_tool_call_tracker
+    assert composition.daemon.memory is composition.capabilities.memory
+    assert composition.daemon.background is composition.capabilities.background
+    assert composition.daemon.task is composition.capabilities.task
+    assert composition.daemon.resources is resources
+    assert composition.daemon.writeback is None
 
 
 def test_runtime_resources_close_order_is_idempotent_and_skips_missing_close_methods() -> None:
@@ -231,6 +236,11 @@ def test_runtime_composition_closes_lazy_telemetry_and_wraps_legacy_context() ->
 
     resources = composition.resources
     assert resources is not None
+    assert composition.daemon.memory is composition.capabilities.memory
+    assert composition.daemon.background is composition.capabilities.background
+    assert composition.daemon.task is composition.capabilities.task
+    assert composition.daemon.resources is resources
+    assert composition.daemon.writeback is None
     assert resources.storage.ingress_batch_evidence is context.ingress_batch_evidence
     assert resources.storage.ingress_action_receipts is context.ingress_action_receipts
     assert resources.storage.source_coverage is context.source_coverage
