@@ -24,7 +24,7 @@ IngressEvidenceMode = Literal["off", "shadow", "enforce"]
 IngressReplayPolicy = Literal["legacy", "detect", "enforce"]
 IngressQualityAdmission = Literal["disabled", "manual", "canary"]
 SearchKernelExpansionPolicy = Literal["vector", "synonym"]
-SearchKernelRerankPolicy = Literal["disabled", "default"]
+SearchKernelRerankPolicy = Literal["disabled", "default", "cross_encoder"]
 
 
 @dataclass
@@ -419,6 +419,7 @@ class SearchKernelConfig:
     query_expansion_policy: SearchKernelExpansionPolicy = "vector"
     rerank_policy: SearchKernelRerankPolicy = "disabled"
     rerank_budget: int = 0
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
 
     def __post_init__(self) -> None:
         if self.failure_mode not in {"strict", "lenient"}:
@@ -431,10 +432,12 @@ class SearchKernelConfig:
             raise ValueError(
                 "searchkernel.query_expansion_policy must be vector or synonym"
             )
-        if self.rerank_policy not in {"disabled", "default"}:
+        if self.rerank_policy not in {"disabled", "default", "cross_encoder"}:
             raise ValueError(
-                "searchkernel.rerank_policy must be disabled or default"
+                "searchkernel.rerank_policy must be disabled, default, or cross_encoder"
             )
+        if not self.rerank_model:
+            raise ValueError("searchkernel.rerank_model must not be empty")
         if self.rerank_budget < 0:
             raise ValueError("searchkernel.rerank_budget must be >= 0")
         if self.rerank_policy == "disabled" and self.rerank_budget != 0:
@@ -449,7 +452,11 @@ class SearchKernelConfig:
             features.append("calibrated-fusion")
         if self.query_expansion_enabled:
             features.append(f"query-expansion:{self.query_expansion_policy}")
-        if self.rerank_policy != "disabled":
+        if self.rerank_policy == "cross_encoder":
+            features.append(
+                f"rerank:{self.rerank_policy}:{self.rerank_budget}:{self.rerank_model}"
+            )
+        elif self.rerank_policy != "disabled":
             features.append(f"rerank:{self.rerank_policy}:{self.rerank_budget}")
         return None if not features else ";".join(features)
 
