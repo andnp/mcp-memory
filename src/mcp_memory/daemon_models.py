@@ -79,7 +79,10 @@ class DaemonControllerView:
                 return snapshot
             if isinstance(snapshot, type) or not is_dataclass(snapshot):
                 return None
-            return asdict(cast(DaemonTransportDiagnosticsSnapshot, snapshot))
+            return cast(
+                "dict[str, object]",
+                asdict(cast(DaemonTransportDiagnosticsSnapshot, snapshot)),
+            )
         except Exception as exc:
             logger.warning("Failed to read daemon transport diagnostics", exc_info=exc)
             return None

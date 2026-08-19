@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -101,7 +102,15 @@ async def test_daemon_lifecycle_ports_accept_small_compatible_fakes(tmp_path: Pa
 
     assert await warm_port(_Embedding()) is True
     assert backup_port(tmp_path / "memory.sqlite3", tmp_path, max_snapshots=2).pruned_paths
-    assert flush_port(None, task_queue=None, suppression_config=None, writeback_cache=None).flushed_count == 3
+    assert (
+        flush_port(
+            cast(System1Journal, None),
+            task_queue=None,
+            suppression_config=None,
+            writeback_cache=None,
+        ).flushed_count
+        == 3
+    )
     dashboard_port(tmp_path / "static")
     assert (tmp_path / "static").is_dir()
 
