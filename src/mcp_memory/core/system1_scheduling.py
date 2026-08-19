@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from mcp_memory.core.journal import _ALL_WORKSPACES, System1Journal
-from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord
+from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskReportingPort
 
 _ALL_WORKSPACES_WIRE = "*"
 
@@ -284,7 +284,7 @@ def _resolve_ingest_suppression_until(now: float, suppression_config) -> float |
 
 
 def _resolve_auto_ingest_rate_limit_until(
-    task_queue: TaskQueue,
+    task_queue: TaskReportingPort,
     *,
     task_name: str,
     cooldown_seconds: float,

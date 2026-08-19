@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mcp_memory.core.ports.tasks import TaskReportingPort
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.agent_run_reporting import build_agent_runs, build_recent_agent_runs
 from mcp_memory.management.health_reporting import (
@@ -51,7 +52,11 @@ def build_task_counts(db_manager, workspace_id: str | None) -> dict[str, int]:
     return {row.status: row.count for row in rows}
 
 
-def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> MemoryMetricsPayload:
+def build_memory_metrics(
+    db_manager,
+    workspace_id: str | None,
+    task_queue: TaskReportingPort,
+) -> MemoryMetricsPayload:
     if db_manager is None:
         return MemoryMetricsPayload(
             total_memories=0,
@@ -124,7 +129,7 @@ def build_overview(
     *,
     memory_queries,
     repository,
-    task_queue,
+    task_queue: TaskReportingPort,
     runtime_info,
     db_manager,
     provider_usage_repo,

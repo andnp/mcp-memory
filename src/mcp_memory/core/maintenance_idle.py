@@ -17,7 +17,14 @@ from mcp_memory.core.maintenance_schedule import (
     RECURRING_TASK_INTERVAL_SECONDS,
     TAXONOMIST_TASK_NAME,
 )
-from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskRunSummary
+from mcp_memory.core.ports.tasks import (
+    TaskCancellationPort,
+    TaskDataMutationPort,
+    TaskQueue,
+    TaskRecord,
+    TaskRunSummary,
+    TaskSubmissionPort,
+)
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.core.task_results import TaskRunResult
@@ -242,7 +249,7 @@ def _ensure_memory_curator_migration_task(
 
 
 def _merge_memory_curator_migration_sources(
-    task_queue: TaskQueue,
+    task_queue: TaskDataMutationPort,
     task: TaskRecord,
     migration_sources: list[dict[str, Any]],
 ) -> TaskRecord:
@@ -265,7 +272,7 @@ def _merge_memory_curator_migration_sources(
 
 
 def _list_open_legacy_cleanup_tasks(
-    task_queue: TaskQueue,
+    task_queue: TaskSubmissionPort,
     task_name: str,
 ) -> list[TaskRecord]:
     list_helper = getattr(task_queue, "list_open_tasks_any_workspace", None)
@@ -276,7 +283,7 @@ def _list_open_legacy_cleanup_tasks(
 
 
 def _cancel_legacy_cleanup_task(
-    task_queue: TaskQueue,
+    task_queue: TaskCancellationPort,
     source_task: TaskRecord,
     *,
     drained_at: float,

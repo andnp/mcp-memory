@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 
+from mcp_memory.core.ports.tasks import TaskReportingPort
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.management.models import (
@@ -30,7 +31,7 @@ CURATOR_UNKNOWN_LEGACY = "unknown_legacy"
 _CURATOR_MUTATION_KEYS = ("created", "merged", "updated", "archived", "degraded", "restored")
 
 
-def build_agent_runs(task_queue, workspace_id: str | None) -> list[AgentRunPayload]:
+def build_agent_runs(task_queue: TaskReportingPort, workspace_id: str | None) -> list[AgentRunPayload]:
     now = time.time()
     running_tasks = task_queue.list_tasks(
         status="running",

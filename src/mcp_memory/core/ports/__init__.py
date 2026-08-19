@@ -36,7 +36,18 @@ if TYPE_CHECKING:
         SearchHealthSnapshot,
         StartupHealthPort,
     )
-    from .tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
+    from .tasks import (
+        TaskCancellationPort,
+        TaskDataMutationPort,
+        TaskLifecyclePort,
+        TaskProcessSupervisionPort,
+        TaskQueue,
+        TaskRecord,
+        TaskReportingPort,
+        TaskRunRecord,
+        TaskRunSummary,
+        TaskSubmissionPort,
+    )
     from .work_items import WorkItemRecord, WorkItemRecordLike, WorkItemRepository
 
 _EXPORTS = {
@@ -65,13 +76,19 @@ _EXPORTS = {
     "ProviderPolicyEventPort": ("providers", "ProviderPolicyEventPort"),
     "TaskExecutionAttemptPort": ("providers", "TaskExecutionAttemptPort"),
     "TaskExecutionAttemptRecordLike": ("providers", "TaskExecutionAttemptRecordLike"),
+    "TaskCancellationPort": ("tasks", "TaskCancellationPort"),
+    "TaskDataMutationPort": ("tasks", "TaskDataMutationPort"),
+    "TaskLifecyclePort": ("tasks", "TaskLifecyclePort"),
+    "TaskProcessSupervisionPort": ("tasks", "TaskProcessSupervisionPort"),
     "WorkItemRecordLike": ("work_items", "WorkItemRecordLike"),
     "WorkItemRecord": ("work_items", "WorkItemRecord"),
     "WorkItemRepository": ("work_items", "WorkItemRepository"),
     "TaskQueue": ("tasks", "TaskQueue"),
     "TaskRecord": ("tasks", "TaskRecord"),
+    "TaskReportingPort": ("tasks", "TaskReportingPort"),
     "TaskRunRecord": ("tasks", "TaskRunRecord"),
     "TaskRunSummary": ("tasks", "TaskRunSummary"),
+    "TaskSubmissionPort": ("tasks", "TaskSubmissionPort"),
 }
 
 __all__ = (
@@ -98,12 +115,18 @@ __all__ = (
     "SearchHealthPort",
     "SearchHealthSnapshot",
     "StartupHealthPort",
+    "TaskCancellationPort",
+    "TaskDataMutationPort",
     "TaskExecutionAttemptPort",
     "TaskExecutionAttemptRecordLike",
+    "TaskLifecyclePort",
+    "TaskProcessSupervisionPort",
     "TaskQueue",
     "TaskRecord",
+    "TaskReportingPort",
     "TaskRunRecord",
     "TaskRunSummary",
+    "TaskSubmissionPort",
     "WorkItemRecord",
     "WorkItemRecordLike",
     "WorkItemRepository",

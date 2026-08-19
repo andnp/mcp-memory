@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from statistics import median
 
 from mcp_memory.core.ports import SearchHealthPort
+from mcp_memory.core.ports.tasks import TaskReportingPort
 from mcp_memory.management.analytics_common import _bucket_starts, _datetime_to_timestamp
 from mcp_memory.management.analytics_curation import build_curation_metrics
 from mcp_memory.management.analytics_maintenance import build_maintenance_summary
@@ -88,7 +89,7 @@ def load_nerd_metrics_read_model(
     *,
     db_manager,
     workspace_id: str | None,
-    task_queue,
+    task_queue: TaskReportingPort | None,
     window_hours: int = 24,
     bucket_minutes: int = 60,
     now: float | None = None,
@@ -182,7 +183,7 @@ def build_nerd_metrics(
     *,
     db_manager,
     workspace_id: str | None,
-    task_queue,
+    task_queue: TaskReportingPort | None,
     provider_usage_repo,
     config,
     ai_json_provider,

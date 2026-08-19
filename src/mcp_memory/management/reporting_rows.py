@@ -10,6 +10,7 @@ from typing import TypeAlias, cast
 from pydantic import BaseModel, Field, JsonValue
 
 from mcp_memory.core.curator_telemetry import CuratorTelemetry, project_curator_telemetry
+from mcp_memory.core.ports.tasks import TaskReportingPort
 from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
 from mcp_memory.core.task_results import TaskRunResult, build_task_run_result_summary, decode_task_run_result_payload
 from mcp_memory.management.models import (
@@ -1448,7 +1449,12 @@ def list_scoped_link_rows(
     return [adapt_link_row(row) for row in _fetchall_rows(db_manager, query, params, query_adapter=query_adapter)]
 
 
-def build_queue_diagnostics(task_queue, workspace_id: str | None, limit: int = 8, now: float | None = None) -> list[QueueDiagnosticPayload]:
+def build_queue_diagnostics(
+    task_queue: TaskReportingPort,
+    workspace_id: str | None,
+    limit: int = 8,
+    now: float | None = None,
+) -> list[QueueDiagnosticPayload]:
     current_time = now if now is not None else time.time()
     pending_tasks = task_queue.list_tasks(
         status="pending",

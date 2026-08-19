@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
 from mcp_memory.core.ports.providers import ProviderUsagePort, TaskExecutionAttemptPort
+from mcp_memory.core.ports.tasks import TaskProcessSupervisionPort
 from mcp_memory.core.provider_admission import (
     build_provider_admission_exception,
     classify_provider_failure,
@@ -990,7 +991,13 @@ class _InstrumentedAgenticSession:
         await self._session.close()
 
 
-def _safe_task_queue_update(task_queue, *, task_id: str, operation: str, callback: Callable[[], object]) -> None:
+def _safe_task_queue_update(
+    task_queue: TaskProcessSupervisionPort,
+    *,
+    task_id: str,
+    operation: str,
+    callback: Callable[[], object],
+) -> None:
     try:
         callback()
     except ValueError as exc:
