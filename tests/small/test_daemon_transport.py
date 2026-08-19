@@ -6,7 +6,7 @@ import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -21,6 +21,7 @@ from mcp_memory.daemon_app import (
 )
 from mcp_memory.daemon_dispatch import dispatch_management_request
 from mcp_memory.daemon_models import DaemonMetadata
+from mcp_memory.daemon_ports import DaemonMetadataProvider, DaemonRoutesProvider
 from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
 from mcp_memory.server import MCPServer
@@ -478,9 +479,9 @@ async def test_daemon_transport_returns_structured_timeout_payload_for_slow_requ
     server = daemon_transport.DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={"/api/hooks/slow": _slow_handler},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: None,
+        metadata_provider=cast(DaemonMetadataProvider, lambda: None),
     )
     await server.start()
     await asyncio.sleep(0.01)
@@ -519,9 +520,9 @@ async def test_daemon_transport_does_not_relabel_handler_timeout_as_transport_ti
     server = daemon_transport.DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={"/api/hooks/timed-out": _timed_out_handler},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: None,
+        metadata_provider=cast(DaemonMetadataProvider, lambda: None),
     )
     await server.start()
     await asyncio.sleep(0.01)
@@ -555,9 +556,9 @@ async def test_daemon_transport_replies_to_unexpected_handler_failure_and_accept
     server = daemon_transport.DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={"/api/hooks/failing": _failing_handler},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: {"status": "ready"},
+        metadata_provider=cast(DaemonMetadataProvider, lambda: {"status": "ready"}),
     )
     await server.start()
     await asyncio.sleep(0.01)
@@ -954,7 +955,7 @@ async def test_internal_health_includes_transport_diagnostics(tmp_path) -> None:
     server = daemon_transport.DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
         metadata_provider=lambda: DaemonMetadata(
             host="127.0.0.1",

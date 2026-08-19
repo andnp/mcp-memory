@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from mcp_memory.daemon_ports import HookClientCountPort, HookPersistencePort, TransportDiagnosticsPort
+from mcp_memory.daemon_transport import DaemonTransportDiagnosticsSnapshot
 from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.service import ManagementService
@@ -70,18 +71,15 @@ class DaemonControllerView:
     def transport_diagnostics(self) -> dict[str, object] | None:
         if self.transport_server is None:
             return None
-        get_snapshot = getattr(self.transport_server, "get_diagnostics_snapshot", None)
-        if not callable(get_snapshot):
-            return None
         try:
-            snapshot = get_snapshot()
+            snapshot = self.transport_server.get_diagnostics_snapshot()
             if snapshot is None:
                 return None
             if isinstance(snapshot, dict):
                 return snapshot
-            if not is_dataclass(snapshot):
+            if isinstance(snapshot, type) or not is_dataclass(snapshot):
                 return None
-            return cast(dict[str, object], asdict(cast(Any, snapshot)))
+            return asdict(cast(DaemonTransportDiagnosticsSnapshot, snapshot))
         except Exception as exc:
             logger.warning("Failed to read daemon transport diagnostics", exc_info=exc)
             return None

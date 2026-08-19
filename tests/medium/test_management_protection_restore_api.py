@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,7 @@ from mcp_memory.core.curation_models import ActionPreconditions, NormalizeMemory
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import CurationRun, CurationRunState, SQLiteCurationStore
 from mcp_memory.daemon_dispatch import dispatch_management_request
+from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
@@ -29,7 +31,7 @@ def _service(db_manager, repository, history, curation) -> ManagementService:
             curation=curation,
             curation_action_store=SQLiteCurationActionStore(db_manager),
         ).management_view(),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
 

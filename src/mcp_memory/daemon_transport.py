@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, cast
 import zmq
 import zmq.asyncio
 
+from mcp_memory.context import ApplicationContext
 from mcp_memory.daemon_dispatch import (
     dispatch_management_request,
     error_payload,
@@ -23,6 +24,7 @@ from mcp_memory.daemon_dispatch import (
     serialize_tool,
     serialize_tool_response,
 )
+from mcp_memory.daemon_ports import DaemonMetadataProvider, DaemonRoutesProvider
 from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.tools import get_memory_tools
@@ -231,11 +233,11 @@ class DaemonZmqServer:
     def __init__(
         self,
         *,
-        context_factory,
-        hook_handlers: dict[str, object],
-        routes_provider,
+        context_factory: Callable[[dict[str, object]], ApplicationContext],
+        hook_handlers: dict[str, Callable[[dict[str, object]], Awaitable[dict[str, object]]]],
+        routes_provider: DaemonRoutesProvider,
         socket_path: Path,
-        metadata_provider,
+        metadata_provider: DaemonMetadataProvider,
         max_concurrent_requests: int = 8,
     ) -> None:
         self._context_factory = context_factory
@@ -572,9 +574,8 @@ class DaemonZmqServer:
                 response = await call_internal_memory_tool(self._context_factory(request_payload), name, request_payload)
                 return serialize_tool_response(response)
             hook_handler = self._hook_handlers.get(normalized_path)
-            if callable(hook_handler):
-                typed_handler = cast(Callable[[dict[str, object]], Awaitable[dict]], hook_handler)
-                return await typed_handler(request_payload)
+            if hook_handler is not None:
+                return await hook_handler(request_payload)
             return await self._dispatch_management_request(normalized_path, request_payload)
         except ValueError as exc:
             return error_payload(exc)

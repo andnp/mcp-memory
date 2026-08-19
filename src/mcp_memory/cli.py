@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import click
 import uvicorn
@@ -46,6 +46,7 @@ from mcp_memory.daemon import (
     prepare_daemon_start,
     stop_daemon,
 )
+from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.daemon_process import find_free_port
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
@@ -2198,7 +2199,8 @@ admin_group.add_command(migrate_sqlite_to_postgres_cli)
 
 def _build_management_service(runtime, workspace_id: str | None | object = ... ) -> ManagementService:
     ctx = runtime if workspace_id is ... else replace(runtime, workspace_id=workspace_id)
-    return ManagementService(ctx.management_capabilities(), SimpleNamespace(has_runtime=True, client_count=1))
+    controller = cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1))
+    return ManagementService(ctx.management_capabilities(), controller)
 
 
 def _format_timestamp(value: float | None) -> str:

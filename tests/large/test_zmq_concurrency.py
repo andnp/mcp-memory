@@ -5,13 +5,14 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from mcp_memory.config import resolve_workspace_id
 from mcp_memory.daemon_app import _context_for_request
 from mcp_memory.daemon_models import DaemonMetadata
+from mcp_memory.daemon_ports import DaemonRoutesProvider
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.mcp.runtime import create_runtime
 
@@ -48,7 +49,7 @@ async def test_zmq_server_handles_concurrent_clients_and_request_workspace_conte
     server = DaemonZmqServer(
         context_factory=lambda arguments: _context_for_request(runtime, arguments),
         hook_handlers={},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
         metadata_provider=lambda: metadata,
     )

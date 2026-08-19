@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -19,6 +20,7 @@ from mcp_memory.core.ports import (
 )
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.daemon_models import DaemonControllerView
+from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import EmbedderStatus, SQLiteVectorStore
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
@@ -80,7 +82,7 @@ def _build_management_service(
             repository=repository,
             task_queue=task_queue,
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
 
@@ -97,7 +99,7 @@ def test_management_search_uses_retrieval_facade_and_preserves_surfacing(db_mana
     )
     service = ManagementService(
         context,
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
     record = repository.create_memory(
         title="Facade management result",
@@ -134,7 +136,7 @@ def test_management_service_accepts_structural_management_context(db_manager) ->
             repository=repository,
             task_queue=task_queue,
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
     health = service.get_health()
@@ -196,7 +198,7 @@ def test_management_service_omits_legacy_curation_mode_flags(db_manager) -> None
             repository=RelationalMemoryRepository(db_manager),
             task_queue=SQLiteTaskQueue(db_manager),
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
     health = service.get_health()
@@ -496,7 +498,7 @@ def test_management_service_health_reports_storage_backend(db_manager) -> None:
             task_queue=task_queue,
             storage_backend="sqlite",
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
     health = service.get_health()
@@ -566,7 +568,7 @@ def test_management_service_health_and_overview_surface_embedding_write_policy(d
             embedder=fake_embedder,
             vector_store=fake_vector_store,
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
     health = service.get_health()
@@ -782,7 +784,7 @@ def test_management_service_health_reports_cache_state(
             storage_backend=backend,
             read_cache=read_cache,
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
     health = service.get_health()
@@ -829,7 +831,7 @@ def test_management_service_surfaces_cache_metrics_in_health_and_overview(db_man
             storage_backend="postgres",
             read_cache=read_cache,
         ),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
     health = service.get_health()
@@ -896,7 +898,7 @@ def test_management_service_uses_postgres_runtime_log_repository_for_postgres_ba
             runtime_logs=FakeRuntimeLogs(),
             provider_usage=SimpleNamespace(list_conversations=lambda **kwargs: []),
         ),
-        SimpleNamespace(has_runtime=False, client_count=0),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=False, client_count=0)),
     )
 
     assert service.get_health().storage_backend == "postgres"
@@ -2281,7 +2283,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         embedding_repair_queue=embedding_repair_queue,
         relational_search=relational_search,
     )
-    controller = SimpleNamespace(has_runtime=True, client_count=1)
+    controller = cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1))
     service = ManagementService(ctx, controller)
 
     overview = service.get_overview()
@@ -2420,7 +2422,7 @@ def test_management_service_can_cancel_running_task_and_list_conversations(db_ma
         repository=repository,
         task_queue=task_queue,
     )
-    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    service = ManagementService(ctx, cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)))
 
     cancel_payload = service.cancel_task(task.id, cancelled_by="cli", reason="manual_cancel")
     conversations = service.list_ai_conversations(task_name="memory-curator")
@@ -2469,7 +2471,7 @@ def test_management_service_lists_reconciled_terminal_conversation_status(db_man
         repository=repository,
         task_queue=task_queue,
     )
-    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    service = ManagementService(ctx, cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)))
 
     conversations = service.list_ai_conversations(task_name="ingest-system1")
 
@@ -2486,7 +2488,7 @@ def test_management_service_ignores_scheduled_tasks_for_oldest_runnable_age(db_m
         db_manager=db_manager,
         task_queue=task_queue,
     )
-    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    service = ManagementService(ctx, cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)))
 
     task_queue.enqueue(
         "ingest-system1",
@@ -2876,7 +2878,7 @@ def test_management_service_can_record_thought_into_journal(db_manager) -> None:
         repository=repository,
         task_queue=task_queue,
     )
-    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    service = ManagementService(ctx, cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)))
 
     payload = service.record_thought("remember the command bar")
 
@@ -2898,7 +2900,7 @@ def test_management_service_record_thought_uses_effective_service_workspace_not_
         repository=repository,
         task_queue=task_queue,
     )
-    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    service = ManagementService(ctx, cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)))
     monkeypatch.setattr(service, "_runtime_info", replace(service._runtime_info, workspace_id="workspace-boot"))
 
     payload = service.record_thought("remember the request workspace")

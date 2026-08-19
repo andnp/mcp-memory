@@ -30,6 +30,7 @@ from mcp_memory.core.task_handlers import (
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.daemon import create_daemon_app
+from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.hook_reminders import REMINDER_MESSAGE
 from mcp_memory.management.service import ManagementService
@@ -1741,7 +1742,7 @@ def test_postgres_management_service_uses_backend_safe_noop_provider_usage_fallb
                 task_queue=queue,
                 workspace_id="workspace-a",
             ),
-            SimpleNamespace(has_runtime=True, client_count=1),
+            cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
         )
 
         conversations = service.list_ai_conversations(limit=10)

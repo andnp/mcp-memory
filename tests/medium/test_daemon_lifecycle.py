@@ -4,9 +4,11 @@ import asyncio
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
@@ -15,6 +17,7 @@ import mcp_memory.daemon as daemon_module
 import mcp_memory.daemon_process as daemon_process_module
 from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
+from mcp_memory.context import ApplicationContext
 from mcp_memory.daemon import (
     DaemonMetadata,
     DaemonStopResult,
@@ -23,6 +26,7 @@ from mcp_memory.daemon import (
     read_daemon_metadata,
     stop_daemon,
 )
+from mcp_memory.daemon_ports import DaemonRoutesProvider
 from mcp_memory.daemon_process import (
     DaemonHealthAssessment,
     DaemonSpawnDetails,
@@ -1240,9 +1244,9 @@ async def test_is_daemon_healthy_stays_true_while_request_pool_is_saturated(tmp_
         socket_path=str(tmp_path / "daemon.sock"),
     )
     server = DaemonZmqServer(
-        context_factory=lambda _payload: None,
+        context_factory=cast(Callable[[dict[str, object]], ApplicationContext], lambda _payload: None),
         hook_handlers={"/api/block": _blocking_hook},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=tmp_path / "daemon.sock",
         metadata_provider=lambda: metadata,
         max_concurrent_requests=1,
@@ -1295,9 +1299,9 @@ async def test_is_daemon_healthy_stays_true_while_sync_management_request_runs(t
         socket_path=str(tmp_path / "daemon-overview.sock"),
     )
     server = DaemonZmqServer(
-        context_factory=lambda _payload: None,
+        context_factory=cast(Callable[[dict[str, object]], ApplicationContext], lambda _payload: None),
         hook_handlers={},
-        routes_provider=lambda: SimpleNamespace(service=_RoutesService()),
+        routes_provider=cast(DaemonRoutesProvider, lambda: SimpleNamespace(service=_RoutesService())),
         socket_path=tmp_path / "daemon-overview.sock",
         metadata_provider=lambda: metadata,
         max_concurrent_requests=1,
@@ -1334,9 +1338,9 @@ async def test_daemon_zmq_server_start_refuses_to_remove_live_socket(monkeypatch
     monkeypatch.setattr("mcp_memory.daemon_transport._remove_stale_socket", lambda path: removed.append(Path(path)))
 
     server = DaemonZmqServer(
-        context_factory=lambda _payload: None,
+        context_factory=cast(Callable[[dict[str, object]], ApplicationContext], lambda _payload: None),
         hook_handlers={},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
         metadata_provider=lambda: DaemonMetadata(
             host="127.0.0.1",

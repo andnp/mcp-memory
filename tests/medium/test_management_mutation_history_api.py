@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.curation_store import CurationActionReceipt, CurationReceiptState, CurationRun, SQLiteCurationStore
 from mcp_memory.daemon_dispatch import dispatch_management_request
+from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mutation_history import (
     MutationActorKind,
@@ -30,7 +32,7 @@ def _service(db_manager, mutation_history, curation) -> ManagementService:
             mutation_history=mutation_history,
             curation=curation,
         ).management_view(),
-        SimpleNamespace(has_runtime=True, client_count=1),
+        cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=1)),
     )
 
 

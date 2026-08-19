@@ -37,6 +37,7 @@ from mcp_memory.daemon_dispatch import (
     dispatch_management_request,
     error_payload,
 )
+from mcp_memory.daemon_ports import HookPersistencePort
 from mcp_memory.daemon_process import find_free_port
 from mcp_memory.daemon_runtime import DaemonRuntimeSession
 from mcp_memory.hook_reminders import HookReminderService
@@ -412,7 +413,7 @@ def _optional_request_str(arguments: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
-async def _handle_session_start(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
+async def _handle_session_start(app: FastAPI, ctx, hook_service: HookPersistencePort, arguments: dict[str, Any]) -> dict[str, Any]:
     request_scope = _request_scope_for_arguments(arguments)
     assert ctx.db_manager is not None
     await _cancel_idle_shutdown_task(app)
@@ -434,7 +435,7 @@ async def _handle_post_tool_use(ctx, arguments: dict[str, Any]) -> dict[str, Any
     return HookReminderService(ctx.db_manager, _workspace_id_for_request_scope(request_scope)).record_post_tool_use(arguments)
 
 
-async def _handle_session_end(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
+async def _handle_session_end(app: FastAPI, ctx, hook_service: HookPersistencePort, arguments: dict[str, Any]) -> dict[str, Any]:
     request_scope = _request_scope_for_arguments(arguments)
     assert ctx.db_manager is not None
     request_timestamp = _hook_payload_timestamp(arguments)

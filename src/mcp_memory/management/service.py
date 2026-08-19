@@ -10,6 +10,7 @@ from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.ports import EmbeddingMaintenancePort
+from mcp_memory.daemon_ports import ManagementControllerPort
 from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.integrations.memory_retrieval import (
     MemoryRetrievalPort,
@@ -67,6 +68,7 @@ from mcp_memory.management.runtime_health_service import (
     RuntimeHealthServiceDependencies,
     _coerce_transport_diagnostics_payload,  # noqa: F401 - retained for management helper compatibility
     _embedding_integrity_snapshot_payload,  # noqa: F401 - retained for management helper compatibility
+    _RuntimeController,
 )
 from mcp_memory.management.runtime_log_service import (
     RuntimeLogService,
@@ -97,7 +99,7 @@ class ManagementService:
     def __init__(
         self,
         ctx: ManagementRuntimeCapabilities | ManagementContext,
-        controller,
+        controller: ManagementControllerPort,
     ) -> None:
         is_composed_capabilities = isinstance(ctx, ManagementRuntimeCapabilities)
         capabilities = ctx if is_composed_capabilities else ManagementRuntimeCapabilities.from_context(ctx)
@@ -235,7 +237,7 @@ class ManagementService:
         self._runtime_health_service = RuntimeHealthService(
             RuntimeHealthServiceDependencies(
                 runtime_info=self._runtime_info,
-                controller=self._controller,
+                controller=cast(_RuntimeController, self._controller),
                 db_manager=self._db_manager,
                 storage_backend=self._storage_backend,
                 config=self._config,

@@ -4,11 +4,11 @@ import asyncio
 import os
 import sys
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from fastapi import FastAPI
 
@@ -25,7 +25,7 @@ from mcp_memory.daemon_background import (
 )
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
-from mcp_memory.daemon_ports import EmbeddingWarmupCompletionPort
+from mcp_memory.daemon_ports import EmbeddingWarmupCompletionPort, HookPersistencePort
 from mcp_memory.daemon_process import remove_metadata, write_metadata
 from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
@@ -50,10 +50,10 @@ class DaemonRuntimeSession:
         host: str,
         port: int,
         enable_idle_shutdown: bool,
-        request_scope_context_factory: Callable[[dict[str, object]], object],
-        session_start_handler: Callable[[dict[str, object]], Any],
-        post_tool_use_handler: Callable[[dict[str, object]], Any],
-        session_end_handler: Callable[[dict[str, object]], Any],
+        request_scope_context_factory: Callable[[dict[str, object]], ApplicationContext],
+        session_start_handler: Callable[[dict[str, object]], Awaitable[dict[str, object]]],
+        post_tool_use_handler: Callable[[dict[str, object]], Awaitable[dict[str, object]]],
+        session_end_handler: Callable[[dict[str, object]], Awaitable[dict[str, object]]],
         runtime_version: str | None,
         runtime_factory: Callable[[RuntimeBootstrapSpec], RuntimeComposition | ApplicationContext] = create_runtime_composition,
         embedding_warmup: Callable[[DaemonCapabilityBundle], Coroutine[object, object, bool]] = warm_embedding_model,
@@ -79,7 +79,7 @@ class DaemonRuntimeSession:
         self.runtime_lock = FilesystemLock(spec.lock_path.with_suffix(".runtime.lock"))
         self.composition: RuntimeComposition | None = None
         self.worker = None
-        self.hook_service: HookReminderService | None = None
+        self.hook_service: HookPersistencePort | None = None
         self.transport: DaemonZmqServer | None = None
         self.warmup_task: asyncio.Task[bool] | None = None
         self.backup_task: asyncio.Task[None] | None = None
@@ -127,6 +127,11 @@ class DaemonRuntimeSession:
                 await self.worker.start()
 
             self.hook_service = HookReminderService(runtime.db_manager, None)
+            def routes_provider() -> DaemonRoutes:
+                return self.app.state.routes
+
+            def metadata_provider() -> DaemonMetadata:
+                return self.app.state.metadata
             self.transport = DaemonZmqServer(
                 context_factory=self.request_scope_context_factory,
                 hook_handlers={
@@ -134,9 +139,9 @@ class DaemonRuntimeSession:
                     "/api/hooks/post-tool-use": self.post_tool_use_handler,
                     "/api/hooks/session-end": self.session_end_handler,
                 },
-                routes_provider=lambda: self.app.state.routes,
+                routes_provider=routes_provider,
                 socket_path=self.socket_path,
-                metadata_provider=lambda: self.app.state.metadata,
+                metadata_provider=metadata_provider,
             )
             await self.transport.start()
 

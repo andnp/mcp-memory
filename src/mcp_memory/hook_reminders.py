@@ -23,7 +23,7 @@ class HookConversationRecord:
     last_ping_at: float | None
     last_reminder_at: float | None
     last_tool_name: str | None
-    last_payload: dict[str, Any]
+    last_payload: dict[str, object]
     ended_at: float | None
 
 
@@ -32,7 +32,7 @@ class HookReminderService:
         self._db = db_manager
         self._workspace_id = workspace_id
 
-    def record_session_start(self, conversation_id: str, payload: dict[str, Any] | None = None) -> dict[str, str]:
+    def record_session_start(self, conversation_id: str, payload: dict[str, object] | None = None) -> dict[str, str]:
         normalized_id = _normalize_conversation_id(conversation_id)
         now = _payload_timestamp(payload)
         self._execute_write(
@@ -51,7 +51,7 @@ class HookReminderService:
         )
         return {"status": "ok", "conversation_id": normalized_id}
 
-    def record_post_tool_use(self, payload: dict[str, Any]) -> dict[str, str]:
+    def record_post_tool_use(self, payload: dict[str, object]) -> dict[str, str]:
         conversation_id = _conversation_id_from_payload(payload)
         now = _payload_timestamp(payload)
         tool_name = _tool_name_from_payload(payload)
@@ -113,7 +113,7 @@ class HookReminderService:
             "additionalContext": REMINDER_MESSAGE,
         }
 
-    def record_session_end(self, conversation_id: str, payload: dict[str, Any] | None = None) -> dict[str, str]:
+    def record_session_end(self, conversation_id: str, payload: dict[str, object] | None = None) -> dict[str, str]:
         normalized_id = _normalize_conversation_id(conversation_id)
         now = _payload_timestamp(payload)
         self._execute_write(
@@ -214,24 +214,24 @@ class HookReminderService:
         return None if row is None else tuple(row)
 
 
-def _conversation_id_from_payload(payload: dict[str, Any]) -> str:
+def _conversation_id_from_payload(payload: dict[str, object]) -> str:
     raw = payload.get("conversation_id") or payload.get("sessionId") or payload.get("session_id")
     return _normalize_conversation_id(raw)
 
 
-def _tool_name_from_payload(payload: dict[str, Any]) -> str:
+def _tool_name_from_payload(payload: dict[str, object]) -> str:
     raw = payload.get("tool_name") or payload.get("tool") or payload.get("action") or "unknown"
     return str(raw).strip() or "unknown"
 
 
-def _normalize_conversation_id(value: Any) -> str:
+def _normalize_conversation_id(value: object) -> str:
     normalized = str(value or "").strip()
     if not normalized:
         raise ValueError("conversation_id_required")
     return normalized
 
 
-def _payload_timestamp(payload: dict[str, Any] | None) -> float:
+def _payload_timestamp(payload: dict[str, object] | None) -> float:
     if payload is None:
         return time.time()
     raw = payload.get("timestamp")
@@ -249,7 +249,7 @@ def _payload_timestamp(payload: dict[str, Any] | None) -> float:
     return time.time()
 
 
-def _decode_payload(raw: object) -> dict[str, Any]:
+def _decode_payload(raw: object) -> dict[str, object]:
     if not isinstance(raw, str) or not raw.strip():
         return {}
     try:

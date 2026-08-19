@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.context import ApplicationContext
 from mcp_memory.daemon import create_daemon_app, read_daemon_metadata
 from mcp_memory.daemon_models import DaemonControllerView
+from mcp_memory.daemon_ports import DaemonMetadataProvider, DaemonRoutesProvider, ManagementControllerPort
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
@@ -1212,11 +1214,11 @@ def test_management_api_accepts_30_day_nerd_metrics_window(monkeypatch, tmp_path
 async def test_daemon_zmq_dispatch_rejects_invalid_transport_payload_shapes(tmp_path: Path) -> None:
     socket_path = tmp_path / "daemon.sock"
     server = DaemonZmqServer(
-        context_factory=lambda _arguments: None,
+        context_factory=cast(Callable[[dict[str, object]], ApplicationContext], lambda _arguments: None),
         hook_handlers={},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: None,
+        metadata_provider=cast(DaemonMetadataProvider, lambda: None),
     )
 
     assert await server._dispatch(b"not-json") == {"status": "error", "error": "invalid_transport_payload"}
@@ -1250,9 +1252,9 @@ async def test_daemon_zmq_dispatch_processes_tool_requests_concurrently(monkeypa
     server = DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: None,
+        metadata_provider=cast(DaemonMetadataProvider, lambda: None),
         max_concurrent_requests=4,
     )
     await server.start()
@@ -1375,15 +1377,15 @@ async def test_daemon_zmq_api_record_thought_fast_path_ignores_saturated_request
         )
     )
     server = DaemonZmqServer(
-        context_factory=lambda _arguments: None,
+        context_factory=cast(Callable[[dict[str, object]], ApplicationContext], lambda _arguments: None),
         hook_handlers={"/api/hooks/block": _blocking_handler},
-        routes_provider=lambda: routes,
+        routes_provider=cast(DaemonRoutesProvider, lambda: routes),
         socket_path=socket_path,
-        metadata_provider=lambda: _HealthMetadata(
+        metadata_provider=cast(DaemonMetadataProvider, lambda: _HealthMetadata(
             status="ready",
             transport="zmq",
             socket_path=str(socket_path),
-        ),
+        )),
         max_concurrent_requests=1,
     )
     await server.start()
@@ -1444,13 +1446,13 @@ async def test_daemon_zmq_health_fast_path_ignores_saturated_request_pool(tmp_pa
     server = DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={"/api/hooks/block": _blocking_handler},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: _HealthMetadata(
+        metadata_provider=cast(DaemonMetadataProvider, lambda: _HealthMetadata(
             status="ready",
             transport="zmq",
             socket_path=str(socket_path),
-        ),
+        )),
         max_concurrent_requests=1,
     )
     await server.start()
@@ -1521,13 +1523,13 @@ async def test_management_health_reports_transport_queue_wait_and_pressure(monke
     server = DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={"/api/hooks/block": _blocking_handler},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: _HealthMetadata(
+        metadata_provider=cast(DaemonMetadataProvider, lambda: _HealthMetadata(
             status="ready",
             transport="zmq",
             socket_path=str(socket_path),
-        ),
+        )),
         max_concurrent_requests=1,
     )
     service = ManagementService(
@@ -1639,17 +1641,17 @@ async def test_transport_slow_path_warning_is_persisted_to_runtime_logs(monkeypa
     server = DaemonZmqServer(
         context_factory=lambda _arguments: ApplicationContext(),
         hook_handlers={"/api/hooks/slow": _slow_handler},
-        routes_provider=lambda: None,
+        routes_provider=cast(DaemonRoutesProvider, lambda: None),
         socket_path=socket_path,
-        metadata_provider=lambda: _HealthMetadata(
+        metadata_provider=cast(DaemonMetadataProvider, lambda: _HealthMetadata(
             status="ready",
             transport="zmq",
             socket_path=str(socket_path),
-        ),
+        )),
     )
     service = ManagementService(
         runtime,
-        controller=SimpleNamespace(has_runtime=True, client_count=0),
+        controller=cast(ManagementControllerPort, SimpleNamespace(has_runtime=True, client_count=0)),
     )
 
     await server.start()
