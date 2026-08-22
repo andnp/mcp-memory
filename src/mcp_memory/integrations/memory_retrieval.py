@@ -218,17 +218,19 @@ def build_search_execution_diagnostics(
                 "search diagnostics trace projection failed: %s",
                 type(error).__name__,
             )
+    candidate_counts = {
+        str(stage): int(count) for stage, count in outcome.candidate_counts.items()
+    }
     return SearchExecutionDiagnostics(
         timing_ms=timing_ms,
+        keyword_candidate_count=candidate_counts.get("keyword", 0),
         semantic_candidate_count=semantic_candidate_count,
         semantic_only_candidate_count=semantic_only_count,
         semantic_abstention_count=abstention_count,
         semantic_abstention_rate=semantic_abstention_rate,
         semantic_abstained=semantic_abstained,
         candidate_count=int(outcome.candidate_count),
-        candidate_counts={
-            str(stage): int(count) for stage, count in outcome.candidate_counts.items()
-        },
+        candidate_counts=candidate_counts,
         kernel_diagnostics=list(outcome.diagnostics),
         cache_diagnostics=list(outcome.cache_diagnostics),
         failures=[

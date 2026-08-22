@@ -276,6 +276,7 @@ async def test_async_and_sync_diagnostics_share_the_same_projection() -> None:
         "budgets": {"keyword": 5, "vector": 5, "graph_seeds": 10, "rerank": 0},
         "skipped": ["graph:awaiting_seed_confidence"],
     }
+    assert async_payload["keyword_candidate_count"] == 2
     overlap = cast(dict[str, object], async_payload["overlap"])
     assert overlap["raw_lane_overlap_count"] is None
 
