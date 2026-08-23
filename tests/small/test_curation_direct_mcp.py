@@ -24,6 +24,7 @@ from mcp_memory.core.curation_reconciliation import (
     ProviderAttemptIdentity,
     reconcile_provider_attempts,
 )
+from mcp_memory.core.ports.curation import CandidateDisposition
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers.curator_support import build_curator_context_packet
@@ -314,6 +315,81 @@ def test_curator_packet_identity_is_deterministic() -> None:
     assert first.to_mapping()["seeds"] == ["seed"]
     assert first.to_mapping()["support"] == ["support"]
     assert first.to_mapping()["record_tokens"]["seed"].startswith("v1:")
+
+
+def test_curator_packet_exposes_bounded_record_evidence() -> None:
+    """Expose advisory record signals without disclosing full record content."""
+    record = _packet_record("seed", content="secret full record body")
+    record.tags = ["one", "two"]
+    batch = SamplingBatch(None, "semantic", None, 1, cast(Any, [record]))
+
+    packet = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)),
+        cast(Any, _packet_task()),
+        batch,
+        [record],
+        [record],
+    ).to_mapping()
+
+    evidence = packet["records"][0]["evidence"]
+    assert evidence["role"] == "seed"
+    assert evidence["signals"]["tags"] == ["one", "two"]
+    assert evidence["adjacency"] == []
+    assert "secret full record body" not in str(evidence)
+
+
+def test_curator_packet_bounds_adjacency_and_feedback() -> None:
+    """Bound relationship descriptors and historical feedback in packet entries."""
+    record_id = str(uuid4())
+    record = _packet_record(record_id)
+    edges: list[object] = [
+        SimpleNamespace(source_id=record_id, target_id=memory_id, link_type="SUPPORTS", context="full context")
+        for memory_id in ("z", "a", "b", "c")
+    ]
+
+    def get_links(_memory_id: str, *, direction: str) -> list[object]:
+        return edges if direction == "outgoing" else []
+
+    state = SimpleNamespace(
+        disposition=CandidateDisposition.ESCALATED,
+        last_disposition_reason="retrieval_regression",
+        escalation_count=2,
+        last_run_id=uuid4(),
+        last_escalated_strategy="quality-signal",
+        coverage_evidence_json={"quality_regression": {"neutral_reason": "x" * 200}},
+    )
+    ctx = SimpleNamespace(
+        repository=SimpleNamespace(get_links=get_links),
+        curation=SimpleNamespace(get_candidate_state=lambda _memory_id: state),
+    )
+    batch = SamplingBatch(None, "semantic", None, 1, cast(Any, [record]))
+
+    packet = build_curator_context_packet(
+        cast(Any, ctx), cast(Any, _packet_task()), batch, [record], [record]
+    ).to_mapping()
+
+    evidence = packet["records"][0]["evidence"]
+    assert [item["memory_id"] for item in evidence["adjacency"]] == ["a", "b", "c"]
+    assert all(set(item) == {"memory_id", "direction", "type"} for item in evidence["adjacency"])
+    assert evidence["prior_feedback"]["reason"] == "retrieval_regression"
+    assert len(evidence["prior_feedback"]["neutral_reason"]) == 120
+
+
+def test_curator_packet_identity_includes_record_evidence() -> None:
+    """Change provider-visible record evidence when calculating packet identity."""
+    first_record = _packet_record("seed")
+    second_record = _packet_record("seed")
+    second_record.tags = ["new-anchor"]
+    batch = SamplingBatch(None, "semantic", None, 1, cast(Any, [first_record]))
+
+    first = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)), cast(Any, _packet_task()), batch, [first_record], [first_record]
+    )
+    second = build_curator_context_packet(
+        cast(Any, SimpleNamespace(repository=None)), cast(Any, _packet_task()), batch, [second_record], [second_record]
+    )
+
+    assert first.packet_id != second.packet_id
 
 
 def test_curator_packet_records_omit_overflow_with_bounds_metadata() -> None:

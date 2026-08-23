@@ -86,6 +86,8 @@ CURATOR_MAX_SUMMARY_CHARS = 220
 CURATOR_PACKET_MAX_RECORDS = CURATOR_MAX_BATCH_RECORDS + CURATOR_MAX_SUPPORT_RECORDS
 CURATOR_PACKET_MAX_CHARS = CURATOR_PACKET_MAX_RECORDS * (CURATOR_MAX_TITLE_CHARS + CURATOR_MAX_SUMMARY_CHARS)
 CURATOR_MAX_TAGS = 6
+CURATOR_MAX_PACKET_ADJACENCY = 3
+CURATOR_MAX_PACKET_FEEDBACK_CHARS = 120
 CURATOR_LOW_READ_REVIEW_THRESHOLD = 3
 CURATOR_LOW_CONVERSION_EXPOSURE_THRESHOLD = 3
 CURATOR_LOW_CONVERSION_MAX_RATE = 0.25
@@ -283,6 +285,8 @@ def build_curator_context_packet(
                 strategy_signals=dict(
                     (seed_batch.selector_feature_snapshot or {}).get("strategy_signals", {})
                 ),
+                adjacency=edges,
+                prior_feedback=curator_quality_feedback(ctx, record),
             )
         )
         disclosed_chars += entry_chars
@@ -357,7 +361,15 @@ def _packet_edges(ctx: ApplicationContext, memory_id: str) -> list[dict[str, Any
                     "context": context,
                 }
             )
-    return edges
+    return sorted(
+        edges,
+        key=lambda edge: (
+            edge["source_id"],
+            edge["target_id"],
+            edge["type"],
+            str(edge["context"] or ""),
+        ),
+    )
 
 
 def _packet_record_entry(
@@ -370,6 +382,8 @@ def _packet_record_entry(
     strategy_reason: str | None,
     strategy_scores: dict[str, float],
     strategy_signals: dict[str, Any],
+    adjacency: list[dict[str, Any]] | None,
+    prior_feedback: dict[str, Any] | None,
 ) -> dict[str, Any]:
     return {
         "memory_id": memory_id,
@@ -383,12 +397,72 @@ def _packet_record_entry(
             "strategy_scores": strategy_scores,
             "strategy_signals": strategy_signals,
         },
+        "evidence": {
+            "role": role,
+            "signals": {
+                "size_band": curator_size_band_for_char_count(len(str(record.content).strip())),
+                "retrieval_friction": retrieval_friction_flags(record),
+                "read_count": int(getattr(record, "read_count", 0)),
+                "last_surfaced": bool(getattr(record, "last_surfaced_at", None)),
+                "tags": list(getattr(record, "tags", ())[:CURATOR_MAX_TAGS]),
+            },
+            "adjacency": _packet_adjacency(memory_id, adjacency),
+            "prior_feedback": _packet_feedback(prior_feedback),
+        },
         "disclosure": {
             "fields": ["memory_id", "title", "summary", "memory_type", "status"],
             "content": "omitted",
             "summary": "bounded_excerpt",
         },
     }
+
+
+def _packet_adjacency(memory_id: str, edges: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    if edges is None:
+        return []
+    adjacency: list[dict[str, str]] = []
+    for edge in edges:
+        source_id = str(edge["source_id"])
+        target_id = str(edge["target_id"])
+        if source_id == memory_id:
+            direction, related_id = "outgoing", target_id
+        elif target_id == memory_id:
+            direction, related_id = "incoming", source_id
+        else:
+            continue
+        adjacency.append(
+            {
+                "memory_id": related_id,
+                "direction": direction,
+                "type": str(edge["type"]),
+            }
+        )
+        if len(adjacency) >= CURATOR_MAX_PACKET_ADJACENCY:
+            break
+    return adjacency
+
+
+def _packet_feedback(feedback: dict[str, Any] | None) -> dict[str, Any]:
+    if not feedback:
+        return {}
+    allowed_fields = (
+        "reason",
+        "escalation_count",
+        "last_run_id",
+        "last_strategy",
+        "retrieval_regression_count",
+        "zero_result_change",
+        "acceptance_met",
+        "neutral_reason",
+    )
+    bounded: dict[str, Any] = {}
+    for field in allowed_fields:
+        value = feedback.get(field)
+        if isinstance(value, str):
+            bounded[field] = truncate_text(value, CURATOR_MAX_PACKET_FEEDBACK_CHARS)
+        elif value is not None:
+            bounded[field] = value
+    return bounded
 
 
 
