@@ -17,6 +17,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Protocol, cast
 from uuid import UUID
 
@@ -75,6 +76,55 @@ class MutationResult:
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "affected_ids", tuple(str(value) for value in affected_ids))
         object.__setattr__(self, "verification_descriptor", verification_descriptor)
+
+
+@dataclass(frozen=True)
+class CurationActionRequest:
+    """One already-decided action submitted to an ordered batch."""
+
+    run_id: UUID
+    action_id: UUID
+    target_ids: tuple[str, ...]
+    expected_tokens: Mapping[str, str]
+    apply: Callable[[CurationTransaction], MutationResult]
+    preconditions: Any | None = None
+    operation: str | None = None
+    payload: Any | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "target_ids", tuple(str(value) for value in self.target_ids))
+        object.__setattr__(self, "expected_tokens", MappingProxyType(dict(self.expected_tokens)))
+
+
+@dataclass(frozen=True)
+class CurationActionOutcome:
+    """The receipt or error produced for one ordered action request."""
+
+    receipt: CurationActionReceipt | None = None
+    error: CurationActionError | None = None
+
+    def __post_init__(self) -> None:
+        if (self.receipt is None) == (self.error is None):
+            raise ValueError("an action outcome must contain exactly one receipt or error")
+
+
+@dataclass(frozen=True)
+class CurationActionBatchResult:
+    """Ordered outcomes corresponding one-for-one with submitted requests."""
+
+    outcomes: tuple[CurationActionOutcome, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "outcomes", tuple(self.outcomes))
+
+
+class CurationActionBatchExecutor(Protocol):
+    """Protocol for sequentially executing already-decided action requests."""
+
+    def execute_actions(
+        self,
+        requests: Sequence[CurationActionRequest],
+    ) -> CurationActionBatchResult: ...
 
 
 class CurationTransaction(Protocol):
@@ -431,10 +481,14 @@ def prepare_memory_create(values: Mapping[str, object]) -> PreparedMemoryCreate:
 __all__ = [
     "VALID_MEMORY_STATUSES",
     "VALID_MEMORY_TYPES",
+    "CurationActionBatchExecutor",
+    "CurationActionBatchResult",
     "CurationActionContractError",
     "CurationActionError",
     "CurationActionFatalError",
     "CurationActionInjectedFailure",
+    "CurationActionOutcome",
+    "CurationActionRequest",
     "CurationActionStaleError",
     "CurationActionStore",
     "CurationActionTransientError",
