@@ -43,7 +43,10 @@ from mcp_memory.core.ingress_source import normalize_source_snapshot
 from mcp_memory.core.ports.search import INTERNAL_SEARCH_TOOL_NAME
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
-from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
+from mcp_memory.core.task_handlers.agentic_guardrails import (
+    build_ingest_guardrails,
+    ingest_memory_quality_error,
+)
 from mcp_memory.core.task_handlers.agentic_result_support import (
     build_tool_usage_summary,
     coerce_non_negative_int,
@@ -739,6 +742,22 @@ def _execute_ingest_actions(
             continue
 
         if action_type == "append":
+            append_content = _format_entries(selected_entries)
+            quality_error = ingest_memory_quality_error(
+                title=str(action.get("title", "")),
+                content=append_content,
+                summary=action.get("summary") if isinstance(action.get("summary"), str) else None,
+            )
+            if quality_error is not None:
+                handled_ids.extend(entry.id for entry in selected_entries)
+                entry_dispositions.extend(
+                    _build_semantic_entry_dispositions(
+                        selected_entries,
+                        disposition="ignored",
+                        reason=quality_error,
+                    )
+                )
+                continue
             target_memory_id = str(action.get("target_memory_id", "")).strip()
             target = None if not target_memory_id else ctx.repository.get_memory(target_memory_id)
             if target is None:
@@ -773,6 +792,21 @@ def _execute_ingest_actions(
 
         content = str(action.get("content", "")).strip() or _format_entries(selected_entries)
         title = str(action.get("title", "")).strip() or _build_title(selected_entries)
+        quality_error = ingest_memory_quality_error(
+            title=title,
+            content=content,
+            summary=action.get("summary") if isinstance(action.get("summary"), str) else None,
+        )
+        if quality_error is not None:
+            handled_ids.extend(entry.id for entry in selected_entries)
+            entry_dispositions.extend(
+                _build_semantic_entry_dispositions(
+                    selected_entries,
+                    disposition="ignored",
+                    reason=quality_error,
+                )
+            )
+            continue
         record = ctx.repository.create_memory(
             title=title,
             content=content,
@@ -836,10 +870,20 @@ def _fallback_ingest_entries(
     entries,
 ) -> tuple[list[str], list[int], int, list[dict[str, Any]]]:
     assert ctx.repository is not None
+    title = _build_title(entries)
+    content = _format_entries(entries)
+    quality_error = ingest_memory_quality_error(title=title, content=content, summary=None)
+    if quality_error is not None:
+        return (
+            [],
+            [entry.id for entry in entries],
+            0,
+            _build_semantic_entry_dispositions(entries, disposition="ignored", reason=quality_error),
+        )
     workspace_ids = _resolve_entry_workspace_ids(entries, workspace_id)
     record = ctx.repository.create_memory(
-        title=_build_title(entries),
-        content=_format_entries(entries),
+        title=title,
+        content=content,
         workspace_ids=workspace_ids,
         tags=[],
         memory_type="observation",

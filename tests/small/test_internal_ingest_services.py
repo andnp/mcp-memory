@@ -22,6 +22,7 @@ from mcp_memory.core.task_handlers import (
     SUMMARIZE_MEMORY_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
 )
+from mcp_memory.core.task_handlers.agentic_guardrails import ingest_memory_quality_error
 from mcp_memory.core.task_submission import enqueue_summary_refresh_task
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.mcp.internal_ingest_services import (
@@ -43,6 +44,24 @@ from mcp_memory.storage.ingress_mutation_transaction import (
 )
 
 pytestmark = pytest.mark.small
+
+
+def test_ingest_quality_filter_rejects_dated_execution_residue() -> None:
+    """Reject dated progress and test-status notes without a durable claim."""
+    assert ingest_memory_quality_error(
+        title="2026-08-23 refactor notes",
+        content="I did a refactor. The test suite was already red when I started, so I didn't fix it.",
+        summary="Progress update",
+    ) == "routine progress and execution residue must be omitted unless it contains a durable claim"
+
+
+def test_ingest_quality_filter_preserves_durable_dated_context() -> None:
+    """Allow dated decisions and constraints even when execution details are present."""
+    assert ingest_memory_quality_error(
+        title="Migration decision",
+        content="On 2026-08-23, the root cause was an incompatible schema; the migration must remain backward compatible.",
+        summary="Durable decision and root cause",
+    ) is None
 
 
 @dataclass

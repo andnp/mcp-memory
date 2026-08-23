@@ -17,6 +17,7 @@ from mcp_memory.core.ingest_provenance import (
 from mcp_memory.core.ingress_evidence import IngressActionReceipt, IngressReceiptStatus
 from mcp_memory.core.ingress_identity import action_identity, canonical_payload_digest
 from mcp_memory.core.ports.ingress import IngressActionReceiptIdentityConflictError
+from mcp_memory.core.task_handlers.agentic_guardrails import ingest_memory_quality_error
 from mcp_memory.core.task_handlers.ingest import build_next_ingest_batch_payload
 from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
@@ -25,7 +26,6 @@ from mcp_memory.mcp.internal_ingest_keys import (
 )
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
-    _memory_write_quality_error,
     _memory_write_quality_warnings,
     _merge_memory_metadata,
     _normalize_tags,
@@ -86,7 +86,7 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
         return {"status": "error", "error": "memory_not_active"}
 
     summary = optional_string(arguments, "summary") if "summary" in arguments else record.summary
-    quality_error = _memory_write_quality_error(
+    quality_error = ingest_memory_quality_error(
         title=record.title,
         content=content,
         summary=optional_string(arguments, "summary"),
@@ -197,7 +197,7 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
     summary = optional_string(arguments, "summary")
     memory_type = optional_string(arguments, "memory_type") or "observation"
     tags = _normalize_tags([*string_list(arguments, "tags")])
-    quality_error = _memory_write_quality_error(title=title, content=content, summary=summary)
+    quality_error = ingest_memory_quality_error(title=title, content=content, summary=summary)
     if quality_error is not None:
         return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
     warnings = _memory_write_quality_warnings(summary=summary, memory_type=memory_type, tags=tags, content=content)
@@ -330,7 +330,7 @@ def _execute_atomic_append(
             raise _AtomicIngressServiceError("memory_not_found")
         if record.status != "active":
             raise _AtomicIngressServiceError("memory_not_active")
-        quality_error = _memory_write_quality_error(
+        quality_error = ingest_memory_quality_error(
             title=record.title,
             content=content,
             summary=requested_summary,
@@ -435,7 +435,7 @@ def _execute_atomic_create(
     memory_type = optional_string(arguments, "memory_type") or "observation"
     status = optional_string(arguments, "status") or "active"
     tags = _normalize_tags([*string_list(arguments, "tags")])
-    quality_error = _memory_write_quality_error(title=title, content=content, summary=summary)
+    quality_error = ingest_memory_quality_error(title=title, content=content, summary=summary)
     if quality_error is not None:
         return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
     warnings = _memory_write_quality_warnings(summary=summary, memory_type=memory_type, tags=tags, content=content)
