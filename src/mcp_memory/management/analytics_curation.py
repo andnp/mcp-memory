@@ -195,10 +195,6 @@ def build_curation_metrics(
     valid_plan_count = sum(
         1 for row in runs if _text(row.get("outcome"), "") in _VALID_PLAN_OUTCOMES
     )
-    accepted_mutation_count = sum(
-        _json_non_negative_int(_json_mapping(row.get("budget_usage_json")).get("accepted_mutations"))
-        for row in runs
-    )
     provider_failure_count = sum(
         1 for row in runs if row.get("outcome") == "provider_failed"
     )
@@ -359,7 +355,6 @@ def build_curation_metrics(
         valid_plan_count=valid_plan_count,
         valid_plan_rate=_ratio(valid_plan_count, len(runs)),
         no_op_rate=_ratio(run_outcomes.get("no_op", 0), len(runs)),
-        accepted_mutation_count=accepted_mutation_count,
         verification_failure_count=verification_failure_count,
         provider_failure_count=provider_failure_count,
         retry_count=retry_count,

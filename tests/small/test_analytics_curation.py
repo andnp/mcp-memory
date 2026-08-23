@@ -270,11 +270,11 @@ def test_curation_metrics_report_plan_yield_failures_retries_and_categories(db_m
     now = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
     connection = db_manager.get_connection()
     runs = [
-        ("no-op", "no_op", None, {"accepted_mutations": 0, "planner_attempts": 1}),
-        ("invalid", "invalid_plan", None, {"accepted_mutations": 0, "planner_attempts": 2}),
-        ("provider", "provider_failed", None, {"accepted_mutations": 0, "planner_attempts": 1}),
-        ("applied", "applied", None, {"accepted_mutations": 2, "planner_attempts": 2}),
-        ("verification", "verification_failed", "retry", {"accepted_mutations": 1, "planner_attempts": 1}),
+        ("no-op", "no_op", None, {"planner_attempts": 1}),
+        ("invalid", "invalid_plan", None, {"planner_attempts": 2}),
+        ("provider", "provider_failed", None, {"planner_attempts": 1}),
+        ("applied", "applied", None, {"planner_attempts": 2}),
+        ("verification", "verification_failed", "retry", {"planner_attempts": 1}),
     ]
     for suffix, outcome, retry_reason, budget_usage in runs:
         connection.execute(
@@ -315,7 +315,6 @@ def test_curation_metrics_report_plan_yield_failures_retries_and_categories(db_m
     assert metrics.valid_plan_count == 3
     assert metrics.valid_plan_rate == 0.6
     assert metrics.no_op_rate == 0.2
-    assert metrics.accepted_mutation_count == 3
     assert metrics.verification_failure_count == 1
     assert metrics.provider_failure_count == 1
     assert metrics.retry_count == 3

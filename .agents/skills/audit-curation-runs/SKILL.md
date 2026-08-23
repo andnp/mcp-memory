@@ -101,7 +101,7 @@ Separate these quantities in the report:
 
 - **Attempts:** total runs, completed runs, retries, cancellations, and active
   runs.
-- **Yield:** mutation-bearing runs, persisted mutation count, accepted actions,
+- **Yield:** mutation-bearing runs, persisted mutation count, applied actions,
   verified receipts, and the operation/category mix.
 - **Safety:** invalid plans, provider failures, verification failures, rejected
   receipts, stale-precondition errors, and admission skips.

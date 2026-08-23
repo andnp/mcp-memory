@@ -402,7 +402,7 @@ def _selection_priority_score(row: _UtilityAccumulator | SelectionStrategyUtilit
     quality_failures = max(row.quality_failure_runs, 0)
     observed_quality_waves = passing_waves + quality_failures
     quality_pass_rate = (passing_waves + 1.0) / (observed_quality_waves + 2.0)
-    accepted_per_passing_wave = (max(row.productive_mutations, 0) + 1.0) / (passing_waves + 2.0)
+    productive_per_passing_wave = (max(row.productive_mutations, 0) + 1.0) / (passing_waves + 2.0)
     average_candidate_count = _average_candidate_count(row)
     opportunity = (
         _clamp01(average_candidate_count / SAMPLER_PRIORITY_OPPORTUNITY_SCALE)
@@ -431,7 +431,7 @@ def _selection_priority_score(row: _UtilityAccumulator | SelectionStrategyUtilit
     score = (
         0.15 * opportunity
         + 0.30 * quality_pass_rate
-        + 0.25 * _clamp01(accepted_per_passing_wave / SAMPLER_PRIORITY_YIELD_SCALE)
+        + 0.25 * _clamp01(productive_per_passing_wave / SAMPLER_PRIORITY_YIELD_SCALE)
         + 0.10 * coverage
         + 0.05 * recency
         + 0.10 * exploration

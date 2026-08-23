@@ -18,7 +18,6 @@ from mcp_memory.core.curation_quality import (
     quality_productive_mutation_count,
 )
 from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
-from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
 from mcp_memory.core.ports.curation import (
     CurationRepository,
@@ -38,7 +37,6 @@ async def run_curator_direct_mcp(
     task: TaskRecord,
     *,
     provider: Any,
-    mutation_budget: CurationMutationBudget | None = None,
     campaign_hypothesis: CampaignHypothesis | None = None,
     seed_batch: Any,
     sampled_records: list[Any],
@@ -114,7 +112,6 @@ async def run_curator_direct_mcp(
             packet_id=packet_id,
         )
 
-    budget = mutation_budget or CurationMutationBudget()
     session = None
     reset_agentic_tool_tracking(ctx, task.id, execution_epoch=task.execution_epoch, run_id=run.run_id)
     try:
@@ -127,7 +124,6 @@ async def run_curator_direct_mcp(
                 seed_records=seed_records,
                 context_packet=context_packet,
                 campaign_hypothesis=campaign_hypothesis,
-                mutation_budget=budget,
             )
         )
     except Exception:
@@ -462,16 +458,11 @@ def _direct_curator_prompt(
     task: TaskRecord,
     seed_records: list[Any],
     campaign_hypothesis: CampaignHypothesis | None,
-    mutation_budget: CurationMutationBudget,
     context_packet: Any | None = None,
 ) -> str:
     context = {
         "task_id": task.id,
         "campaign_hypothesis": campaign_hypothesis,
-        "mutation_budget": {
-            "max_accepted_mutations": mutation_budget.max_accepted_mutations,
-            "max_proposed_actions": mutation_budget.max_proposed_actions,
-        },
         "context_packet": (
             context_packet.to_mapping()
             if context_packet is not None

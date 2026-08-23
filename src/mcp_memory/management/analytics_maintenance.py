@@ -35,7 +35,6 @@ _RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
     ("lines_compressed", "lines_compressed"),
     ("valid_plan_count", "valid_plan_count"),
     ("no_op_count", "no_op_count"),
-    ("accepted_mutation_count", "accepted_mutation_count"),
     ("verification_failure_count", "verification_failure_count"),
     ("provider_failure_count", "provider_failure_count"),
     ("retry_count", "retry_count"),
@@ -89,7 +88,6 @@ class _MaintenanceSummaryAccumulator:
     lines_compressed: int = 0
     valid_plan_count: int = 0
     no_op_count: int = 0
-    accepted_mutation_count: int = 0
     verification_failure_count: int = 0
     provider_failure_count: int = 0
     retry_count: int = 0
@@ -199,7 +197,6 @@ def build_maintenance_summary(
             delta_total=accumulator.delta_total,
             valid_plan_count=accumulator.valid_plan_count,
             no_op_count=accumulator.no_op_count,
-            accepted_mutation_count=accumulator.accepted_mutation_count,
             verification_failure_count=accumulator.verification_failure_count,
             provider_failure_count=accumulator.provider_failure_count,
             retry_count=accumulator.retry_count,
@@ -272,7 +269,6 @@ def _run_reported_delta_counts(result: TaskResultView) -> dict[str, int]:
         "lines_compressed": result.lines_compressed,
         "valid_plan_count": int(_curation_valid_plan(result)),
         "no_op_count": int(result.curation_outcome == "no_op"),
-        "accepted_mutation_count": result.curation_accepted_mutation_count,
         "verification_failure_count": result.curation_verification_failure_count,
         "provider_failure_count": result.curation_provider_failure_count,
         "retry_count": result.curation_retry_count,
@@ -356,7 +352,6 @@ def _build_agent_yield_payload(
         delta_total=accumulator.delta_total,
         valid_plan_count=accumulator.valid_plan_count,
         no_op_count=accumulator.no_op_count,
-        accepted_mutation_count=accumulator.accepted_mutation_count,
         verification_failure_count=accumulator.verification_failure_count,
         provider_failure_count=accumulator.provider_failure_count,
         retry_count=accumulator.retry_count,

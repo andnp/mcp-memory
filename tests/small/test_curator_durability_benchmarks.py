@@ -6,7 +6,6 @@ from typing import cast
 import pytest
 
 from mcp_memory.core.curation_direct_mcp import _direct_curator_prompt
-from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_support import (
     curator_seed_payload_item,
@@ -160,7 +159,6 @@ def test_direct_prompt_requires_guarded_curator_judgment() -> None:
         task=cast(TaskRecord, SimpleNamespace(id="curator-durability-benchmark")),
         seed_records=[],
         campaign_hypothesis=None,
-        mutation_budget=CurationMutationBudget(max_accepted_mutations=2),
     )
 
     assert "distinguish durable content" in prompt

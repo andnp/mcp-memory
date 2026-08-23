@@ -352,6 +352,8 @@ def campaign_hypothesis_from_payload(payload: Mapping[str, Any] | None) -> Campa
 
 
 class CurationBudgetUsage(CurationModel):
+    model_config = ConfigDict(extra="ignore")
+
     seed_records: int = 0
     support_records: int = 0
     exploratory_records: int = 0
@@ -359,8 +361,6 @@ class CurationBudgetUsage(CurationModel):
     read_tool_calls: int = 0
     records_returned: int = 0
     proposed_actions: int = 0
-    accepted_mutations: int = 0
-    # Retained so historical typed-curation payloads remain readable.
     planner_attempts: int = 0
     premium_requests: int = 0
     provider_calls: int = 0

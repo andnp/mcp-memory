@@ -49,7 +49,7 @@ The 2026-08-18 post-restart audit provides the baseline for this design:
 | Curator runs | 31 total, 26 completed, 1 failed, 4 retries | The campaign is active, with some retry pressure. |
 | Reported mutations | 59 | Activity is not proof of useful work. |
 | Valid tool ledgers (legacy: valid plans) | 22; rate 0.88 | Tool-call ledger validity is measurable, but not quality. |
-| Accepted mutations | 0 | The current aggregate cannot prove durable accepted work. |
+| Productive mutations | 0 | The current aggregate cannot prove durable useful work. |
 | Verified receipts | 0 | Direct curator activity is not joined to receipt telemetry in this window. |
 | Mutation-history events | 0 | The direct mutation path is not visibly reconciled to history. |
 | Candidates | 1,067 total; 496 escalated; 370 pending; 34 actioned; 167 cooldown | The queue contains a large unresolved/escalated population. |

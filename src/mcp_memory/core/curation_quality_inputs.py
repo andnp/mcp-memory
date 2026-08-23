@@ -1,4 +1,4 @@
-"""Mutation observations accepted by the independent quality evaluator."""
+"""Mutation observations supplied to the independent quality evaluator."""
 
 from __future__ import annotations
 

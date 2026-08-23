@@ -114,7 +114,6 @@ def test_build_maintenance_summary_reports_curator_no_ops_and_failures() -> None
     def campaign(
         *,
         outcome: str,
-        accepted_mutations: int = 0,
         planner_attempts: int = 1,
         verification_failure_count: int = 0,
         receipts: list[dict[str, str]] | None = None,
@@ -123,7 +122,6 @@ def test_build_maintenance_summary_reports_curator_no_ops_and_failures() -> None
             "curation_outcome": outcome,
             "curation_campaign_result": {
                 "budget_usage": {
-                    "accepted_mutations": accepted_mutations,
                     "planner_attempts": planner_attempts,
                 },
                 "verification_failure_count": verification_failure_count,
@@ -158,7 +156,6 @@ def test_build_maintenance_summary_reports_curator_no_ops_and_failures() -> None
                 result=coerce_task_result_view(
                     campaign(
                         outcome="applied",
-                        accepted_mutations=2,
                         planner_attempts=2,
                         verification_failure_count=1,
                         receipts=[
@@ -180,7 +177,6 @@ def test_build_maintenance_summary_reports_curator_no_ops_and_failures() -> None
     assert curator.valid_plan_rate == pytest.approx(2 / 3, abs=0.0001)
     assert curator.no_op_count == 1
     assert curator.no_op_rate == pytest.approx(1 / 3, abs=0.0001)
-    assert curator.accepted_mutation_count == 2
     assert curator.verification_failure_count == 1
     assert curator.provider_failure_count == 1
     assert curator.retry_count == 1

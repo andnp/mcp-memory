@@ -101,10 +101,6 @@ class TaskResultView(BaseModel):
         return _curation_campaign_int(self.raw_payload, "no_op_count")
 
     @property
-    def curation_accepted_mutation_count(self) -> int:
-        return _curation_campaign_int(self.raw_payload, "budget_usage", "accepted_mutations")
-
-    @property
     def curation_verification_failure_count(self) -> int:
         return _curation_campaign_int(self.raw_payload, "verification_failure_count")
 

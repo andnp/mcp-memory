@@ -8,7 +8,6 @@ import pytest
 from mcp_memory.config import CurationConfig
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
-from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.tasks import TaskRecord
 
@@ -81,7 +80,6 @@ def test_curator_prompt_requires_direct_mcp_mutations() -> None:
         task=task,
         seed_records=[],
         campaign_hypothesis=None,
-        mutation_budget=CurationMutationBudget(max_accepted_mutations=2),
     )
 
     assert "no planning or submission stage" in prompt

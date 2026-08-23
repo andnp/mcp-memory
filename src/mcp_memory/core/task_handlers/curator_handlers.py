@@ -11,7 +11,6 @@ from mcp_memory.core.curation_direct_mcp import (
 from mcp_memory.core.curation_models import (
     campaign_hypothesis_from_payload,
 )
-from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.work_items import (
     COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
@@ -150,7 +149,6 @@ async def handle_memory_curator_task(
         ctx,
         task,
         provider=provider,
-        mutation_budget=_mutation_budget_override(task),
         campaign_hypothesis=campaign_hypothesis,
         seed_batch=seed_batch,
         sampled_records=sampled_records,
@@ -164,15 +162,6 @@ async def handle_memory_curator_task(
     if result.get("curation_outcome") == "no_op":
         record_curator_no_op_dispositions(ctx, sampled_records)
     return result
-
-
-def _mutation_budget_override(task: TaskRecord) -> CurationMutationBudget | None:
-    raw_limit = task.data.get("max_accepted_mutations")
-    if raw_limit is None:
-        return None
-    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 0:
-        raise ValueError("max_accepted_mutations must be a non-negative integer")
-    return CurationMutationBudget(max_accepted_mutations=raw_limit)
 
 
 def _prepare_curator_seed_context(

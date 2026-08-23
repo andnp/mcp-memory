@@ -24,7 +24,6 @@ from mcp_memory.core.curation_reconciliation import (
     ProviderAttemptIdentity,
     reconcile_provider_attempts,
 )
-from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers.curator_support import build_curator_context_packet
@@ -278,7 +277,6 @@ def test_direct_curator_prompt_contains_durability_retention_guardrails() -> Non
         task=cast(TaskRecord, SimpleNamespace(id="curator-task")),
         seed_records=[],
         campaign_hypothesis=None,
-        mutation_budget=CurationMutationBudget(max_accepted_mutations=2),
     )
 
     assert "durable content" in prompt
@@ -348,7 +346,6 @@ def test_direct_curator_prompt_includes_packet_identity_and_summary_only_context
         task=cast(TaskRecord, SimpleNamespace(id="curator-task")),
         seed_records=[record],
         campaign_hypothesis=None,
-        mutation_budget=CurationMutationBudget(),
         context_packet=packet,
     )
 
@@ -442,7 +439,6 @@ def test_direct_curator_prompt_does_not_direct_blanket_date_deletion() -> None:
         task=cast(TaskRecord, SimpleNamespace(id="curator-task")),
         seed_records=[],
         campaign_hypothesis=None,
-        mutation_budget=CurationMutationBudget(),
     ).lower()
 
     assert "delete all dated memories" not in prompt

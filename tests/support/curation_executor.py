@@ -1,4 +1,4 @@
-"""Provider-free executors for accepted curation operations.
+"""Provider-free executors for typed curation operations.
 
 This module deliberately contains no production orchestration.  It turns a
 typed action into the callback expected by a backend action transaction; the
@@ -47,7 +47,7 @@ class CurationPolicyRejection(CurationActionFatalError):
 
 
 class CurationExecutor:
-    """Execute individually accepted curation actions through an action store."""
+    """Execute individual curation actions through an action store."""
 
     def __init__(self, action_store: CurationActionStore) -> None:
         self._action_store = action_store
