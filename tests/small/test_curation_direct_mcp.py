@@ -289,6 +289,10 @@ def test_direct_curator_prompt_contains_durability_retention_guardrails() -> Non
     assert "advisory cleanup candidates" in prompt
     assert "Never archive or delete solely due to age, date, or access" in prompt
     assert "preserve every durable claim and its meaningful qualifiers" in prompt
+    assert "make each title conclusion-first" in prompt
+    assert "independently distinguishable without the full record" in prompt
+    assert "filenames, symbols, issue or commit IDs, error strings, dates" in prompt
+    assert "tags as secondary metadata" in prompt
 
 
 def test_curator_packet_identity_is_deterministic() -> None:

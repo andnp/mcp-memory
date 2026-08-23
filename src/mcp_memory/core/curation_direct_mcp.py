@@ -487,7 +487,12 @@ def _direct_curator_prompt(
         "the durable claims while omitting only routine residue. Flags prioritize review but do "
         "not replace reading the record. Never archive or delete solely due to age, date, or "
         "access. When rewriting or splitting, preserve every durable claim and its meaningful "
-        "qualifiers. "
+        "qualifiers. Retrieval-writing guidance: make each title conclusion-first and name the "
+        "decision, outcome, failure, policy, or entity rather than activity. Make each summary "
+        "independently distinguishable without the full record. Preserve concrete anchors such "
+        "as filenames, symbols, issue or commit IDs, error strings, dates, named entities, and "
+        "relationship qualifiers. Treat tags as secondary metadata, never as a substitute for "
+        "specific title or summary language. "
         "Use archive instead of delete. Return a short JSON summary after tool work with "
         "summary and mutations_attempted fields.\n"
         + json.dumps(context, sort_keys=True, default=str)
