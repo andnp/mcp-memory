@@ -97,6 +97,11 @@ _CURATOR_DURABLE_DATE_MARKERS = (
     "historical decision",
     "decided",
     "postmortem",
+    "decision",
+    "constraint",
+    "root cause",
+    "effective",
+    "as of",
 )
 _CURATOR_WORK_LOG_MARKERS = (
     "work log",
@@ -106,6 +111,9 @@ _CURATOR_WORK_LOG_MARKERS = (
     "progress update",
     "today i",
     "worked on",
+    "refactor notes",
+    "change log",
+    "daily update",
 )
 _CURATOR_STATUS_RESIDUE_MARKERS = (
     "completed",
@@ -126,6 +134,11 @@ _CURATOR_EXECUTION_DETAIL_MARKERS = (
     "test output",
     "temporary",
     "workaround",
+    "test suite",
+    "when i started",
+    "already red",
+    "didn't fix",
+    "did not fix",
 )
 _CURATOR_DURABLE_CONTENT_MARKERS = (
     "decision",
@@ -801,6 +814,17 @@ def retrieval_friction_flags(record) -> list[str]:
         marker in normalized_content for marker in _CURATOR_DURABLE_CONTENT_MARKERS
     ):
         flags.append("mixed_durability_content")
+    has_durable_content = any(marker in normalized_content for marker in _CURATOR_DURABLE_CONTENT_MARKERS)
+    has_transient_context = has_work_log_context or has_date or any(
+        marker in normalized_content
+        for marker in ("did a refactor", "progress update", "change log", "daily update")
+    )
+    if (
+        has_transient_context
+        and (has_status_residue or has_execution_detail or has_work_log_context)
+        and not has_durable_content
+    ):
+        flags.append("pure_transient_content")
     if (
         isinstance(metadata, dict)
         and metadata.get("created_via_ingest") is True

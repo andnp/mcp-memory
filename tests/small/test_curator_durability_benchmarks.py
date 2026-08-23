@@ -93,6 +93,19 @@ def test_transient_work_and_status_residue_are_advisory_risks(
     assert payload["retrieval_friction_flags"] == retrieval_friction_flags(record)
 
 
+def test_pure_transient_content_is_prioritized_for_cleanup() -> None:
+    """Expose purely transient dated execution residue as an actionable curator signal."""
+    record = _record(
+        "pure-transient",
+        title="2026-01-15 refactor notes",
+        content="I did a refactor. The test suite was already red when I started, so I didn't fix it.",
+        summary="Progress update",
+        memory_type="journal",
+    )
+
+    assert "pure_transient_content" in retrieval_friction_flags(record)
+
+
 @pytest.mark.parametrize(
     "content",
     (
@@ -168,3 +181,5 @@ def test_direct_prompt_requires_guarded_curator_judgment() -> None:
     assert "Never archive or delete solely due to age, date, or access" in prompt
     assert "preserve every durable claim and its meaningful qualifiers" in prompt
     assert "Omit records that need no change" in prompt
+    assert "pure_transient_content" in prompt
+    assert "mixed_durability_content" in prompt
