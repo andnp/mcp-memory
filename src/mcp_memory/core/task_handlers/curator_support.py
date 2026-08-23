@@ -259,24 +259,18 @@ def build_curator_context_packet(
         else:
             graph_tokens[memory_id] = graph_token(memory_id, edges)
         entries.append(
-            {
-                "memory_id": memory_id,
-                "title": title,
-                "summary": summary,
-                "memory_type": str(record.type),
-                "status": str(record.status),
-                "selection": {
-                    "role": "seed" if memory_id in seed_id_set else "support",
-                    "strategy_reason": seed_batch.strategy_selection_reason,
-                    "strategy_scores": dict(seed_batch.strategy_selection_scores or {}),
-                    "strategy_signals": dict((seed_batch.selector_feature_snapshot or {}).get("strategy_signals", {})),
-                },
-                "disclosure": {
-                    "fields": ["memory_id", "title", "summary", "memory_type", "status"],
-                    "content": "omitted",
-                    "summary": "bounded_excerpt",
-                },
-            }
+            _packet_record_entry(
+                record,
+                memory_id=memory_id,
+                title=title,
+                summary=summary,
+                role="seed" if memory_id in seed_id_set else "support",
+                strategy_reason=seed_batch.strategy_selection_reason,
+                strategy_scores=dict(seed_batch.strategy_selection_scores or {}),
+                strategy_signals=dict(
+                    (seed_batch.selector_feature_snapshot or {}).get("strategy_signals", {})
+                ),
+            )
         )
         disclosed_chars += entry_chars
 
@@ -351,6 +345,37 @@ def _packet_edges(ctx: ApplicationContext, memory_id: str) -> list[dict[str, Any
                 }
             )
     return edges
+
+
+def _packet_record_entry(
+    record: Any,
+    *,
+    memory_id: str,
+    title: str,
+    summary: str,
+    role: str,
+    strategy_reason: str | None,
+    strategy_scores: dict[str, float],
+    strategy_signals: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "memory_id": memory_id,
+        "title": title,
+        "summary": summary,
+        "memory_type": str(record.type),
+        "status": str(record.status),
+        "selection": {
+            "role": role,
+            "strategy_reason": strategy_reason,
+            "strategy_scores": strategy_scores,
+            "strategy_signals": strategy_signals,
+        },
+        "disclosure": {
+            "fields": ["memory_id", "title", "summary", "memory_type", "status"],
+            "content": "omitted",
+            "summary": "bounded_excerpt",
+        },
+    }
 
 
 
